@@ -1,0 +1,27 @@
+[tool.poetry]
+name = "parslbox"
+version = "0.1.0"
+description = ""
+authors = ["fbhuiyan2 <fakhrul.hasan117@gmail.com>"]
+readme = "README.md"
+packages = [{include = "parslbox", from = "src"}]
+
+[tool.poetry.dependencies]
+python = ">=3.11,<3.14"
+typer = {version = ">=0.17.4,<0.18.0", extras = ["all"]}
+numpy = ">=2.3.3,<3.0.0"
+pandas = ">=2.3.2,<3.0.0"
+scipy = ">=1.16.2,<2.0.0"
+scikit-learn = ">=1.7.2,<2.0.0"
+pyyaml = ">=6.0.2,<7.0.0"
+rdkit = ">=2025.3.6,<2026.0.0"
+ase = ">=3.26.0,<4.0.0"
+pymatgen = ">=2025.6.14,<2026.0.0"
+parsl = ">=2025.9.8,<2026.0.0"
+
+[tool.poetry.scripts]
+pbx = "parslbox.main:app"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
