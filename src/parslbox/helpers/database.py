@@ -50,7 +50,7 @@ def initialize_database(db_path: Path):
         typer.secho(f"Failed to open or initialize the database at: {db_path}", fg=typer.colors.YELLOW, err=True)
         raise typer.Exit(code=1)
 
-def add_job(db_path: Path, path: str, app: str, ngpus: int, tag: Optional[str], status: str = 'Created') -> int:
+def add_job(db_path: Path, path: str, app: str, ngpus: int, tag: Optional[str], status: str = 'Ready') -> int:
     """Adds a new job to the database with app and tag info."""
     with sqlite3.connect(db_path) as con:
         cur = con.cursor()
@@ -186,7 +186,7 @@ def update_jobs(
 
     if sched_job_id is not None:
         set_clauses.append("sched_job_id = ?")
-        params.append(status.capitalize())
+        params.append(sched_job_id)
 
     # If no fields to update were provided, do nothing.
     if not set_clauses:

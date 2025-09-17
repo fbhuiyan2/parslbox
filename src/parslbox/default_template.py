@@ -9,6 +9,65 @@ DEFAULT_CONFIG_YAML = """
 #            path to the executables for your environment.
 # ---------------------------------------------------------------------------
 
+# Scheduler submission templates
+schedulers:
+  pbs:
+    template: |
+      #!/bin/bash
+      #PBS -N {job_name}
+      #PBS -q {queue}
+      #PBS -l select={select}
+      #PBS -l walltime={walltime}
+      #PBS -l filesystems={filesystems}
+      #PBS -A {project}
+      #PBS -o pbx_scheduler.out
+      #PBS -j oe
+      
+      cd $PBS_O_WORKDIR
+      > pbx_scheduler.out
+      
+      NNODES=$(wc -l < $PBS_NODEFILE)
+      echo "NNODES = $NNODES"
+      echo "Job ID: $PBS_JOBID"
+      echo "Job Name: $PBS_JOBNAME"
+      
+      {python_env_setup}
+      
+      pbx run --config {config} --run-dir {run_dir} {run_options}
+
+  slurm:
+    template: |
+      #!/bin/bash
+      #SBATCH --job-name={job_name}
+      #SBATCH --partition={queue}
+      #SBATCH --nodes={select}
+      #SBATCH --time={walltime}
+      #SBATCH --account={project}
+      #SBATCH --output=pbx_scheduler.out
+      #SBATCH --error=pbx_scheduler.out
+      
+      > pbx_scheduler.out
+      
+      echo "NNODES = $SLURM_JOB_NUM_NODES"
+      echo "Job ID: $SLURM_JOB_ID"
+      echo "Job Name: $SLURM_JOB_NAME"
+      
+      {python_env_setup}
+      
+      pbx run --config {config} --run-dir {run_dir} {run_options}
+
+# System-specific configurations
+sophia:
+  python_env_setup: |
+    module load conda
+    conda activate parslbox
+
+polaris:
+  python_env_setup: |
+    module load conda
+    conda activate parslbox
+
+# Application configurations
 lammps:
   # Settings for running LAMMPS on ALCF Polaris
   polaris:

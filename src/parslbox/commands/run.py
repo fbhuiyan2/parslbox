@@ -4,6 +4,7 @@ import logging
 import os
 import time
 import importlib
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from typing_extensions import Annotated
@@ -16,6 +17,14 @@ from parslbox.helpers import database, path_utils
 
 app = typer.Typer()
 
+def get_default_run_dir() -> Path:
+    """Generate default run directory with current time and date in hhmmss_ddmmyy format."""
+    now = datetime.now()
+    time_str = now.strftime("%H%M%S")  # hhmmss format (hours + minutes + seconds)
+    date_str = now.strftime("%d%m%y")  # ddmmyy format
+    dir_name = f"{time_str}_{date_str}"
+    return Path.home() / ".parslbox" / "runs" / dir_name / "log.pbx"
+
 @app.command()
 def run(
     config_name: Annotated[
@@ -25,7 +34,7 @@ def run(
     run_dir: Annotated[
         Path,
         typer.Option("--run-dir", help="The directory for Parsl run files.")
-    ],
+    ] = None,
     apps: Annotated[
         Optional[str],
         typer.Option("--apps", "-a", help="Comma-separated list of apps to run (e.g., 'lammps,vasp').")
@@ -43,8 +52,12 @@ def run(
     Run Parsl workflows by discovering and executing application plugins.
     """
     # 1. Initialization
+    # Use default run directory if not provided
+    if run_dir is None:
+        run_dir = get_default_run_dir()
+    
     run_dir.mkdir(parents=True, exist_ok=True)
-    log_file = run_dir / "pbx_run.log"
+    log_file = run_dir / "log.pbx"
     setup_logging(log_file=log_file)
     logger = logging.getLogger(__name__)
     
@@ -65,7 +78,7 @@ def run(
     app_filter = set(apps.split(',')) if apps else None
     tag_filter = set(tags.split(',')) if tags else None
     
-    all_runnable_jobs = database.get_jobs(db_path, status='Created')
+    all_runnable_jobs = database.get_jobs(db_path, status='Ready')
     all_runnable_jobs += database.get_jobs(db_path, status='Restart')
 
     filtered_jobs = []

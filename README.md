@@ -14,18 +14,28 @@ A powerful CLI workflow management tool for computational simulations built on t
 
 ## Installation
 
-ParslBox uses [Poetry](https://python-poetry.org/) for dependency management. Make sure you have Poetry installed, then:
+ParslBox uses [Poetry](https://python-poetry.org/) for dependency management. Create a Python virtual environment or a Conda envrironment (Python version >=3.11, <3.14) with Poetry installed.
+
+For a Conda envrironment, you can do:
+
+```bash
+conda create --name parslbox python=3.11.9
+conda activate parslbox
+pip install poetry
+```
 
 ```bash
 # Clone the repository
-git clone <repository-url>
+git clone https://github.com/fbhuiyan2/parslbox.git
 cd parslbox
+
+# Activate your Python virtual env or Conda env if you have not done so yet
 
 # Install dependencies
 poetry install
 
-# Activate the virtual environment
-poetry shell
+# Check installation
+pbx ls
 ```
 
 ## Quick Start
@@ -39,14 +49,14 @@ pbx ls
 # Add a new job
 pbx add --app lammps --path /path/to/simulation --ngpus 2 --tag "my-simulation"
 
-# Run jobs with specific status
-pbx run --status "Queued" --config polaris
+# Run ready jobs on Polaris
+pbx run --config polaris
 
 # Update job status
-pbx update --job-ids 1,2,3 --status "Cancelled"
+pbx update 1 2 3 --status "Failed"
 
-# Remove completed jobs
-pbx rm --status "Done"
+# Remove completed jobs (using filter)
+pbx rm $(pbx filter --status done)
 ```
 
 ## Commands
@@ -80,14 +90,14 @@ pbx add --app vasp --path /path/to/vasp/calculation --ngpus 2 --tag "dft-calc"
 ```
 
 ### `pbx run` - Execute Jobs
-Run queued jobs on HPC systems:
+Run ready jobs on HPC systems:
 
 ```bash
-# Run all queued jobs on Polaris
-pbx run --status "Queued" --config polaris
+# Run all ready jobs on Polaris
+pbx run --config polaris
 
-# Run specific jobs
-pbx run --job-ids 1,2,3 --config sophia
+# Run with specific filters
+pbx run --config polaris --apps lammps --tags production
 ```
 
 ### `pbx update` - Update Jobs
@@ -95,10 +105,13 @@ Modify job properties:
 
 ```bash
 # Update job status
-pbx update --job-ids 1,2,3 --status "Cancelled"
+pbx update 1 2 3 --status "Failed"
 
 # Update job tags
-pbx update --job-ids 4,5 --tag "high-priority"
+pbx update 4 5 --tag "high-priority"
+
+# Update failed jobs to restart (using filter)
+pbx update $(pbx filter --status failed) --status "Ready"
 ```
 
 ### `pbx info` - Show Job Information
@@ -127,19 +140,103 @@ pbx info 5 --status
 # --timestamp, -ts: Show timestamps
 ```
 
+### `pbx filter` - Filter Jobs
+Get job IDs matching specific criteria for use with other commands:
+
+```bash
+# Get IDs of all done jobs
+pbx filter --status done
+
+# Get IDs of LAMMPS jobs
+pbx filter --app lammps
+
+# Get IDs of jobs with specific tag
+pbx filter --tag production
+
+# Combine filters (AND logic)
+pbx filter --status failed --app vasp
+
+# Short flags
+pbx filter -s done -a lammps -t test
+```
+
 ### `pbx rm` - Remove Jobs
 Remove jobs from the database:
 
 ```bash
-# Remove completed jobs
-pbx rm --status "Done"
+# Remove completed jobs (using filter)
+pbx rm $(pbx filter --status done)
 
 # Remove specific jobs
-pbx rm --job-ids 1,2,3
+pbx rm 1 2 3
 
-# Remove jobs by tag
-pbx rm --tag "test"
+# Remove all jobs
+pbx rm all
+
+# Remove jobs by tag (using filter)
+pbx rm $(pbx filter --tag test)
+
+# Remove failed LAMMPS jobs (using filter)
+pbx rm $(pbx filter --status failed --app lammps)
 ```
+
+### `pbx qsub` - Submit PBS Jobs
+Generate and submit PBS job scripts for running parslbox workflows:
+
+```bash
+# Basic PBS job submission
+pbx qsub \
+  --config sophia \
+  --job-name myrun \
+  --queue gpu \
+  --select 2 \
+  --walltime 90 \
+  --project myproject
+
+# With application and tag filters
+pbx qsub \
+  --config sophia \
+  --job-name lammps_production \
+  --queue gpu \
+  --select 4 \
+  --walltime 180 \
+  --project myproject \
+  --apps lammps \
+  --tags production \
+  --filesystems home:eagle
+
+# With custom run directory
+pbx qsub \
+  --config sophia \
+  --job-name custom_run \
+  --queue gpu \
+  --select 1 \
+  --walltime 60 \
+  --project myproject \
+  --run-dir /path/to/custom/directory
+```
+
+**Required Parameters:**
+- `--config, -c`: System configuration (e.g., 'sophia', 'polaris')
+- `--job-name, -N`: PBS job name
+- `--queue, -q`: PBS queue name  
+- `--select`: Number of nodes to request
+- `--walltime, -T`: Wall time in minutes (e.g., 90 for 1.5 hours)
+- `--project, -A`: Project/account name
+
+**Optional Parameters:**
+- `--filesystems`: Comma-separated list of filesystems (e.g., 'home:eagle')
+- `--run-dir`: Custom run directory (default: timestamped directory)
+- `--apps, -a`: Comma-separated list of apps to run (e.g., 'lammps,vasp')
+- `--tags, -t`: Comma-separated list of tags to run (e.g., 'run1,run2')
+- `--retries`: Number of retries for failed tasks (default: 0)
+
+The command automatically:
+- Creates timestamped run directories when `--run-dir` is not specified
+- Converts walltime from minutes to HH:MM:SS format
+- Generates PBS submission script using scheduler templates
+- Submits the job with `qsub` and provides the Job ID
+- Integrates with existing `pbx run` command parameters
 
 ## Configuration
 
@@ -179,11 +276,12 @@ apps:
 
 Jobs progress through the following states:
 
-1. **Queued** - Job added to database, ready for execution
-2. **Running** - Job currently executing on compute resources
-3. **Done** - Job completed successfully
-4. **Failed** - Job encountered an error during execution
-5. **Cancelled** - Job manually cancelled by user
+1. **Ready** - Job added to database, ready for execution
+2. **Restart** - Job marked for re-execution
+3. **Submitted** - Job submitted to scheduler
+4. **Running** - Job currently executing on compute resources
+5. **Done** - Job completed successfully
+6. **Failed** - Job encountered an error during execution
 
 ## Database Schema
 

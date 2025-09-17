@@ -27,6 +27,10 @@ def add(
         int,
         typer.Option("--ngpus", "-n", help="Number of GPUs required for the job(s)."),
     ] = 1,
+    status: Annotated[
+        str,
+        typer.Option("--status", "-s", help="Initial status for the job(s)."),
+    ] = "Ready",
 ):
     """
     Adds one or more new jobs to the database.
@@ -69,7 +73,8 @@ def add(
                 path=str(path),
                 app=app,
                 ngpus=ngpus,
-                tag=tag
+                tag=tag,
+                status=status
             )
             typer.secho(f"✅ Added job '{path}' with ID {new_id}", fg=typer.colors.GREEN)
             success_count += 1
