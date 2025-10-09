@@ -46,10 +46,24 @@ After installation, you can use the `pbx` command to manage your simulation work
 # List all jobs
 pbx ls
 
-# Add a new job
-pbx add --app lammps --path /path/to/simulation --ngpus 2 --tag "my-simulation"
+# Add a new job, note the --path is the path to the directory where simulation or calculation files are present
+pbx add --app lammps --path /path/to/simulation --ngpus 2 --tag my-simulation
+
+# If you have many calculations (like 100 VASP calculations) in sub-dirs inside a dir, then add all
+pbx add all -a vasp -n 1 -t ManyVaspCalc
 
 # Run ready jobs on Polaris
+pbx qsub \
+  --config polaris \
+  --job-name first_run \
+  --queue debug \
+  --select 1 \
+  --walltime 30 \
+  --project myproject \
+  --run-dir /path/to/custom/directory
+
+# pbx qsub command will create a submit.sh file in the run-dir and submit it to the queue
+# Inside the submit file, the qsub command runs the `pbx run` command
 pbx run --config polaris
 
 # Update job status

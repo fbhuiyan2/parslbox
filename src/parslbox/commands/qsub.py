@@ -30,7 +30,7 @@ def get_default_run_dir() -> Path:
 
 def load_config() -> dict:
     """Load the parslbox configuration file."""
-    config_path = path_utils.FLOW_CONFIG_FILE
+    config_path = path_utils.PBX_CONFIG_FILE
     if not config_path.is_file():
         raise FileNotFoundError(f"Configuration file not found at: {config_path}")
     

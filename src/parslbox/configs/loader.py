@@ -1,24 +1,24 @@
 from pathlib import Path
 from parsl.config import Config
+from parslbox.configs.base import SystemConfig
 
-# Import the get_config function from each system module with a unique alias
-from parslbox.configs.polaris import get_config as polaris_config
-from parslbox.configs.sophia import get_config as sophia_config
+# Import the system configuration classes
+from parslbox.configs.polaris import PolarisConfig
+from parslbox.configs.sophia import SophiaConfig
 
-# Create a dictionary that maps the config name to its factory function
-# Scheduler options = "PBS", "SLURM"
+# Create a dictionary that maps the config name to its configuration class
 CONFIG_FACTORIES = {
-    "polaris": [polaris_config, "PBS"],
-    "sophia": [sophia_config, "PBS"],
+    "polaris": PolarisConfig,
+    "sophia": SophiaConfig,
     # To add a new system, create its module and add it here.
 }
 
-def load_config(name: str, run_dir: Path, retries: int) -> Config:
+def load_config(name: str, run_dir: Path, retries: int) -> tuple[Config, str]:
     """
     Loads a Parsl configuration by name.
 
     This function acts as a dispatcher, finding the correct configuration
-    factory based on the provided name and calling it with the given
+    class based on the provided name and calling it with the given
     runtime parameters.
 
     Args:
@@ -30,16 +30,53 @@ def load_config(name: str, run_dir: Path, retries: int) -> Config:
         ValueError: If the requested configuration name is not found.
 
     Returns:
-        Config: A fully instantiated Parsl configuration object.
+        tuple: A tuple of (Config, scheduler_name)
     """
-    factory = CONFIG_FACTORIES.get(name)
+    config_class = CONFIG_FACTORIES.get(name)
 
-    if factory is None:
+    if config_class is None:
         available = ", ".join(CONFIG_FACTORIES.keys())
         raise ValueError(
             f"Unknown configuration name: '{name}'. "
             f"Available configurations are: {available}"
         )
 
-    conf_loader, sched = factory[0], factory[1]
-    return conf_loader(run_dir=run_dir, retries=retries), sched
+    config_instance = config_class()
+    parsl_config = config_instance.get_config(run_dir=run_dir, retries=retries)
+    return parsl_config, config_instance.SCHEDULER
+
+def get_system_config(name: str) -> SystemConfig:
+    """
+    Get system configuration class instance by name.
+    
+    This function provides access to system specifications and methods
+    for any system configuration.
+    
+    Args:
+        name (str): The name of the system configuration (e.g., "polaris").
+        
+    Raises:
+        ValueError: If the requested configuration name is not found.
+        
+    Returns:
+        SystemConfig: An instance of the system configuration class.
+    """
+    config_class = CONFIG_FACTORIES.get(name)
+    
+    if config_class is None:
+        available = ", ".join(CONFIG_FACTORIES.keys())
+        raise ValueError(
+            f"Unknown configuration name: '{name}'. "
+            f"Available configurations are: {available}"
+        )
+    
+    return config_class()
+
+def get_available_systems() -> list[str]:
+    """
+    Get list of all available system configuration names.
+    
+    Returns:
+        list[str]: List of available system names.
+    """
+    return list(CONFIG_FACTORIES.keys())

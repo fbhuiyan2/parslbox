@@ -23,6 +23,10 @@ def update(
         Optional[str],
         typer.Option("--tag", "-t", help="Update the job tag.")
     ] = None,
+    input_file: Annotated[
+        Optional[str],
+        typer.Option("--input", "-i", help="Update the input filename.")
+    ] = None,
     ngpus: Annotated[
         Optional[int],
         typer.Option("--ngpus", "-n", help="Update the number of GPUs.")
@@ -32,7 +36,7 @@ def update(
     Updates one or more fields for a given set of jobs.
     """
     # Validate that at least one update option was provided
-    if all(opt is None for opt in [status, app, tag, ngpus]):
+    if all(opt is None for opt in [status, app, tag, input_file, ngpus]):
         typer.secho("❌ Error: You must provide at least one field to update.", fg=typer.colors.RED)
         typer.echo("Example: pbx update 1 --status Submitted")
         raise typer.Exit(code=1)
@@ -43,6 +47,7 @@ def update(
         status=status,
         app=app,
         tag=tag,
+        in_file=input_file,
         ngpus=ngpus
     )
     

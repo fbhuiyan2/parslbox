@@ -32,8 +32,8 @@ def ls(
     else:
         console.print(f"[green]# of jobs in the database: {len(job_list)}[/green]")
 
-    # Add the new 'App' and 'Tag' columns to the table header
-    table = Table("ID", "App", "Status", "NGPUs", "Sched Job ID", "Tag", "Timestamp", "Path")
+    # Add the new 'App', 'Tag', and 'Input' columns to the table header
+    table = Table("ID", "App", "Status", "NGPUs", "Sched Job ID", "Tag", "Input", "Timestamp", "Path")
     
     for job in job_list:
         table.add_row(
@@ -42,7 +42,8 @@ def ls(
             job['status'],
             str(job['ngpus']),
             job['sched_job_id'] or "None",
-            job['tag'] or "None",  # Display 'N/A' if tag is None
+            job['tag'] or "None",  # Display 'None' if tag is None
+            job['in_file'] or "None",  # Display 'None' if in_file is None
             job['timestamp'],
             job['path']
         )

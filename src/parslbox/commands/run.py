@@ -11,7 +11,7 @@ from typing_extensions import Annotated
 
 from parslbox.configs.loader import load_config
 from parslbox.helpers.logging_utils import setup_logging
-from parslbox.helpers.config_utils import load_app_config
+from parslbox.helpers.config_utils import load_app_config, is_app_configured
 from parslbox.helpers import database, path_utils
 
 
@@ -108,54 +108,84 @@ def run(
     for app_name, jobs_list in grouped_jobs.items():
         logger.info(f"Processing {len(jobs_list)} jobs for application: '{app_name}'")
         try:
-            # Dynamically import the app module (the "plugin")
-            app_module = importlib.import_module(f"parslbox.apps.{app_name}")
-            parsl_app_func = getattr(app_module, 'parsl_app')
-            check_success_func = getattr(app_module, 'check_success')
-            postprocess_func = getattr(app_module, 'postprocess')
-            app_config = load_app_config(app_name=app_name, system_name=config_name)
-        except (ModuleNotFoundError, AttributeError, ValueError, FileNotFoundError) as e:
-            logger.error(f"Could not load plugin for app '{app_name}': {e}. Skipping these jobs.")
+            # Get app instance from registry
+            from parslbox.apps.app_registry import get_app_instance
+            app_instance = get_app_instance(app_name)
+        except ValueError as e:
+            logger.error(f"Could not load app '{app_name}': {e}. Skipping these jobs.")
             job_ids_to_fail = [j['job_id'] for j in jobs_list]
             database.update_jobs(db_path, job_ids=job_ids_to_fail, status="Failed")
             continue
+        
+        # Load app configuration (gracefully handles missing config)
+        try:
+            app_config = load_app_config(app_name=app_name, system_name=config_name)
+        except FileNotFoundError as e:
+            logger.error(f"Configuration file error for app '{app_name}': {e}. Skipping these jobs.")
+            job_ids_to_fail = [j['job_id'] for j in jobs_list]
+            database.update_jobs(db_path, job_ids=job_ids_to_fail, status="Failed")
+            continue
+        
+        # Log configuration status
+        if len(app_config) == 0:
+            if is_app_configured(app_name):
+                logger.warning(f"App '{app_name}' has configuration but no config found for system '{config_name}'. Running with empty configuration.")
+            else:
+                logger.info(f"App '{app_name}' has no configuration defined. Running with empty configuration.")
+        else:
+            logger.info(f"App '{app_name}' loaded configuration for system '{config_name}'.")
 
         # Inner submission loop for this app
         for job in jobs_list:
             job_id = job['job_id']
+            job_path = Path(job['path'])
+            
             logger.info(f"Submitting Job ID {job_id}...")
+            
+            # Run preprocessing
+            logger.info(f"Running preprocessing for Job ID {job_id}...")
+            app_instance.preprocess(
+                job_id=job_id, 
+                job_path=job_path, 
+                db_path=db_path, 
+                app_config=app_config, 
+                config_name=config_name
+            )
+            
             database.update_jobs(db_path, job_ids=[job_id], status="Submitted")
             if scheduler == "PBS":
                 PBS_JOB_ID = os.environ.get('PBS_JOBID', f'local_{int(time.time())}')
                 database.update_jobs(db_path, job_ids=[job_id], sched_job_id=PBS_JOB_ID)
             # Need to add clause for "SLURM" too
             
-            fut = parsl_app_func(
+            fut = app_instance.parsl_app(
                 job_id=job_id,
-                job_path=Path(job['path']),
+                job_path=job_path,
                 db_path=db_path,
                 ngpus=job['ngpus'],
                 app_config=app_config,
                 config_name=config_name,
-                stdout=(str(Path(job['path']) / "pbx.out"), 'w'),
-                stderr=(str(Path(job['path']) / "pbx.out"), 'a')
+                in_file=job['in_file'],
+                mpi_opts=job['mpi_opts'],
+                stdout=(str(job_path / "pbx.out"), 'w'),
+                stderr=(str(job_path / "pbx.out"), 'a')
             )
-            futures.append({'future': fut, 'job': job, 'check_success': check_success_func, 'postprocessor': postprocess_func})
+            futures.append({'future': fut, 'job': job, 'app_instance': app_instance})
 
     # 5. Await and Process Results
     logger.info(f"Waiting for {len(futures)} submitted jobs to complete...")
 
     for item in futures:
-        fut, job, check_success, postprocessor = item['future'], item['job'], item['check_success'], item['postprocessor']
+        fut, job, app_instance = item['future'], item['job'], item['app_instance']
         job_id, job_path = job['job_id'], Path(job['path'])
         
         try:
             fut.result()  # Wait for the Parsl app to finish
-            job_status = check_success(job_id=job_id, job_path=job_path, db_path=db_path)
+            job_status = app_instance.check_success(job_id=job_id, job_path=job_path, db_path=db_path)
             if job_status and job_status != 'Failed':
                 database.update_jobs(db_path, job_ids=[job_id], status=job_status)
                 logger.info(f"Job {job_id} execution finished. Running post-processing...")
-                postprocessor(job_id=job_id, job_path=job_path, db_path=db_path)
+                app_instance.postprocess(job_id=job_id, job_path=job_path, db_path=db_path)
             elif job_status == 'Failed':
                 database.update_jobs(db_path, job_ids=[job_id], status="Failed")
         
@@ -163,11 +193,11 @@ def run(
             logger.error(f"Job {job_id} hit following error: {e}")
             # Sometimes apps can exit ungracefully even after a good run
             logger.info(f"Job {job_id} checking job success...")
-            job_status = check_success(job_id=job_id, job_path=job_path, db_path=db_path)
+            job_status = app_instance.check_success(job_id=job_id, job_path=job_path, db_path=db_path)
             if job_status and job_status != 'Failed':
                 database.update_jobs(db_path, job_ids=[job_id], status=job_status)
                 logger.info(f"Job {job_id} completed successfully. Running post-processing...")
-                postprocessor(job_id=job_id, job_path=job_path, db_path=db_path)
+                app_instance.postprocess(job_id=job_id, job_path=job_path, db_path=db_path)
             elif job_status == 'Failed':
                 logger.error(f"Job {job_id} Failed.")
                 database.update_jobs(db_path, job_ids=[job_id], status="Failed")

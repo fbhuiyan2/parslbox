@@ -68,11 +68,21 @@ polaris:
     conda activate parslbox
 
 # Application configurations
+
+#===== LAMMPS APP =====#
+
 lammps:
   # Settings for running LAMMPS on ALCF Polaris
   polaris:
     # Full, absolute path to the LAMMPS executable on the system.
     executable_path: "/path/to/your/lammps/executable/on/polaris"
+
+    # mpiexec or mpirun
+    mpi_cmd: mpiexec
+
+    mpi_args: "-np ${NTOTRANKS}"
+    
+    mpi_env: "-x OMP_PROC_BIND=spread -x OMP_PLACES=cores"
 
     # Shell commands to set up the environment on a compute node.
     # This block will be executed before the main mpirun command.
@@ -85,12 +95,22 @@ lammps:
 
   # Settings for running LAMMPS on ALCF Sophia
   sophia:
+    # Full, absolute path to the LAMMPS executable on the system.
     executable_path: "/path/to/your/lammps/executable/on/sophia"
+
+    # mpiexec or mpirun
+    mpi_cmd: mpirun
+
+    mpi_args: "-n ${NTOTRANKS} --ppn ${RANKS_PER_NODE}"
+
+    mpi_env: "-x OMP_PROC_BIND=spread -x OMP_PLACES=cores"
+
     environment_setup: |
       # Add all necessary `module load` and `export` commands here.
       # Example:
       # module load compilers/openmpi/5.0.3
       # export LD_LIBRARY_PATH=...
+    
 
 # --- Add other applications below ---
 # vasp:

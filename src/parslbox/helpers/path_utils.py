@@ -7,4 +7,4 @@ APP_DIR = Path.home() / ".parslbox"
 DB_FILE = APP_DIR / "job_database.db"
 
 # package config file
-FLOW_CONFIG_FILE = APP_DIR / "config.yaml"
+PBX_CONFIG_FILE = APP_DIR / "config.yaml"

@@ -17,6 +17,7 @@ def info(
     app_name: bool = typer.Option(False, "--app", "-a", help="Show only the application field."),
     status: bool = typer.Option(False, "--status", "-s", help="Show only the status field."),
     tag: bool = typer.Option(False, "--tag", "-t", help="Show only the tag field."),
+    input_file: bool = typer.Option(False, "--input", "-i", help="Show only the input file field."),
     sched_job_id: bool = typer.Option(False, "--sched-job-id", "-j", help="Show only the scheduler job ID field."),
     timestamp: bool = typer.Option(False, "--timestamp", "-ts", help="Show only the timestamp field."),
 ):
@@ -50,6 +51,8 @@ def info(
         selected_fields.append(('status', 'Status'))
     if tag:
         selected_fields.append(('tag', 'Tag'))
+    if input_file:
+        selected_fields.append(('in_file', 'Input'))
     if sched_job_id:
         selected_fields.append(('sched_job_id', 'Sched Job ID'))
     if timestamp:
@@ -64,6 +67,7 @@ def info(
             ('ngpus', 'NGPUs'),
             ('sched_job_id', 'Sched Job ID'),
             ('tag', 'Tag'),
+            ('in_file', 'Input'),
             ('timestamp', 'Timestamp'),
             ('path', 'Path')
         ]
@@ -78,7 +82,7 @@ def info(
     for job in jobs:
         row_data = []
         for field_key, _ in selected_fields:
-            value = job.get(field_key)
+            value = job[field_key]
             if value is None:
                 row_data.append("None")
             elif field_key == 'ngpus':
