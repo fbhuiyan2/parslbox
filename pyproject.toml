@@ -4,7 +4,7 @@ version = "0.1.0"
 description = ""
 authors = ["fbhuiyan2 <fakhrul.hasan117@gmail.com>"]
 readme = "README.md"
-packages = [{include = "parslbox", from = "src"}]
+packages = [{include = "parslbox"}]
 
 [tool.poetry.dependencies]
 python = ">=3.11,<3.14"

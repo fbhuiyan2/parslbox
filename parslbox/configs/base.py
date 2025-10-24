@@ -8,7 +8,11 @@ and generating Parsl configurations.
 
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import TYPE_CHECKING
 from parsl.config import Config
+
+if TYPE_CHECKING:
+    from parslbox.resource_manager import ParslboxResourceManager
 
 
 class SystemConfig(ABC):
@@ -47,3 +51,13 @@ class SystemConfig(ABC):
             Config: A fully instantiated Parsl configuration object
         """
         pass
+    
+    def create_resource_manager(self) -> 'ParslboxResourceManager':
+        """
+        Create and initialize a resource manager for this system.
+        
+        Returns:
+            ParslboxResourceManager: Initialized resource manager
+        """
+        from parslbox.resource_manager import ParslboxResourceManager
+        return ParslboxResourceManager(self)
