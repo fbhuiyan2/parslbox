@@ -5,6 +5,7 @@ from typing import List, Optional
 from typing_extensions import Annotated
 from parslbox.helpers import database, path_utils
 from parslbox.apps.app_registry import get_app_config, is_app_registered
+from parslbox.configs.loader import get_system_config
 
 app = typer.Typer()
 
@@ -30,8 +31,16 @@ def add(
     ] = None,
     ngpus: Annotated[
         int,
-        typer.Option("--ngpus", "-n", help="Number of GPUs required for the job(s)."),
+        typer.Option("--ngpus", "-g", help="Number of GPUs required for the job(s)."),
+    ] = 0,
+    nnodes: Annotated[
+        int,
+        typer.Option("--nnodes", "-n", help="Number of nodes required for the job(s)."),
     ] = 1,
+    nodealloc: Annotated[
+        Optional[float],
+        typer.Option("--nodealloc", "-na", help="Node allocation fraction for CPU-only jobs (0.0-1.0)."),
+    ] = None,
     mpi_opts: Annotated[
         Optional[str],
         typer.Option("--mpiopts", help="Additional MPI options to append to the MPI command."),
@@ -84,6 +93,78 @@ def add(
         typer.secho(f"❌ Error: {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
+    # --- Validate resource parameters and generate resource string ---
+    # Validate nodealloc range
+    if nodealloc is not None and not (0.0 < nodealloc <= 1.0):
+        typer.secho(f"❌ Error: --nodealloc must be between 0.0 and 1.0", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    
+    # Validate nnodes
+    if nnodes < 1:
+        typer.secho(f"❌ Error: --nnodes must be at least 1, got {nnodes}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    
+    # Get system configuration to determine GPUs per node
+    try:
+        system_config = get_system_config()
+        gpus_per_node = system_config.GPUS_PER_NODE
+    except Exception as e:
+        typer.secho(f"❌ Error: Could not load system configuration: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    
+    # Determine final resource parameters
+    if nnodes > 1:
+        # Multi-node job: ignore ngpus and nodealloc
+        if ngpus > 0 or nodealloc is not None:
+            ignored_flags = []
+            if ngpus > 0:
+                ignored_flags.append(f"--ngpus {ngpus}")
+            if nodealloc is not None:
+                ignored_flags.append(f"--nodealloc {nodealloc}")
+            typer.secho(f"⚠️  Warning: Ignoring {' and '.join(ignored_flags)} for multi-node job", fg=typer.colors.YELLOW)
+        
+        # Multi-node jobs: set parameters
+        final_num_nodes = nnodes
+        final_ngpus = 0  # Not used for multi-node jobs
+        final_node_occupancy = 1.0
+        typer.secho(f"ℹ️  Multi-node job will use {nnodes * gpus_per_node} total GPUs ({gpus_per_node} per node)", fg=typer.colors.BLUE)
+    else:
+        # Single-node job: check for conflicting parameters
+        if ngpus > 0 and nodealloc is not None:
+            typer.secho("⚠️  Warning: Both --ngpus and --nodealloc specified.", fg=typer.colors.YELLOW)
+            typer.secho(f"--ngpus {ngpus} suggests GPU job", fg=typer.colors.BLUE)
+            typer.secho(f"--nodealloc {nodealloc} suggests CPU job with {nodealloc} node occupancy", fg=typer.colors.BLUE)
+            
+            use_gpus = typer.confirm("Do you want to use GPUs for this job?")
+            if not use_gpus:
+                ngpus = 0
+                typer.secho("Setting ngpus=0 for CPU-only job", fg=typer.colors.GREEN)
+        
+        if ngpus > 0:
+            # Single-node GPU job
+            if ngpus > gpus_per_node:
+                typer.secho(f"❌ Error: Requested {ngpus} GPUs but only {gpus_per_node} available per node", fg=typer.colors.RED)
+                raise typer.Exit(code=1)
+            
+            final_num_nodes = 1
+            final_ngpus = ngpus
+            final_node_occupancy = 1.0
+        else:
+            # Single-node CPU-only job
+            final_num_nodes = 1
+            final_ngpus = 0
+            final_node_occupancy = nodealloc if nodealloc is not None else 1.0
+    
+    # Display resource specification for user
+    if final_num_nodes > 1:
+        display_str = f"n:{final_num_nodes}-g:auto-nocc:NA"
+    elif final_ngpus > 0:
+        display_str = f"n:1-g:{final_ngpus}-nocc:NA"
+    else:
+        display_str = f"n:1-g:0-nocc:{final_node_occupancy}"
+    
+    typer.secho(f"ℹ️  Resource specification: {display_str}", fg=typer.colors.BLUE)
+
     paths_to_add: List[Path] = []
 
     # --- Determine the list of paths to process ---
@@ -120,7 +201,9 @@ def add(
                 db_path=path_utils.DB_FILE,
                 path=str(path),
                 app=app,
-                ngpus=ngpus,
+                num_nodes=final_num_nodes,
+                ngpus=final_ngpus,
+                node_occupancy=final_node_occupancy,
                 tag=tag,
                 in_file=final_input_file,
                 mpi_opts=mpi_opts,

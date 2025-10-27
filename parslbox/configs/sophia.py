@@ -22,6 +22,7 @@ class SophiaConfig(SystemConfig):
     CORES_PER_NODE = 128
     GPUS_PER_NODE = 8
     SCHEDULER = "PBS"
+    MPI_CMD_TO_USE = "mpirun"
     
     def detect_resources(self) -> tuple[int, int]:
         """

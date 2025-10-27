@@ -5,15 +5,16 @@ This module provides resource management capabilities for tracking and allocatin
 nodes, CPUs, and GPUs across different HPC systems.
 """
 
-from .models import NodeResource, JobResourceSpec, NodeAssignment
-from .manager import ParslboxResourceManager
+from .models import NodeResource, JobResourceSpec, NodeAssignment, create_job_resource_spec
+from .resource_manager import ResourceManager
 from .exceptions import InsufficientResources, ResourceManagerError, InvalidResourceSpec
 
 __all__ = [
     'NodeResource',
     'JobResourceSpec', 
     'NodeAssignment',
-    'ParslboxResourceManager',
+    'create_job_resource_spec',
+    'ResourceManager',
     'InsufficientResources',
     'ResourceManagerError',
     'InvalidResourceSpec'

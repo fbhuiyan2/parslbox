@@ -9,10 +9,12 @@ from pathlib import Path
 from typing import Optional
 from typing_extensions import Annotated
 
-from parslbox.configs.loader import load_config
+from parslbox.configs.loader import load_config, get_system_config
 from parslbox.helpers.logging_utils import setup_logging
 from parslbox.helpers.config_utils import load_app_config, is_app_configured
 from parslbox.helpers import database, path_utils
+from parslbox.resource_manager.models import create_job_resource_spec
+from parslbox.resource_manager.mpi_launcher import compose_all_mpi_commands
 
 
 app = typer.Typer()
@@ -95,7 +97,12 @@ def run(
 
     logger.info(f"Found {len(filtered_jobs)} jobs to execute.")
 
-    # 3. Group Jobs by Application
+    # 3. Initialize Resource Manager
+    system_config = get_system_config(config_name)
+    resource_manager = system_config.create_resource_manager()
+    logger.info(f"Initialized resource manager for {config_name}")
+
+    # 4. Group Jobs by Application
     grouped_jobs = {}
     for job in filtered_jobs:
         app_name = job['app']
@@ -103,7 +110,7 @@ def run(
             grouped_jobs[app_name] = []
         grouped_jobs[app_name].append(job)
 
-    # 4. Dynamic Plugin Loading and Execution Loop
+    # 5. Dynamic Plugin Loading and Execution Loop
     futures = []
     for app_name, jobs_list in grouped_jobs.items():
         logger.info(f"Processing {len(jobs_list)} jobs for application: '{app_name}'")
@@ -142,6 +149,24 @@ def run(
             
             logger.info(f"Submitting Job ID {job_id}...")
             
+            # Create resource specification from job data
+            try:
+                resource_spec = create_job_resource_spec(job)
+                logger.info(f"Job {job_id}: Resource requirements - {resource_spec.get_summary()}")
+                
+                # Allocate resources
+                assignment = resource_manager.assign_resources(resource_spec)
+                logger.info(f"Job {job_id}: Allocated resources - {assignment.get_summary()}")
+                
+                # Generate MPI commands
+                mpi_commands = compose_all_mpi_commands(assignment, system_config, resource_spec.node_occupancy)
+                logger.info(f"Job {job_id}: Generated MPI command - {mpi_commands.get('PBX_MPI_PREFIX', 'None')}")
+                
+            except Exception as e:
+                logger.error(f"Job {job_id}: Failed to allocate resources: {e}")
+                database.update_jobs(db_path, job_ids=[job_id], status="Failed")
+                continue
+            
             # Run preprocessing
             logger.info(f"Running preprocessing for Job ID {job_id}...")
             app_instance.preprocess(
@@ -158,25 +183,39 @@ def run(
                 database.update_jobs(db_path, job_ids=[job_id], sched_job_id=PBS_JOB_ID)
             # Need to add clause for "SLURM" too
             
-            fut = app_instance.parsl_app(
-                job_id=job_id,
-                job_path=job_path,
-                db_path=db_path,
-                ngpus=job['ngpus'],
-                app_config=app_config,
-                config_name=config_name,
-                in_file=job['in_file'],
-                mpi_opts=job['mpi_opts'],
-                stdout=(str(job_path / "pbx.out"), 'w'),
-                stderr=(str(job_path / "pbx.out"), 'a')
-            )
-            futures.append({'future': fut, 'job': job, 'app_instance': app_instance})
+            try:
+                fut = app_instance.parsl_app(
+                    job_id=job_id,
+                    job_path=job_path,
+                    db_path=db_path,
+                    assignment=assignment,
+                    mpi_commands=mpi_commands,
+                    app_config=app_config,
+                    config_name=config_name,
+                    in_file=job['in_file'],
+                    mpi_opts=job['mpi_opts'],
+                    stdout=(str(job_path / "pbx.out"), 'w'),
+                    stderr=(str(job_path / "pbx.out"), 'a')
+                )
+                futures.append({
+                    'future': fut, 
+                    'job': job, 
+                    'app_instance': app_instance,
+                    'assignment': assignment,
+                    'resource_manager': resource_manager
+                })
+            except Exception as e:
+                logger.error(f"Job {job_id}: Failed to submit Parsl app: {e}")
+                # Free resources if job submission failed
+                resource_manager.free_resources(job_id)
+                database.update_jobs(db_path, job_ids=[job_id], status="Failed")
 
-    # 5. Await and Process Results
+    # 6. Await and Process Results
     logger.info(f"Waiting for {len(futures)} submitted jobs to complete...")
 
     for item in futures:
         fut, job, app_instance = item['future'], item['job'], item['app_instance']
+        assignment, resource_manager = item['assignment'], item['resource_manager']
         job_id, job_path = job['job_id'], Path(job['path'])
         
         try:
@@ -201,7 +240,15 @@ def run(
             elif job_status == 'Failed':
                 logger.error(f"Job {job_id} Failed.")
                 database.update_jobs(db_path, job_ids=[job_id], status="Failed")
+        
+        finally:
+            # Always free resources after job completion (success or failure)
+            try:
+                resource_manager.free_resources(job_id)
+                logger.info(f"Job {job_id}: Freed allocated resources")
+            except Exception as e:
+                logger.error(f"Job {job_id}: Failed to free resources: {e}")
 
-    # 6. Cleanup
+    # 7. Cleanup
     parsl.dfk().cleanup()
     logger.info("--- parslbox orchestrator finished ---")

@@ -31,7 +31,8 @@ class PythonApp(AppBase):
         pass
 
     @bash_app
-    def parsl_app(self, job_id: int, job_path: Path, db_path: Path, ngpus: int, app_config: dict, config_name: str, in_file: str, mpi_opts: str, stdout: str, stderr: str):
+    def parsl_app(self, job_id: int, job_path: Path, db_path: Path, assignment, mpi_commands: dict,
+                  app_config: dict, config_name: str, in_file: str, mpi_opts: str, stdout: str, stderr: str):
         """
         Parsl app for running Python scripts via bash scripts.
         
@@ -42,26 +43,48 @@ class PythonApp(AppBase):
         - Perform any other bash operations
         
         The user is responsible for creating the bash script with all necessary
-        environment setup and Python execution commands.
+        environment setup and Python execution commands. The script can also
+        use MPI if needed by accessing the provided MPI commands.
         """
-        # 1. Unpack app configuration from the YAML file (if any)
+        # Get MPI command prefix and environment variables from resource assignment
+        mpi_prefix = mpi_commands.get('PBX_MPI_PREFIX', '')
+        env_vars = assignment.get_env_vars()
+        
+        # Get total GPUs for information
+        total_gpus = assignment.get_total_gpus()
+        
+        # Unpack app configuration from the YAML file (if any)
         env_setup = app_config.get('environment_setup', '')
 
-        # 2. Command to update status to 'Running' on the worker node
+        # Command to update status to 'Running' on the worker node
         update_status_cmd = f"python -c \"from parslbox.helpers import database; database.update_jobs('{db_path}', job_ids=[{job_id}], status='Running')\""
 
-        # 3. Construct the full command string
+        # Format environment variables for GPU assignment
+        env_exports = self._format_env_vars(env_vars)
+
+        # Export MPI command as environment variable for the script to use
+        mpi_env_export = f"export PBX_MPI_PREFIX='{mpi_prefix}'" if mpi_prefix else ""
+
         return f"""
 cd {job_path}
 
 # Environment Setup (from config.yaml, if any)
 {env_setup}
 
+# Resource-specific environment variables (GPU assignments, etc.)
+{env_exports}
+
+# Export MPI command for the script to use if needed
+{mpi_env_export}
+
 # Execution
 echo "INFO: Updating job status to Running for job ID {job_id}..."
 {update_status_cmd}
 
 echo "INFO: Executing bash script {in_file} for job ID {job_id}..."
+echo "INFO: Resource assignment: {assignment.get_summary()}"
+echo "INFO: Available MPI command: {mpi_prefix}"
+
 bash {in_file}
 """
 

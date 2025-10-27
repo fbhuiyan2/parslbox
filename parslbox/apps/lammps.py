@@ -29,51 +29,60 @@ class LammpsApp(AppBase):
         pass
     
     @bash_app
-    def parsl_app(self, job_id: int, job_path: Path, db_path: Path, ngpus: int, app_config: dict, config_name: str, in_file: str, mpi_opts: str, stdout: str, stderr: str):
+    def parsl_app(self, job_id: int, job_path: Path, db_path: Path, assignment, mpi_commands: dict,
+                  app_config: dict, config_name: str, in_file: str, mpi_opts: str, stdout: str, stderr: str):
         """
         Parsl app for running a single LAMMPS simulation.
-        This function dynamically constructs the entire shell command.
+        This function dynamically constructs the entire shell command using resource-aware MPI commands.
         """
-        # Derive per-job parameters
-        ntotranks = ngpus  # For LAMMPS, 1 GPU per rank
+        # Get MPI command prefix and environment variables from resource assignment
+        mpi_prefix = mpi_commands.get('PBX_MPI_PREFIX', '')
+        env_vars = assignment.get_env_vars()
         
-        # Get system configuration to determine GPUs per node
-        system_config = get_system_config(config_name)
-        gpus_per_node = system_config.GPUS_PER_NODE
+        # Get total GPUs for LAMMPS GPU arguments
+        total_gpus = assignment.get_total_gpus()
         
-        # Calculate ranks per node based on system and job requirements
-        rankspernode = min(ngpus, gpus_per_node)
-
         # Unpack app configuration from the YAML file
         executable = app_config.get('executable_path')
-        mpi_cmd = app_config.get('mpi_cmd', 'mpiexec') # Default to 'mpiexec'
-        mpi_args = app_config.get('mpi_args')
+        mpi_extra_tags = app_config.get('mpi_extra')
         env_setup = app_config.get('environment_setup', '')
-        mpi_env = app_config.get('mpi_env', '') 
         
         # Handle mpi_opts - use empty string if None
         mpi_opts_str = mpi_opts if mpi_opts is not None else ''
+        mpi_extra_tags = mpi_extra_tags if mpi_extra_tags is not None else ''
 
         # Command to update status to 'Running' on the worker node
         update_status_cmd = f"python -c \"from parslbox.helpers import database; database.update_jobs('{db_path}', job_ids=[{job_id}], status='Running')\""
 
+        # Format environment variables for GPU assignment
+        env_exports = self._format_env_vars(env_vars)
+
         # Construct the full command string
+        if total_gpus > 0:
+            # GPU-enabled LAMMPS command
+            lammps_args = f"-k on g {total_gpus} -sf kk -pk kokkos newton on neigh half -in {in_file}"
+        else:
+            # CPU-only LAMMPS command
+            lammps_args = f"-in {in_file}"
+
         return f"""
 cd {job_path}
 
 # Environment Setup (from config.yaml)
 {env_setup}
 
-#export OMP_NUM_THREADS=nthreads
-export NTOTRANKS={ntotranks}
-export NRANKS_PER_NODE={rankspernode}
+# Resource-specific environment variables (GPU assignments, etc.)
+{env_exports}
 
 # Execution
 echo "INFO: Updating job status to Running for job ID {job_id}..."
 {update_status_cmd}
 
-echo "INFO: Starting mpirun for job ID {job_id} with input file {in_file}..."
-{mpi_cmd} {mpi_args} {mpi_env} {mpi_opts_str} {executable} -k on g {ngpus} -sf kk -pk kokkos newton on neigh half -in {in_file}
+echo "INFO: Starting LAMMPS for job ID {job_id} with input file {in_file}..."
+echo "INFO: Using MPI command: {mpi_prefix} {mpi_opts_str} {mpi_extra_tags} {executable} {lammps_args}"
+echo "INFO: Resource assignment: {assignment.get_summary()}"
+
+{mpi_prefix} {mpi_opts_str} {mpi_extra_tags} {executable} {lammps_args}
 """
 
     def check_success(self, job_id: int, job_path: Path, db_path: Path) -> str:

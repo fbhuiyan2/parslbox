@@ -21,6 +21,7 @@ class PolarisConfig(SystemConfig):
     CORES_PER_NODE = 32
     GPUS_PER_NODE = 4
     SCHEDULER = "PBS"
+    MPI_CMD_TO_USE = "mpiexec"
     
     def detect_resources(self) -> tuple[int, int]:
         """

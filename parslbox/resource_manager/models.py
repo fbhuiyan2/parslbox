@@ -12,24 +12,50 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def create_job_resource_spec(job_data: dict) -> 'JobResourceSpec':
+    """
+    Create JobResourceSpec directly from job database data.
+    
+    Args:
+        job_data: Dictionary containing job data from database
+        
+    Returns:
+        JobResourceSpec object
+    """
+    return JobResourceSpec(
+        job_id=job_data['job_id'],
+        num_nodes=job_data.get('num_nodes', 1),
+        ngpus=job_data.get('ngpus', 0),
+        node_occupancy=job_data.get('node_occupancy', 1.0)
+    )
+
+
 @dataclass
 class NodeResource:
     """
     Represents a compute node and its available resources.
     
     Tracks GPU assignments individually and CPU usage via occupancy.
+    For single-node jobs, also tracks individual CPU core assignments.
     """
     node_id: str
     hostname: str
     total_gpus: int
+    total_cores: int = 0
     available_gpu_ids: List[int] = field(default_factory=list)
+    available_core_ids: List[int] = field(default_factory=list)
     cpu_occupancy: float = 0.0  # 0.0 = free, 1.0 = fully occupied
     assigned_jobs: List[int] = field(default_factory=list)
+    job_cpu_assignments: Dict[int, List[int]] = field(default_factory=dict)  # job_id -> assigned core IDs
+    job_gpu_assignments: Dict[int, List[int]] = field(default_factory=dict)  # job_id -> assigned GPU IDs
     
     def __post_init__(self):
-        """Initialize available GPU IDs if not provided."""
+        """Initialize available GPU and CPU core IDs if not provided."""
         if not self.available_gpu_ids and self.total_gpus > 0:
             self.available_gpu_ids = list(range(self.total_gpus))
+        
+        if not self.available_core_ids and self.total_cores > 0:
+            self.available_core_ids = list(range(self.total_cores))
     
     def can_fit_gpu_job(self, num_gpus: int) -> bool:
         """Check if this node can accommodate a GPU job."""
@@ -38,6 +64,10 @@ class NodeResource:
     def can_fit_cpu_job(self, occupancy: float) -> bool:
         """Check if this node can accommodate a CPU-only job with given occupancy."""
         return (self.cpu_occupancy + occupancy) <= 1.0
+    
+    def can_fit_cpu_cores(self, num_cores: int) -> bool:
+        """Check if this node can accommodate a job requiring specific CPU cores."""
+        return len(self.available_core_ids) >= num_cores
     
     def can_fit_multinode_job(self) -> bool:
         """Check if this node is completely free for multi-node job."""
@@ -63,7 +93,12 @@ class NodeResource:
         # Assign the first N available GPUs
         assigned_gpus = self.available_gpu_ids[:num_gpus]
         self.available_gpu_ids = self.available_gpu_ids[num_gpus:]
-        self.assigned_jobs.append(job_id)
+        
+        # Track the assignment for this job
+        self.job_gpu_assignments[job_id] = assigned_gpus
+        
+        if job_id not in self.assigned_jobs:
+            self.assigned_jobs.append(job_id)
         
         logger.debug(f"Assigned GPUs {assigned_gpus} to job {job_id} on node {self.node_id}")
         return assigned_gpus
@@ -86,6 +121,36 @@ class NodeResource:
         self.assigned_jobs.append(job_id)
         
         logger.debug(f"Assigned CPU occupancy {occupancy} to job {job_id} on node {self.node_id}")
+    
+    def assign_cpu_cores(self, job_id: int, num_cores: int) -> List[int]:
+        """
+        Assign specific CPU cores to a job and return the assigned core IDs.
+        
+        Args:
+            job_id: The job ID to assign resources to
+            num_cores: Number of CPU cores to assign
+            
+        Returns:
+            List of assigned CPU core IDs
+            
+        Raises:
+            ValueError: If not enough CPU cores are available
+        """
+        if not self.can_fit_cpu_cores(num_cores):
+            raise ValueError(f"Cannot assign {num_cores} CPU cores to node {self.node_id}")
+        
+        # Assign the first N available cores
+        assigned_cores = self.available_core_ids[:num_cores]
+        self.available_core_ids = self.available_core_ids[num_cores:]
+        
+        # Track the assignment for this job
+        self.job_cpu_assignments[job_id] = assigned_cores
+        
+        if job_id not in self.assigned_jobs:
+            self.assigned_jobs.append(job_id)
+        
+        logger.debug(f"Assigned CPU cores {assigned_cores} to job {job_id} on node {self.node_id}")
+        return assigned_cores
     
     def assign_multinode_job(self, job_id: int) -> None:
         """
@@ -116,16 +181,30 @@ class NodeResource:
             logger.warning(f"Job {job_id} not found on node {self.node_id}")
             return
         
+        # Free CPU cores if this job had specific core assignments
+        if job_id in self.job_cpu_assignments:
+            freed_cores = self.job_cpu_assignments[job_id]
+            self.available_core_ids.extend(freed_cores)
+            self.available_core_ids.sort()  # Keep cores sorted for consistent assignment
+            del self.job_cpu_assignments[job_id]
+            logger.debug(f"Freed CPU cores {freed_cores} for job {job_id} on node {self.node_id}")
+        
+        # Free GPUs if this job had specific GPU assignments
+        if job_id in self.job_gpu_assignments:
+            freed_gpus = self.job_gpu_assignments[job_id]
+            self.available_gpu_ids.extend(freed_gpus)
+            self.available_gpu_ids.sort()  # Keep GPUs sorted for consistent assignment
+            del self.job_gpu_assignments[job_id]
+            logger.debug(f"Freed GPUs {freed_gpus} for job {job_id} on node {self.node_id}")
+        
         # If this was a multi-node job (occupancy = 1.0 and only one job)
         if self.cpu_occupancy == 1.0 and len(self.assigned_jobs) == 1:
             # Free entire node
             self.cpu_occupancy = 0.0
             self.available_gpu_ids = list(range(self.total_gpus))
-        else:
-            # This is more complex - we need to track what this specific job was using
-            # For now, we'll implement a simple approach
-            # TODO: Implement more sophisticated resource tracking per job
-            logger.warning(f"Simplified resource freeing for job {job_id} on node {self.node_id}")
+            self.available_core_ids = list(range(self.total_cores))
+            self.job_cpu_assignments.clear()
+            self.job_gpu_assignments.clear()
         
         self.assigned_jobs.remove(job_id)
         logger.debug(f"Freed resources for job {job_id} on node {self.node_id}")
@@ -150,7 +229,7 @@ class JobResourceSpec:
     """
     job_id: int
     num_nodes: int = 1
-    gpus_per_node: int = 0  # 0 = no GPUs needed
+    ngpus: int = 0  # Total GPUs needed (only relevant for single-node jobs)
     node_occupancy: float = 1.0  # For CPU-only jobs, fraction of node to use
     
     def __post_init__(self):
@@ -158,8 +237,8 @@ class JobResourceSpec:
         if self.num_nodes < 1:
             raise ValueError("num_nodes must be at least 1")
         
-        if self.gpus_per_node < 0:
-            raise ValueError("gpus_per_node cannot be negative")
+        if self.ngpus < 0:
+            raise ValueError("ngpus cannot be negative")
         
         if not 0.0 < self.node_occupancy <= 1.0:
             raise ValueError("node_occupancy must be between 0.0 and 1.0")
@@ -170,8 +249,8 @@ class JobResourceSpec:
             self.node_occupancy = 1.0
     
     def is_gpu_job(self) -> bool:
-        """Check if this job requires GPUs."""
-        return self.gpus_per_node > 0
+        """Check if this job requires GPUs (only meaningful for single-node jobs)."""
+        return self.num_nodes == 1 and self.ngpus > 0
     
     def is_multinode_job(self) -> bool:
         """Check if this is a multi-node job."""
@@ -182,7 +261,7 @@ class JobResourceSpec:
         if self.is_multinode_job():
             return f"Multi-node job: {self.num_nodes} nodes"
         elif self.is_gpu_job():
-            return f"Single-node GPU job: {self.gpus_per_node} GPUs"
+            return f"Single-node GPU job: {self.ngpus} GPUs"
         else:
             return f"Single-node CPU job: {self.node_occupancy:.2f} occupancy"
 
@@ -192,12 +271,14 @@ class NodeAssignment:
     """
     Result of resource assignment for a job.
     
-    Contains the specific nodes, hostnames, and GPU assignments for a job.
+    Contains the specific nodes, hostnames, GPU assignments, and CPU core assignments for a job.
     """
     job_id: int
     node_ids: List[str]
     hostnames: List[str]
     gpu_assignments: List[List[int]] = field(default_factory=list)  # GPU IDs per node
+    cpu_assignments: List[List[int]] = field(default_factory=list)  # CPU core IDs per node
+    node_occupancy: float = 1.0  # Node occupancy for CPU-only jobs
     
     def __post_init__(self):
         """Validate the assignment."""
@@ -210,6 +291,13 @@ class NodeAssignment:
         
         if len(self.gpu_assignments) != len(self.node_ids):
             raise ValueError("gpu_assignments must have same length as node_ids")
+        
+        # Initialize empty CPU assignments if not provided
+        if not self.cpu_assignments:
+            self.cpu_assignments = [[] for _ in self.node_ids]
+        
+        if len(self.cpu_assignments) != len(self.node_ids):
+            raise ValueError("cpu_assignments must have same length as node_ids")
     
     def get_total_gpus(self) -> int:
         """Get total number of GPUs assigned."""

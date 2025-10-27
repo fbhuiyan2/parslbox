@@ -3,14 +3,16 @@ import typer
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-# Updated schema with 'app', 'tag', 'in_file', and 'mpi_opts' columns
+# Updated schema with individual resource columns
 CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS jobs (
     job_id INTEGER PRIMARY KEY,
     app TEXT NOT NULL,
     path TEXT NOT NULL UNIQUE,
     status TEXT NOT NULL,
-    ngpus INTEGER NOT NULL DEFAULT 1,
+    num_nodes INTEGER DEFAULT 1,
+    ngpus INTEGER DEFAULT 0,
+    node_occupancy REAL DEFAULT 1.0,
     sched_job_id TEXT,
     tag TEXT,
     in_file TEXT,
@@ -52,13 +54,13 @@ def initialize_database(db_path: Path):
         typer.secho(f"Failed to open or initialize the database at: {db_path}", fg=typer.colors.YELLOW, err=True)
         raise typer.Exit(code=1)
 
-def add_job(db_path: Path, path: str, app: str, ngpus: int, tag: Optional[str], in_file: Optional[str] = None, mpi_opts: Optional[str] = None, status: str = 'Ready') -> int:
-    """Adds a new job to the database with app, tag, input file info, and MPI options."""
+def add_job(db_path: Path, path: str, app: str, num_nodes: int, ngpus: int, node_occupancy: float, tag: Optional[str], in_file: Optional[str] = None, mpi_opts: Optional[str] = None, status: str = 'Ready') -> int:
+    """Adds a new job to the database with app, tag, input file info, resource specification, and MPI options."""
     with sqlite3.connect(db_path) as con:
         cur = con.cursor()
         cur.execute(
-            "INSERT INTO jobs (path, app, tag, in_file, mpi_opts, status, ngpus) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (path, app, tag, in_file, mpi_opts, status, ngpus)
+            "INSERT INTO jobs (path, app, tag, in_file, mpi_opts, status, num_nodes, ngpus, node_occupancy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (path, app, tag, in_file, mpi_opts, status, num_nodes, ngpus, node_occupancy)
         )
         return cur.lastrowid
 
@@ -166,7 +168,9 @@ def update_jobs(
     sched_job_id: Optional[str] = None,
     app: Optional[str] = None,
     tag: Optional[str] = None,
+    num_nodes: Optional[int] = None,
     ngpus: Optional[int] = None,
+    node_occupancy: Optional[float] = None,
     in_file: Optional[str] = None,
     mpi_opts: Optional[str] = None
 ) -> int:
@@ -192,9 +196,17 @@ def update_jobs(
         set_clauses.append("tag = ?")
         params.append(tag)
 
+    if num_nodes is not None:
+        set_clauses.append("num_nodes = ?")
+        params.append(num_nodes)
+
     if ngpus is not None:
         set_clauses.append("ngpus = ?")
         params.append(ngpus)
+
+    if node_occupancy is not None:
+        set_clauses.append("node_occupancy = ?")
+        params.append(node_occupancy)
 
     if sched_job_id is not None:
         set_clauses.append("sched_job_id = ?")

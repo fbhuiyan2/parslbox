@@ -15,9 +15,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from parslbox.resource_manager import (
-    ParslboxResourceManager, 
-    JobResourceSpec, 
-    NodeResource,
+    ResourceManager, 
+    JobResourceSpec,
     InsufficientResources,
     InvalidResourceSpec
 )
@@ -48,12 +47,12 @@ def test_resource_manager_basic():
     config = MockSystemConfig()
     
     # Temporarily mock the hostname detection
-    original_method = ParslboxResourceManager._get_node_hostnames
-    ParslboxResourceManager._get_node_hostnames = lambda self, num_nodes: [f"test-node-{i:02d}" for i in range(num_nodes)]
+    original_method = ResourceManager._get_node_hostnames
+    ResourceManager._get_node_hostnames = lambda self, num_nodes: [f"test-node-{i:02d}" for i in range(num_nodes)]
     
     try:
         # Create resource manager
-        rm = ParslboxResourceManager(config)
+        rm = ResourceManager(config)
         
         print(f"✅ Resource manager initialized with {len(rm.nodes)} nodes")
         
@@ -65,7 +64,7 @@ def test_resource_manager_basic():
         
     finally:
         # Restore original method
-        ParslboxResourceManager._get_node_hostnames = original_method
+        ResourceManager._get_node_hostnames = original_method
 
 
 def test_single_node_gpu_jobs(rm):
@@ -73,13 +72,13 @@ def test_single_node_gpu_jobs(rm):
     print("\n=== Testing Single-Node GPU Jobs ===")
     
     # Job 1: 2 GPUs
-    spec1 = JobResourceSpec(job_id=1, num_nodes=1, gpus_per_node=2)
+    spec1 = JobResourceSpec(job_id=1, num_nodes=1, ngpus=2)
     assignment1 = rm.assign_resources(spec1)
     print(f"✅ Job 1 assigned: {assignment1.get_summary()}")
     print(f"   Environment: {assignment1.get_env_vars()}")
     
     # Job 2: 2 GPUs (should share same node)
-    spec2 = JobResourceSpec(job_id=2, num_nodes=1, gpus_per_node=2)
+    spec2 = JobResourceSpec(job_id=2, num_nodes=1, ngpus=2)
     assignment2 = rm.assign_resources(spec2)
     print(f"✅ Job 2 assigned: {assignment2.get_summary()}")
     print(f"   Environment: {assignment2.get_env_vars()}")
@@ -98,12 +97,12 @@ def test_cpu_only_jobs(rm):
     print("\n=== Testing CPU-Only Jobs ===")
     
     # Job 3: CPU-only with 0.5 occupancy
-    spec3 = JobResourceSpec(job_id=3, num_nodes=1, gpus_per_node=0, node_occupancy=0.5)
+    spec3 = JobResourceSpec(job_id=3, num_nodes=1, ngpus=0, node_occupancy=0.5)
     assignment3 = rm.assign_resources(spec3)
     print(f"✅ Job 3 (CPU-only) assigned: {assignment3.get_summary()}")
     
     # Job 4: CPU-only with 0.25 occupancy (should share same node)
-    spec4 = JobResourceSpec(job_id=4, num_nodes=1, gpus_per_node=0, node_occupancy=0.25)
+    spec4 = JobResourceSpec(job_id=4, num_nodes=1, ngpus=0, node_occupancy=0.25)
     assignment4 = rm.assign_resources(spec4)
     print(f"✅ Job 4 (CPU-only) assigned: {assignment4.get_summary()}")
     
@@ -115,7 +114,7 @@ def test_multinode_job(rm):
     print("\n=== Testing Multi-Node Job ===")
     
     # Job 5: Multi-node job requiring 2 nodes
-    spec5 = JobResourceSpec(job_id=5, num_nodes=2, gpus_per_node=0)
+    spec5 = JobResourceSpec(job_id=5, num_nodes=2, ngpus=0)
     
     try:
         assignment5 = rm.assign_resources(spec5)
@@ -189,7 +188,7 @@ def test_insufficient_resources(rm):
     print("\n=== Testing Insufficient Resources ===")
     
     # Try to assign a job requiring more GPUs than available on any node
-    spec_impossible = JobResourceSpec(job_id=99, num_nodes=1, gpus_per_node=10)
+    spec_impossible = JobResourceSpec(job_id=99, num_nodes=1, ngpus=10)
     
     try:
         rm.assign_resources(spec_impossible)

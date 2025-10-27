@@ -39,7 +39,7 @@ class AppBase(ABC):
         pass
     
     @abstractmethod
-    def parsl_app(self, job_id: int, job_path: Path, db_path: Path, ngpus: int, 
+    def parsl_app(self, job_id: int, job_path: Path, db_path: Path, assignment, mpi_commands: dict,
                   app_config: dict, config_name: str, in_file: str, mpi_opts: str, stdout: str, stderr: str):
         """
         Main Parsl app function for executing the application.
@@ -50,7 +50,8 @@ class AppBase(ABC):
             job_id (int): The job ID
             job_path (Path): Path to the job directory
             db_path (Path): Path to the database file
-            ngpus (int): Number of GPUs allocated for this job
+            assignment: NodeAssignment object with resource allocation details
+            mpi_commands (dict): Dictionary of MPI command prefixes
             app_config (dict): Application configuration from YAML
             config_name (str): Name of the system configuration (e.g., 'polaris')
             in_file (str): Input filename for the job
@@ -92,3 +93,22 @@ class AppBase(ABC):
             db_path (Path): Path to the database file
         """
         pass
+    
+    def _format_env_vars(self, env_vars: dict) -> str:
+        """
+        Format environment variables for shell export.
+        
+        Args:
+            env_vars (dict): Dictionary of environment variable name -> value
+            
+        Returns:
+            str: Formatted export statements
+        """
+        if not env_vars:
+            return ""
+        
+        exports = []
+        for key, value in env_vars.items():
+            exports.append(f"export {key}={value}")
+        
+        return "\n".join(exports)

@@ -26,10 +26,14 @@ class PrioritizedJob:
     resource_spec: JobResourceSpec = field(compare=False)
 
 
-class ParslboxResourceManager:
+class ResourceManager:
     """
     Main resource manager for ParslBox.
     
+    Key design philosophy: 
+        - 1 node jobs with sub-node resource requirements (e.g. 2 gpus out of 4) can share the node with other 1 node jobs
+        - multi-node jobs do not share nodes and take up the ful nodes
+        - 1 node cpu jobs (e.g., ngpus=0) use the node_occupancy which determines what portion of the node the job will use
     Handles allocation and tracking of nodes, CPUs, and GPUs across
     different HPC systems. Supports both single-node and multi-node jobs
     with intelligent resource sharing.
@@ -67,7 +71,8 @@ class ParslboxResourceManager:
                 node = NodeResource(
                     node_id=node_id,
                     hostname=hostname,
-                    total_gpus=gpus_per_node
+                    total_gpus=gpus_per_node,
+                    total_cores=self.system_config.CORES_PER_NODE
                 )
                 self.nodes.append(node)
                 
@@ -87,7 +92,10 @@ class ParslboxResourceManager:
         Returns:
             List of hostnames
         """
-        scheduler = self.system_config.SCHEDULER
+        if hasattr(self.system_config, '_get_node_hostnames'):
+            return self.system_config._get_node_hostnames(num_nodes)
+        
+        scheduler = getattr(self.system_config, 'SCHEDULER', 'UNKNOWN')
         
         if scheduler == "PBS":
             return self._get_pbs_hostnames()
@@ -171,9 +179,10 @@ class ParslboxResourceManager:
     
     def _validate_resource_spec(self, spec: JobResourceSpec) -> None:
         """Validate resource specification against system capabilities."""
-        if spec.gpus_per_node > self.system_config.GPUS_PER_NODE:
+        # For single-node jobs, check GPU requirements
+        if spec.num_nodes == 1 and spec.ngpus > self.system_config.GPUS_PER_NODE:
             raise InvalidResourceSpec(
-                f"Requested {spec.gpus_per_node} GPUs per node, "
+                f"Requested {spec.ngpus} GPUs per node, "
                 f"but system only has {self.system_config.GPUS_PER_NODE}"
             )
         
@@ -211,51 +220,66 @@ class ParslboxResourceManager:
             job_id=spec.job_id,
             node_ids=node_ids,
             hostnames=hostnames,
-            gpu_assignments=[[] for _ in range(spec.num_nodes)]  # No specific GPU assignments for multi-node
+            gpu_assignments=[[] for _ in range(spec.num_nodes)],  # No specific GPU assignments for multi-node
+            node_occupancy=spec.node_occupancy
         )
     
     def _assign_single_node_gpu_job(self, spec: JobResourceSpec) -> NodeAssignment:
         """Assign resources for a single-node GPU job."""
-        # Find a node with enough GPUs
+        # For GPU jobs, we typically assign cores equal to the number of GPUs
+        # or based on the system's cores per GPU ratio
+        cores_per_gpu = self.system_config.CORES_PER_NODE // self.system_config.GPUS_PER_NODE
+        num_cores_needed = spec.ngpus * cores_per_gpu
+        
+        # Find a node with enough GPUs and CPU cores
         for node in self.nodes:
-            if node.can_fit_gpu_job(spec.gpus_per_node):
-                assigned_gpus = node.assign_gpu_job(spec.job_id, spec.gpus_per_node)
+            if node.can_fit_gpu_job(spec.ngpus) and node.can_fit_cpu_cores(num_cores_needed):
+                assigned_gpus = node.assign_gpu_job(spec.job_id, spec.ngpus)
+                assigned_cores = node.assign_cpu_cores(spec.job_id, num_cores_needed)
                 
                 return NodeAssignment(
                     job_id=spec.job_id,
                     node_ids=[node.node_id],
                     hostnames=[node.hostname],
-                    gpu_assignments=[assigned_gpus]
+                    gpu_assignments=[assigned_gpus],
+                    cpu_assignments=[assigned_cores],
+                    node_occupancy=spec.node_occupancy
                 )
         
         # No suitable node found
         available_gpus = max(len(node.available_gpu_ids) for node in self.nodes)
+        available_cores = max(len(node.available_core_ids) for node in self.nodes)
         raise InsufficientResources(
-            f"Not enough GPUs available for single-node job",
-            requested={'gpus': spec.gpus_per_node},
-            available={'gpus': available_gpus}
+            f"Not enough GPUs or CPU cores available for single-node job",
+            requested={'gpus': spec.ngpus, 'cores': num_cores_needed},
+            available={'gpus': available_gpus, 'cores': available_cores}
         )
     
     def _assign_single_node_cpu_job(self, spec: JobResourceSpec) -> NodeAssignment:
         """Assign resources for a single-node CPU-only job."""
-        # Find a node with enough CPU capacity
+        # Calculate number of CPU cores needed based on occupancy
+        num_cores_needed = max(1, int(spec.node_occupancy * self.system_config.CORES_PER_NODE))
+        
+        # Find a node with enough CPU cores
         for node in self.nodes:
-            if node.can_fit_cpu_job(spec.node_occupancy):
-                node.assign_cpu_job(spec.job_id, spec.node_occupancy)
+            if node.can_fit_cpu_cores(num_cores_needed):
+                assigned_cores = node.assign_cpu_cores(spec.job_id, num_cores_needed)
                 
                 return NodeAssignment(
                     job_id=spec.job_id,
                     node_ids=[node.node_id],
                     hostnames=[node.hostname],
-                    gpu_assignments=[[]]  # No GPUs
+                    gpu_assignments=[[]],  # No GPUs
+                    cpu_assignments=[assigned_cores],  # Assigned CPU cores
+                    node_occupancy=spec.node_occupancy
                 )
         
         # No suitable node found
-        min_available_capacity = min(1.0 - node.cpu_occupancy for node in self.nodes)
+        max_available_cores = max(len(node.available_core_ids) for node in self.nodes)
         raise InsufficientResources(
-            f"Not enough CPU capacity available for single-node job",
-            requested={'occupancy': spec.node_occupancy},
-            available={'occupancy': min_available_capacity}
+            f"Not enough CPU cores available for single-node job",
+            requested={'cores': num_cores_needed},
+            available={'cores': max_available_cores}
         )
     
     def free_resources(self, job_id: int) -> None:
@@ -324,6 +348,7 @@ class ParslboxResourceManager:
         free_nodes = len([node for node in self.nodes if len(node.assigned_jobs) == 0])
         total_gpus = sum(node.total_gpus for node in self.nodes)
         available_gpus = sum(len(node.available_gpu_ids) for node in self.nodes)
+        available_nodes = sum(1 for node in self.nodes if node.cpu_occupancy < 1.0)
         total_cpu_capacity = float(total_nodes)
         used_cpu_capacity = sum(node.cpu_occupancy for node in self.nodes)
         
@@ -333,6 +358,7 @@ class ParslboxResourceManager:
             'used_nodes': total_nodes - free_nodes,
             'total_gpus': total_gpus,
             'available_gpus': available_gpus,
+            'available_nodes': available_nodes,
             'used_gpus': total_gpus - available_gpus,
             'total_cpu_capacity': total_cpu_capacity,
             'used_cpu_capacity': used_cpu_capacity,

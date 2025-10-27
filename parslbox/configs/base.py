@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 from parsl.config import Config
 
 if TYPE_CHECKING:
-    from parslbox.resource_manager import ParslboxResourceManager
+    from parslbox.resource_manager import ResourceManager
 
 
 class SystemConfig(ABC):
@@ -27,6 +27,7 @@ class SystemConfig(ABC):
     CORES_PER_NODE: int
     GPUS_PER_NODE: int
     SCHEDULER: str
+    MPI_CMD_TO_USE: str
     
     @abstractmethod
     def detect_resources(self) -> tuple[int, int]:
@@ -52,12 +53,12 @@ class SystemConfig(ABC):
         """
         pass
     
-    def create_resource_manager(self) -> 'ParslboxResourceManager':
+    def create_resource_manager(self) -> 'ResourceManager':
         """
         Create and initialize a resource manager for this system.
         
         Returns:
-            ParslboxResourceManager: Initialized resource manager
+            ResourceManager: Initialized resource manager
         """
-        from parslbox.resource_manager import ParslboxResourceManager
-        return ParslboxResourceManager(self)
+        from parslbox.resource_manager import ResourceManager
+        return ResourceManager(self)
