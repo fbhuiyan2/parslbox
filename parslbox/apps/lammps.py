@@ -12,7 +12,7 @@ from parslbox.configs.loader import get_system_config
 @bash_app
 def lammps_parsl_app(job_id: int, job_path: Path, db_path: Path, assignment, mpi_commands: dict,
                      app_config: dict, config_name: str, in_file: str, mpi_opts: str, 
-                     stdout: str, stderr: str, app_instance):
+                     stdout: str, stderr: str):
     """
     Standalone Parsl app for running a single LAMMPS simulation.
     This function dynamically constructs the entire shell command using resource-aware MPI commands.
@@ -36,8 +36,13 @@ def lammps_parsl_app(job_id: int, job_path: Path, db_path: Path, assignment, mpi
     # Command to update status to 'Running' on the worker node
     update_status_cmd = f"python -c \"from parslbox.helpers import database; database.update_jobs('{db_path}', job_ids=[{job_id}], status='Running')\""
 
-    # Format environment variables for GPU assignment
-    env_exports = app_instance._format_env_vars(env_vars)
+    # Format environment variables for GPU assignment (inline implementation)
+    env_exports = ""
+    if env_vars:
+        exports = []
+        for key, value in env_vars.items():
+            exports.append(f"export {key}={value}")
+        env_exports = "\n".join(exports)
 
     # Construct the full command string
     if total_gpus > 0:
@@ -106,8 +111,7 @@ class LammpsApp(AppBase):
             in_file=in_file,
             mpi_opts=mpi_opts,
             stdout=stdout,
-            stderr=stderr,
-            app_instance=self
+            stderr=stderr
         )
 
     def check_success(self, job_id: int, job_path: Path, db_path: Path) -> str:
