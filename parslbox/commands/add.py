@@ -21,6 +21,10 @@ def add(
         str,
         typer.Option("--app", "-a", help="The application type (e.g., 'lammps', 'vasp')."),
     ],
+    config_name: Annotated[
+        str,
+        typer.Option("--config", "-c", help="The name of the configuration to use (e.g., 'polaris').")
+    ],
     tag: Annotated[
         Optional[str],
         typer.Option("--tag", "-t", help="An optional tag to categorize the job(s)."),
@@ -106,7 +110,7 @@ def add(
     
     # Get system configuration to determine GPUs per node
     try:
-        system_config = get_system_config()
+        system_config = get_system_config(config_name)
         gpus_per_node = system_config.GPUS_PER_NODE
     except Exception as e:
         typer.secho(f"❌ Error: Could not load system configuration: {e}", fg=typer.colors.RED)
