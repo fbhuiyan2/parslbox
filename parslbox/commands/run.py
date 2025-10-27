@@ -232,7 +232,7 @@ def run(
         except Exception as e:      
             logger.error(f"Job {job_id} hit following error: {e}")
             # Sometimes apps can exit ungracefully even after a good run
-            logger.info(f"Job {job_id} checking job success...")
+            logger.info(f"Job {job_id} running success-check on the job...")
             job_status = app_instance.check_success(job_id=job_id, job_path=job_path, db_path=db_path)
             if job_status and job_status != 'Failed':
                 database.update_jobs(db_path, job_ids=[job_id], status=job_status)
