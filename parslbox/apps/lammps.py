@@ -10,19 +10,16 @@ from parslbox.configs.loader import get_system_config
 # ===================================================================================
 
 @bash_app
-def lammps_parsl_app(job_id: int, job_path: Path, db_path: Path, assignment, mpi_commands: dict,
-                     app_config: dict, config_name: str, in_file: str, mpi_opts: str, 
+def lammps_parsl_app(job_id: int, job_path: str, db_path: str, env_vars: dict, total_gpus: int,
+                     assignment_summary: str, mpi_commands: dict, app_config: dict,
+                     config_name: str, in_file: str, mpi_opts: str, 
                      stdout: str, stderr: str):
     """
     Standalone Parsl app for running a single LAMMPS simulation.
     This function dynamically constructs the entire shell command using resource-aware MPI commands.
     """
-    # Get MPI command prefix and environment variables from resource assignment
+    # Get MPI command prefix
     mpi_prefix = mpi_commands.get('PBX_MPI_PREFIX', '')
-    env_vars = assignment.get_env_vars()
-    
-    # Get total GPUs for LAMMPS GPU arguments
-    total_gpus = assignment.get_total_gpus()
     
     # Unpack app configuration from the YAML file
     executable = app_config.get('executable_path')
@@ -67,7 +64,7 @@ echo "INFO: Updating job status to Running for job ID {job_id}..."
 
 echo "INFO: Starting LAMMPS for job ID {job_id} with input file {in_file}..."
 echo "INFO: Using MPI command: {mpi_prefix} {mpi_opts_str} {mpi_extra_tags} {executable} {lammps_args}"
-echo "INFO: Resource assignment: {assignment.get_summary()}"
+echo "INFO: Resource assignment: {assignment_summary}"
 
 {mpi_prefix} {mpi_opts_str} {mpi_extra_tags} {executable} {lammps_args}
 """
@@ -99,12 +96,20 @@ class LammpsApp(AppBase):
                   app_config: dict, config_name: str, in_file: str, mpi_opts: str, stdout: str, stderr: str):
         """
         Wrapper method that calls the standalone Parsl app function.
+        Extracts serializable data from assignment object before passing to Parsl.
         """
+        # Extract serializable data from assignment object
+        env_vars = assignment.get_env_vars()
+        total_gpus = assignment.get_total_gpus()
+        assignment_summary = assignment.get_summary()
+        
         return lammps_parsl_app(
             job_id=job_id,
-            job_path=job_path,
-            db_path=db_path,
-            assignment=assignment,
+            job_path=str(job_path),  # Convert Path to string for serialization
+            db_path=str(db_path),    # Convert Path to string for serialization
+            env_vars=env_vars,
+            total_gpus=total_gpus,
+            assignment_summary=assignment_summary,
             mpi_commands=mpi_commands,
             app_config=app_config,
             config_name=config_name,
