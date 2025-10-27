@@ -115,9 +115,10 @@ def run(
     for app_name, jobs_list in grouped_jobs.items():
         logger.info(f"Processing {len(jobs_list)} jobs for application: '{app_name}'")
         try:
-            # Get app instance from registry
-            from parslbox.apps.app_registry import get_app_instance
+            # Get app instance and class from registry
+            from parslbox.apps.app_registry import get_app_instance, get_app_class
             app_instance = get_app_instance(app_name)
+            app_class = get_app_class(app_name)
         except ValueError as e:
             logger.error(f"Could not load app '{app_name}': {e}. Skipping these jobs.")
             job_ids_to_fail = [j['job_id'] for j in jobs_list]
@@ -184,7 +185,7 @@ def run(
             # Need to add clause for "SLURM" too
             
             try:
-                fut = app_instance.parsl_app(
+                fut = app_class.parsl_app(
                     job_id=job_id,
                     job_path=job_path,
                     db_path=db_path,
