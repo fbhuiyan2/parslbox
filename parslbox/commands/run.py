@@ -185,7 +185,7 @@ def run(
             # Need to add clause for "SLURM" too
             
             try:
-                fut = app_class.parsl_app(
+                fut = app_instance.parsl_app(
                     job_id=job_id,
                     job_path=job_path,
                     db_path=db_path,
