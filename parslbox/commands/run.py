@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from typing_extensions import Annotated
+from concurrent.futures import as_completed
 
 from parslbox.configs.loader import load_config, get_system_config
 from parslbox.helpers.logging_utils import setup_logging
@@ -15,9 +16,92 @@ from parslbox.helpers.config_utils import load_app_config, is_app_configured
 from parslbox.helpers import database, path_utils
 from parslbox.resource_manager.models import create_job_resource_spec
 from parslbox.resource_manager.mpi_launcher import compose_all_mpi_commands
+from parslbox.resource_manager.exceptions import InsufficientResources
 
 
 app = typer.Typer()
+
+
+def create_parsl_future(job, app_instance, app_config, config_name, assignment, 
+                       mpi_commands, db_path, scheduler, resource_manager, futures):
+    """
+    Create a Parsl future for a job with proper preprocessing and error handling.
+    
+    Args:
+        job: Job dictionary from database
+        app_instance: Application instance
+        app_config: Application configuration
+        config_name: System configuration name
+        assignment: Resource assignment from resource manager
+        mpi_commands: MPI command dictionary
+        db_path: Database path
+        scheduler: Scheduler type (PBS, SLURM, etc.)
+        resource_manager: Resource manager instance
+        futures: List to append the future to
+    
+    Returns:
+        bool: True if successful, False if failed
+    """
+    job_id = job['job_id']
+    job_path = Path(job['path'])
+    logger = logging.getLogger(__name__)
+    
+    try:
+        # Run preprocessing
+        logger.info(f"Running preprocessing for Job ID {job_id}...")
+        app_instance.preprocess(
+            job_id=job_id, 
+            job_path=job_path, 
+            db_path=db_path, 
+            app_config=app_config, 
+            config_name=config_name
+        )
+        
+        # Update job status
+        database.update_jobs(db_path, job_ids=[job_id], status="Submitted")
+        
+        # Set scheduler job ID
+        if scheduler == "PBS":
+            PBS_JOB_ID = os.environ.get('PBS_JOBID', f'local_{int(time.time())}')
+            database.update_jobs(db_path, job_ids=[job_id], sched_job_id=PBS_JOB_ID)
+        elif scheduler == "SLURM":
+            SLURM_JOB_ID = os.environ.get('SLURM_JOB_ID', f'local_{int(time.time())}')
+            database.update_jobs(db_path, job_ids=[job_id], sched_job_id=SLURM_JOB_ID)
+        
+        # Create Parsl future
+        fut = app_instance.parsl_app(
+            job_id=job_id,
+            job_path=job_path,
+            db_path=db_path,
+            assignment=assignment,
+            mpi_commands=mpi_commands,
+            app_config=app_config,
+            config_name=config_name,
+            in_file=job['in_file'],
+            mpi_opts=job['mpi_opts'],
+            stdout=(str(job_path / "pbx.out"), 'w'),
+            stderr=(str(job_path / "pbx.out"), 'a')
+        )
+        
+        # Add to futures list
+        futures.append({
+            'future': fut, 
+            'job': job, 
+            'app_instance': app_instance,
+            'assignment': assignment,
+            'resource_manager': resource_manager
+        })
+        
+        logger.info(f"Job {job_id}: Successfully created Parsl future")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Job {job_id}: Failed to submit Parsl app: {e}")
+        # Free resources if job submission failed
+        resource_manager.free_resources(job_id)
+        database.update_jobs(db_path, job_ids=[job_id], status="Failed")
+        return False
+
 
 def get_default_run_dir() -> Path:
     """Generate default run directory with current time and date in hhmmss_ddmmyy format."""
@@ -163,92 +247,70 @@ def run(
                 mpi_commands = compose_all_mpi_commands(assignment, system_config, resource_spec.node_occupancy)
                 logger.info(f"Job {job_id}: Generated MPI command - {mpi_commands.get('PBX_MPI_PREFIX', 'None')}")
                 
+                # Create Parsl future using the extracted function
+                create_parsl_future(job, app_instance, app_config, config_name, assignment, 
+                                  mpi_commands, db_path, scheduler, resource_manager, futures)
+                
+            except InsufficientResources as e:
+                # This is NOT an error - just temporary resource unavailability
+                logger.info(f"Job {job_id}: Resources temporarily unavailable, added to backlog: {e}")
+                # The resource manager has already added the job to the backlog queue
+                # Don't mark as failed - the job will be scheduled when resources become available
+                continue
+                
             except Exception as e:
+                # This IS an actual error (invalid spec, system error, etc.)
                 logger.error(f"Job {job_id}: Failed to allocate resources: {e}")
                 database.update_jobs(db_path, job_ids=[job_id], status="Failed")
                 continue
-            
-            # Run preprocessing
-            logger.info(f"Running preprocessing for Job ID {job_id}...")
-            app_instance.preprocess(
-                job_id=job_id, 
-                job_path=job_path, 
-                db_path=db_path, 
-                app_config=app_config, 
-                config_name=config_name
-            )
-            
-            database.update_jobs(db_path, job_ids=[job_id], status="Submitted")
-            if scheduler == "PBS":
-                PBS_JOB_ID = os.environ.get('PBS_JOBID', f'local_{int(time.time())}')
-                database.update_jobs(db_path, job_ids=[job_id], sched_job_id=PBS_JOB_ID)
-            # Need to add clause for "SLURM" too
-            
-            try:
-                fut = app_instance.parsl_app(
-                    job_id=job_id,
-                    job_path=job_path,
-                    db_path=db_path,
-                    assignment=assignment,
-                    mpi_commands=mpi_commands,
-                    app_config=app_config,
-                    config_name=config_name,
-                    in_file=job['in_file'],
-                    mpi_opts=job['mpi_opts'],
-                    stdout=(str(job_path / "pbx.out"), 'w'),
-                    stderr=(str(job_path / "pbx.out"), 'a')
-                )
-                futures.append({
-                    'future': fut, 
-                    'job': job, 
-                    'app_instance': app_instance,
-                    'assignment': assignment,
-                    'resource_manager': resource_manager
-                })
-            except Exception as e:
-                logger.error(f"Job {job_id}: Failed to submit Parsl app: {e}")
-                # Free resources if job submission failed
-                resource_manager.free_resources(job_id)
-                database.update_jobs(db_path, job_ids=[job_id], status="Failed")
 
-    # 6. Await and Process Results
+    # 6. Await and Process Results (Non-blocking with as_completed)
     logger.info(f"Waiting for {len(futures)} submitted jobs to complete...")
 
-    for item in futures:
-        fut, job, app_instance = item['future'], item['job'], item['app_instance']
-        assignment, resource_manager = item['assignment'], item['resource_manager']
-        job_id, job_path = job['job_id'], Path(job['path'])
+    if futures:
+        # Create mapping from futures to their metadata
+        fut_to_item = {item['future']: item for item in futures}
         
-        try:
-            fut.result()  # Wait for the Parsl app to finish
-            job_status = app_instance.check_success(job_id=job_id, job_path=job_path, db_path=db_path)
-            if job_status and job_status != 'Failed':
-                database.update_jobs(db_path, job_ids=[job_id], status=job_status)
-                logger.info(f"Job {job_id} execution finished. Running post-processing...")
-                app_instance.postprocess(job_id=job_id, job_path=job_path, db_path=db_path)
-            elif job_status == 'Failed':
-                database.update_jobs(db_path, job_ids=[job_id], status="Failed")
-        
-        except Exception as e:      
-            logger.error(f"Job {job_id} hit following error: {e}")
-            # Sometimes apps can exit ungracefully even after a good run
-            logger.info(f"Job {job_id} running success-check on the job...")
-            job_status = app_instance.check_success(job_id=job_id, job_path=job_path, db_path=db_path)
-            if job_status and job_status != 'Failed':
-                database.update_jobs(db_path, job_ids=[job_id], status=job_status)
-                logger.info(f"Job {job_id} completed successfully. Running post-processing...")
-                app_instance.postprocess(job_id=job_id, job_path=job_path, db_path=db_path)
-            elif job_status == 'Failed':
-                logger.error(f"Job {job_id} Failed.")
-                database.update_jobs(db_path, job_ids=[job_id], status="Failed")
-        
-        finally:
-            # Always free resources after job completion (success or failure)
+        # Process jobs as they complete (not in submission order)
+        for fut in as_completed(fut_to_item):
+            item = fut_to_item[fut]
+            job = item['job']
+            app_instance = item['app_instance']
+            assignment = item['assignment']
+            resource_manager = item['resource_manager']
+            job_id = job['job_id']
+            job_path = Path(job['path'])
+            
             try:
-                resource_manager.free_resources(job_id)
-                logger.info(f"Job {job_id}: Freed allocated resources")
-            except Exception as e:
-                logger.error(f"Job {job_id}: Failed to free resources: {e}")
+                fut.result()  # Already finished, returns immediately
+                job_status = app_instance.check_success(job_id=job_id, job_path=job_path, db_path=db_path)
+                if job_status and job_status != 'Failed':
+                    database.update_jobs(db_path, job_ids=[job_id], status=job_status)
+                    logger.info(f"Job {job_id} execution finished. Running post-processing...")
+                    app_instance.postprocess(job_id=job_id, job_path=job_path, db_path=db_path)
+                elif job_status == 'Failed':
+                    database.update_jobs(db_path, job_ids=[job_id], status="Failed")
+            
+            except Exception as e:      
+                logger.error(f"Job {job_id} hit following error: {e}")
+                # Sometimes apps can exit ungracefully even after a good run
+                logger.info(f"Job {job_id} running success-check on the job...")
+                job_status = app_instance.check_success(job_id=job_id, job_path=job_path, db_path=db_path)
+                if job_status and job_status != 'Failed':
+                    database.update_jobs(db_path, job_ids=[job_id], status=job_status)
+                    logger.info(f"Job {job_id} completed successfully. Running post-processing...")
+                    app_instance.postprocess(job_id=job_id, job_path=job_path, db_path=db_path)
+                elif job_status == 'Failed':
+                    logger.error(f"Job {job_id} Failed.")
+                    database.update_jobs(db_path, job_ids=[job_id], status="Failed")
+            
+            finally:
+                # Always free resources after job completion (success or failure)
+                try:
+                    resource_manager.free_resources(job_id)
+                    logger.info(f"Job {job_id}: Freed allocated resources")
+                except Exception as e:
+                    logger.error(f"Job {job_id}: Failed to free resources: {e}")
 
     # 7. Cleanup
     parsl.dfk().cleanup()
