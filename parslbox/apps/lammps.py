@@ -4,6 +4,7 @@ from parsl import bash_app
 from parslbox.helpers import database
 from parslbox.apps.base import AppBase
 from parslbox.configs.loader import get_system_config
+import logging
 
 # ===================================================================================
 #  STANDALONE PARSL APP FUNCTION
@@ -78,6 +79,7 @@ def lammps_parsl_app(job_id: int, job_path: str, db_path: str, env_vars: dict, t
         traceback.print_exc()
         raise
 
+
 # ===================================================================================
 #  LAMMPS APPLICATION-SPECIFIC IMPLEMENTATION
 # ===================================================================================
@@ -107,26 +109,36 @@ class LammpsApp(AppBase):
         Wrapper method that calls the standalone Parsl app function.
         Extracts serializable data from assignment object before passing to Parsl.
         """
-        # Extract serializable data from assignment object
-        env_vars = assignment.get_env_vars()
-        total_gpus = assignment.get_total_gpus()
-        assignment_summary = assignment.get_summary()
+
+        logger = logging.getLogger(__name__)  
         
-        return lammps_parsl_app(
-            job_id=job_id,
-            job_path=str(job_path),  # Convert Path to string for serialization
-            db_path=str(db_path),    # Convert Path to string for serialization
-            env_vars=env_vars,
-            total_gpus=total_gpus,
-            assignment_summary=assignment_summary,
-            mpi_commands=mpi_commands,
-            app_config=app_config,
-            config_name=config_name,
-            in_file=in_file,
-            mpi_opts=mpi_opts,
-            stdout=stdout,
-            stderr=stderr
-        )
+        try:
+            # Extract serializable data from assignment object
+            env_vars = assignment.get_env_vars()
+            total_gpus = assignment.get_total_gpus()
+            assignment_summary = assignment.get_summary()
+            
+            return lammps_parsl_app(
+                job_id=job_id,
+                job_path=str(job_path),  # Convert Path to string for serialization
+                db_path=str(db_path),    # Convert Path to string for serialization
+                env_vars=env_vars,
+                total_gpus=total_gpus,
+                assignment_summary=assignment_summary,
+                mpi_commands=mpi_commands,
+                app_config=app_config,
+                config_name=config_name,
+                in_file=in_file,
+                mpi_opts=mpi_opts,
+                stdout=stdout,
+                stderr=stderr
+            )
+        except Exception as e:
+            import traceback
+            logger.error(f"Job {job_id}: Failed to submit Parsl app: {e}")
+            print("LAMMPS bash_app construction failed:", e)
+            traceback.print_exc()
+            raise
 
     def check_success(self, job_id: int, job_path: Path, db_path: Path) -> str:
         """

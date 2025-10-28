@@ -88,6 +88,7 @@ lammps:
       # Example:
       # module load PrgEnv-gnu
       # module load ...
+      module restore   # Always restore modules first in apps
 
   # Settings for running LAMMPS on ALCF Sophia
   sophia:
@@ -102,6 +103,7 @@ lammps:
       # Example:
       # module load compilers/openmpi/5.0.3
       # export LD_LIBRARY_PATH=...
+      module restore   # Always restore modules first in apps
     
 
 # --- Add other applications below ---
