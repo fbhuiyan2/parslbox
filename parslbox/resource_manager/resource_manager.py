@@ -60,7 +60,7 @@ class ResourceManager:
         """Initialize node resources from system configuration."""
         try:
             total_nodes, total_gpus = self.system_config.detect_resources()
-            gpus_per_node = self.system_config.GPUS_PER_NODE
+            gpus_per_node = total_gpus//total_nodes #self.system_config.GPUS_PER_NODE
             
             # Get node list from scheduler
             node_hostnames = self._get_node_hostnames(total_nodes)

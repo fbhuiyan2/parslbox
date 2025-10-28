@@ -19,65 +19,56 @@ def lammps_parsl_app(job_id: int, job_path: str, db_path: str, env_vars: dict, t
     Standalone Parsl app for running a single LAMMPS simulation.
     This function dynamically constructs the entire shell command using resource-aware MPI commands.
     """
-    try:
-        # Get MPI command prefix
-        mpi_prefix = mpi_commands.get('PBX_MPI_PREFIX', '')
-        
-        # Unpack app configuration from the YAML file
-        executable = app_config.get('executable_path')
-        mpi_extra_tags = app_config.get('mpi_extra')
-        env_setup = app_config.get('environment_setup', '')
-        
-        # Handle mpi_opts - use empty string if None
-        mpi_opts_str = mpi_opts if mpi_opts is not None else ''
-        mpi_extra_tags = mpi_extra_tags if mpi_extra_tags is not None else ''
+    # Get MPI command prefix
+    mpi_prefix = mpi_commands.get('PBX_MPI_PREFIX', '')
+    
+    # Unpack app configuration from the YAML file
+    executable = app_config.get('executable_path')
+    mpi_extra_tags = app_config.get('mpi_extra')
+    env_setup = app_config.get('environment_setup', '')
+    
+    # Handle mpi_opts - use empty string if None
+    mpi_opts_str = mpi_opts if mpi_opts is not None else ''
+    mpi_extra_tags = mpi_extra_tags if mpi_extra_tags is not None else ''
 
-        # Command to update status to 'Running' on the worker node
-        update_status_cmd = f"python -c \"from parslbox.helpers import database; database.update_jobs('{db_path}', job_ids=[{job_id}], status='Running')\""
+    # Command to update status to 'Running' on the worker node
+    update_status_cmd = f"python -c \"from parslbox.helpers import database; database.update_jobs('{db_path}', job_ids=[{job_id}], status='Running')\""
 
-        # Format environment variables for GPU assignment (inline implementation)
-        env_exports = ""
-        if env_vars:
-            exports = []
-            for key, value in env_vars.items():
-                exports.append(f"export {key}={value}")
-            env_exports = "\n".join(exports)
+    # Format environment variables for GPU assignment (inline implementation)
+    env_exports = ""
+    if env_vars:
+        exports = []
+        for key, value in env_vars.items():
+            exports.append(f"export {key}={value}")
+        env_exports = "\n".join(exports)
 
-        # Construct the full command string
-        if total_gpus > 0:
-            # GPU-enabled LAMMPS command
-            lammps_args = f"-k on g {total_gpus} -sf kk -pk kokkos newton on neigh half -in {in_file}"
-        else:
-            # CPU-only LAMMPS command
-            lammps_args = f"-in {in_file}"
+    # Construct the full command string
+    if total_gpus > 0:
+        # GPU-enabled LAMMPS command
+        lammps_args = f"-k on g {total_gpus} -sf kk -pk kokkos newton on neigh half -in {in_file}"
+    else:
+        # CPU-only LAMMPS command
+        lammps_args = f"-in {in_file}"
 
-        return f"""
-    cd {job_path}
+    return f"""
+cd {job_path}
 
-    # Environment Setup (from config.yaml)
-    {env_setup}
+# Environment Setup (from config.yaml)
+{env_setup}
 
-    # Resource-specific environment variables (GPU assignments, etc.)
-    {env_exports}
+# Resource-specific environment variables (GPU assignments, etc.)
+{env_exports}
 
-    # Execution
-    echo "INFO: Updating job status to Running for job ID {job_id}..."
-    {update_status_cmd}
+# Execution
+echo "INFO: Updating job status to Running for job ID {job_id}..."
+{update_status_cmd}
 
-    echo "INFO: Starting LAMMPS for job ID {job_id} with input file {in_file}..."
-    echo "INFO: Using MPI command: {mpi_prefix} {mpi_opts_str} {mpi_extra_tags} {executable} {lammps_args}"
-    echo "INFO: Resource assignment: {assignment_summary}"
+echo "INFO: Starting LAMMPS for job ID {job_id} with input file {in_file}..."
+echo "INFO: Using MPI command: {mpi_prefix} {mpi_opts_str} {mpi_extra_tags} {executable} {lammps_args}"
+echo "INFO: Resource assignment: {assignment_summary}"
 
-    {mpi_prefix} {mpi_opts_str} {mpi_extra_tags} {executable} {lammps_args}
-    """
-    except Exception as e:
-        import traceback
-        import logging
-        logger = logging.getLogger(__name__)  # Add this line to get the logger
-        logger.error(f"Job {job_id}: Failed to submit Parsl app: {e}")
-        print("LAMMPS bash_app construction failed:", e)
-        traceback.print_exc()
-        raise
+{mpi_prefix} {mpi_opts_str} {mpi_extra_tags} {executable} {lammps_args}
+"""
 
 
 # ===================================================================================
