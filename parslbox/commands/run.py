@@ -143,7 +143,7 @@ def run(
     """
     Run Parsl workflows by discovering and executing application plugins.
     """
-    # 1. Initialization
+    # Initialization
     # Use default run directory if not provided
     if run_dir is None:
         run_dir = get_default_run_dir()
@@ -166,7 +166,7 @@ def run(
         logger.error(f"Failed to load Parsl configuration: {e}")
         raise typer.Exit(code=1)
 
-    # 2. Job Fetching and Filtering
+    # Job Fetching and Filtering
     app_filter = set(apps.split(',')) if apps else None
     tag_filter = set(tags.split(',')) if tags else None
     
@@ -187,12 +187,12 @@ def run(
 
     logger.info(f"Found {len(filtered_jobs)} jobs to execute.")
 
-    # 3. Initialize Resource Manager
+    # Initialize Resource Manager
     system_config = get_system_config(config_name)
     resource_manager = system_config.create_resource_manager()
     logger.info(f"Initialized resource manager for {config_name}")
 
-    # 4. Pre-load App Contexts
+    # Pre-load App Contexts
     unique_app_names = list(set(job['app'] for job in filtered_jobs))
     app_instances = {}
     app_configs = {}
@@ -225,7 +225,9 @@ def run(
             # Remove these jobs from processing
             filtered_jobs = [job for job in filtered_jobs if job['app'] != app_name]
 
-    # 5. Process Jobs Individually
+    # Process Jobs Individually
+    # First attempt to create futures. Jobs without resource assignment will be put in the backlogged queue
+    # After this, futures will be created for backlogged jobs as resource becomes availabe
     futures = []
     for job in filtered_jobs:
         job_id = job['job_id']
@@ -261,74 +263,94 @@ def run(
             database.update_jobs(db_path, job_ids=[job_id], status="Failed")
             continue
 
-    # 6. Await and Process Results (Non-blocking with as_completed)
-    logger.info(f"Waiting for {len(futures)} submitted jobs to complete...")
+    # Await and Process Results (Dynamic future handling)
+    # Create mapping from futures to their metadata
+    # Create new futures for rescheduled backlogged jobs in a while loop
+    fut_to_item = {item['future']: item for item in futures}
+    
+    logger.info(f"Starting to process {len(fut_to_item)} initial jobs...")
 
-    if futures:
-        # Create mapping from futures to their metadata
-        fut_to_item = {item['future']: item for item in futures}
-        
-        # Process jobs as they complete (not in submission order)
-        for fut in as_completed(fut_to_item):
-            item = fut_to_item[fut]
-            job = item['job']
-            app_instance = item['app_instance']
-            assignment = item['assignment']
-            resource_manager = item['resource_manager']
-            job_id = job['job_id']
-            job_path = Path(job['path'])
-            
-            try:
-                fut.result()  # Already finished, returns immediately
-                job_status = app_instance.check_success(job_id=job_id, job_path=job_path, db_path=db_path)
-                if job_status and job_status != 'Failed':
-                    database.update_jobs(db_path, job_ids=[job_id], status=job_status)
-                    logger.info(f"Job {job_id} execution finished. Running post-processing...")
-                    app_instance.postprocess(job_id=job_id, job_path=job_path, db_path=db_path)
-                elif job_status == 'Failed':
-                    database.update_jobs(db_path, job_ids=[job_id], status="Failed")
-            
-            except Exception as e:      
-                logger.error(f"Job {job_id} hit following error: {e}")
-                # Sometimes apps can exit ungracefully even after a good run
-                logger.info(f"Job {job_id} running success-check on the job...")
-                job_status = app_instance.check_success(job_id=job_id, job_path=job_path, db_path=db_path)
-                if job_status and job_status != 'Failed':
-                    database.update_jobs(db_path, job_ids=[job_id], status=job_status)
-                    logger.info(f"Job {job_id} completed successfully. Running post-processing...")
-                    app_instance.postprocess(job_id=job_id, job_path=job_path, db_path=db_path)
-                elif job_status == 'Failed':
-                    logger.error(f"Job {job_id} Failed.")
-                    database.update_jobs(db_path, job_ids=[job_id], status="Failed")
-            
-            finally:
-                # Always free resources after job completion (success or failure)
+    while fut_to_item:
+        try:
+            # Wait for any future to complete
+            for fut in as_completed(list(fut_to_item.keys()), timeout=10):
+                # Check if future still exists (might have been processed already)
+                if fut not in fut_to_item:
+                    continue
+                    
+                item = fut_to_item.pop(fut)
+                job = item['job']
+                app_instance = item['app_instance']
+                assignment = item['assignment']
+                resource_manager = item['resource_manager']
+                job_id = job['job_id']
+                job_path = Path(job['path'])
+                
                 try:
-                    resource_manager.free_resources(job_id)
-                    logger.info(f"Job {job_id}: Freed allocated resources")
-                    
-                    # Schedule any backlogged jobs that can now run
-                    rescheduled_jobs = resource_manager.schedule_backlog()
-                    
-                    # Create Parsl futures for rescheduled jobs
-                    for rescheduled_job in rescheduled_jobs:
-                        rescheduled_app_name = rescheduled_job['app']
-                        rescheduled_job_id = rescheduled_job['job_id']
+                    fut.result()  # Get result (may raise exception)
+                    job_status = app_instance.check_success(job_id=job_id, job_path=job_path, db_path=db_path)
+                    if job_status and job_status != 'Failed':
+                        database.update_jobs(db_path, job_ids=[job_id], status=job_status)
+                        logger.info(f"Job {job_id} execution finished. Running post-processing...")
+                        app_instance.postprocess(job_id=job_id, job_path=job_path, db_path=db_path)
+                    elif job_status == 'Failed':
+                        database.update_jobs(db_path, job_ids=[job_id], status="Failed")
+                
+                except Exception as e:      
+                    logger.error(f"Job {job_id} hit following error: {e}")
+                    # Sometimes apps can exit ungracefully even after a good run
+                    logger.info(f"Job {job_id} running success-check on the job...")
+                    job_status = app_instance.check_success(job_id=job_id, job_path=job_path, db_path=db_path)
+                    if job_status and job_status != 'Failed':
+                        database.update_jobs(db_path, job_ids=[job_id], status=job_status)
+                        logger.info(f"Job {job_id} completed successfully. Running post-processing...")
+                        app_instance.postprocess(job_id=job_id, job_path=job_path, db_path=db_path)
+                    elif job_status == 'Failed':
+                        logger.error(f"Job {job_id} Failed.")
+                        database.update_jobs(db_path, job_ids=[job_id], status="Failed")
+                
+                finally:
+                    # Always free resources after job completion (success or failure)
+                    try:
+                        resource_manager.free_resources(job_id)
+                        logger.info(f"Job {job_id}: Freed allocated resources")
                         
-                        if rescheduled_app_name in app_instances:
-                            logger.info(f"Creating Parsl future for rescheduled job {rescheduled_job_id}")
-                            create_parsl_future(
-                                rescheduled_job, 
-                                app_instances[rescheduled_app_name], 
-                                app_configs[rescheduled_app_name],
-                                config_name, db_path, scheduler, resource_manager, futures, system_config
-                            )
-                        else:
-                            logger.error(f"App context not found for rescheduled job {rescheduled_job_id}")
-                            database.update_jobs(db_path, job_ids=[rescheduled_job_id], status="Failed")
+                        # Schedule any backlogged jobs that can now run
+                        rescheduled_jobs = resource_manager.schedule_backlog()
+                        
+                        # Create Parsl futures for rescheduled jobs
+                        for rescheduled_job in rescheduled_jobs:
+                            rescheduled_app_name = rescheduled_job['app']
+                            rescheduled_job_id = rescheduled_job['job_id']
                             
-                except Exception as e:
-                    logger.error(f"Job {job_id}: Failed to free resources or schedule backlog: {e}")
+                            if rescheduled_app_name in app_instances:
+                                logger.info(f"Creating Parsl future for rescheduled job {rescheduled_job_id}")
+                                new_futures = []
+                                create_parsl_future(
+                                    rescheduled_job, 
+                                    app_instances[rescheduled_app_name], 
+                                    app_configs[rescheduled_app_name],
+                                    config_name, db_path, scheduler, resource_manager, 
+                                    new_futures, system_config
+                                )
+                                # Add each new future to tracking dict
+                                for new_item in new_futures:
+                                    new_fut = new_item['future']
+                                    fut_to_item[new_fut] = new_item
+                                    logger.info(f"Added rescheduled job {rescheduled_job_id} to tracking (total active: {len(fut_to_item)})")
+                            else:
+                                logger.error(f"App context not found for rescheduled job {rescheduled_job_id}")
+                                database.update_jobs(db_path, job_ids=[rescheduled_job_id], status="Failed")
+                                
+                    except Exception as e:
+                        logger.error(f"Job {job_id}: Failed to free resources or schedule backlog: {e}")
+                        
+        except TimeoutError:
+            # No futures completed in timeout period, continue waiting
+            logger.debug(f"Waiting for {len(fut_to_item)} jobs to complete...")
+            continue
+
+    logger.info("All jobs completed, including rescheduled ones")
 
     # 7. Cleanup
     parsl.dfk().cleanup()
