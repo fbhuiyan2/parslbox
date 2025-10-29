@@ -47,6 +47,29 @@ def truncate_path(path: str, first_dirs: int = 2, last_dirs: int = 3) -> str:
     else:
         return f"{first_part}{separator}...{separator}{last_part}"
 
+
+def truncate_sched_job_id(sched_job_id: str, max_length: int = 11) -> str:
+    """
+    Truncate scheduler job ID to specified length with '...' suffix.
+    
+    Args:
+        sched_job_id: The scheduler job ID to truncate
+        max_length: Maximum length before truncation
+    
+    Returns:
+        Truncated job ID in format: first_chars...
+        
+    Example:
+        6586495.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov -> 6586495.pol...
+    """
+    if not sched_job_id or sched_job_id == "None":
+        return sched_job_id or "None"
+    
+    if len(sched_job_id) <= max_length:
+        return sched_job_id
+    
+    return sched_job_id[:max_length] + "..."
+
 @app.command()
 def ls(
     status: Optional[str] = typer.Option(
@@ -91,7 +114,7 @@ def ls(
             job['app'],
             job['status'],
             resources_display,
-            job['sched_job_id'] or "None",
+            truncate_sched_job_id(job['sched_job_id'] or "None"),
             job['tag'] or "None",  # Display 'None' if tag is None
             job['in_file'] or "None",  # Display 'None' if in_file is None
             job['timestamp'],
