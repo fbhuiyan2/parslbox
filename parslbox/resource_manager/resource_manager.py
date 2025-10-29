@@ -10,7 +10,7 @@ import queue
 from typing import List, Dict, Optional, TYPE_CHECKING
 from dataclasses import dataclass, field
 
-from .models import NodeResource, JobResourceSpec, NodeAssignment
+from .models import NodeResource, JobResourceSpec, NodeAssignment, create_job_resource_spec
 from .exceptions import InsufficientResources, JobNotFound, InvalidResourceSpec
 
 if TYPE_CHECKING:
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 class PrioritizedJob:
     """Job with priority for backlog queue."""
     priority: int
-    resource_spec: JobResourceSpec = field(compare=False)
+    job: dict = field(compare=False)
 
 
 class ResourceManager:
@@ -134,12 +134,12 @@ class ResourceManager:
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"Failed to get SLURM hostnames: {e}")
     
-    def assign_resources(self, resource_spec: JobResourceSpec) -> NodeAssignment:
+    def assign_resources(self, job: dict) -> NodeAssignment:
         """
-        Assign resources to a job based on its requirements.
+        Assign resources to a job based on its metadata.
         
         Args:
-            resource_spec: Job resource requirements
+            job: Job dictionary containing metadata and resource requirements
             
         Returns:
             NodeAssignment with allocated resources
@@ -149,6 +149,9 @@ class ResourceManager:
             InvalidResourceSpec: If resource specification is invalid
         """
         try:
+            # Create resource specification from job metadata
+            resource_spec = create_job_resource_spec(job)
+            
             # Validate resource spec
             self._validate_resource_spec(resource_spec)
             
@@ -173,7 +176,7 @@ class ResourceManager:
         except InsufficientResources:
             # Add to backlog if resources not available
             priority = resource_spec.num_nodes  # Higher node count = higher priority
-            self._backlog_queue.put(PrioritizedJob(priority, resource_spec))
+            self._backlog_queue.put(PrioritizedJob(priority, job))
             logger.info(f"Job {resource_spec.job_id} added to backlog")
             raise
     
@@ -307,9 +310,6 @@ class ResourceManager:
         del self.job_assignments[job_id]
         
         logger.info(f"Freed resources for job {job_id}")
-        
-        # Try to schedule backlogged jobs
-        self._schedule_backlog()
     
     def _get_node_by_id(self, node_id: str) -> Optional[NodeResource]:
         """Get node by ID."""
@@ -318,17 +318,22 @@ class ResourceManager:
                 return node
         return None
     
-    def _schedule_backlog(self) -> None:
-        """Attempt to schedule jobs from the backlog."""
+    def schedule_backlog(self) -> List[dict]:
+        """
+        Attempt to schedule jobs from the backlog.
+        
+        Returns:
+            List of job metadata for successfully scheduled jobs
+        """
         scheduled_jobs = []
         
         # Try to schedule jobs from backlog
         while not self._backlog_queue.empty():
             try:
                 prioritized_job = self._backlog_queue.get(block=False)
-                assignment = self.assign_resources(prioritized_job.resource_spec)
-                scheduled_jobs.append(prioritized_job.resource_spec.job_id)
-                logger.info(f"Scheduled backlogged job {prioritized_job.resource_spec.job_id}")
+                assignment = self.assign_resources(prioritized_job.job)
+                scheduled_jobs.append(prioritized_job.job)  # Return full job metadata
+                logger.info(f"Scheduled backlogged job {prioritized_job.job['job_id']}")
             except (InsufficientResources, queue.Empty):
                 # Put the job back if it still can't be scheduled
                 self._backlog_queue.put(prioritized_job)
@@ -336,6 +341,8 @@ class ResourceManager:
         
         if scheduled_jobs:
             logger.info(f"Scheduled {len(scheduled_jobs)} jobs from backlog")
+        
+        return scheduled_jobs
     
     def get_resource_status(self) -> Dict:
         """

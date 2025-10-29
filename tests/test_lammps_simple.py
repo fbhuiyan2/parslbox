@@ -28,8 +28,8 @@ def test_lammps_mpi_commands():
     
     # Test 1: Single-node CPU job (0.25 occupancy = 8 cores)
     print("\n=== Test 1: CPU job (0.25 occupancy) ===")
-    cpu_job_spec = JobResourceSpec(job_id=1, num_nodes=1, ngpus=0, node_occupancy=0.25)
-    cpu_assignment = resource_manager.assign_resources(cpu_job_spec)
+    cpu_job = {'job_id': 1, 'num_nodes': 1, 'ngpus': 0, 'node_occupancy': 0.25}
+    cpu_assignment = resource_manager.assign_resources(cpu_job)
     
     print(f"CPU job assignment: {cpu_assignment.get_summary()}")
     print(f"CPU cores assigned: {cpu_assignment.cpu_assignments[0]}")
@@ -52,8 +52,8 @@ def test_lammps_mpi_commands():
     
     # Test 2: Single-node GPU job (2 GPUs)
     print("\n=== Test 2: GPU job (2 GPUs) ===")
-    gpu_job_spec = JobResourceSpec(job_id=2, num_nodes=1, ngpus=2, node_occupancy=1.0)
-    gpu_assignment = resource_manager.assign_resources(gpu_job_spec)
+    gpu_job = {'job_id': 2, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0}
+    gpu_assignment = resource_manager.assign_resources(gpu_job)
     
     print(f"GPU job assignment: {gpu_assignment.get_summary()}")
     print(f"GPU IDs assigned: {gpu_assignment.gpu_assignments[0]}")
@@ -144,11 +144,11 @@ def test_lammps_mpi_commands():
     
     # Test 6: Multiple concurrent jobs
     print("\n=== Test 6: Multiple concurrent jobs ===")
-    job3_spec = JobResourceSpec(job_id=3, num_nodes=1, ngpus=0, node_occupancy=0.125)  # 4 cores
-    job4_spec = JobResourceSpec(job_id=4, num_nodes=1, ngpus=0, node_occupancy=0.125)  # 4 cores
+    job3 = {'job_id': 3, 'num_nodes': 1, 'ngpus': 0, 'node_occupancy': 0.125}  # 4 cores
+    job4 = {'job_id': 4, 'num_nodes': 1, 'ngpus': 0, 'node_occupancy': 0.125}  # 4 cores
     
-    assignment3 = resource_manager.assign_resources(job3_spec)
-    assignment4 = resource_manager.assign_resources(job4_spec)
+    assignment3 = resource_manager.assign_resources(job3)
+    assignment4 = resource_manager.assign_resources(job4)
     
     print(f"Job 3 CPU cores: {assignment3.cpu_assignments[0]}")
     print(f"Job 4 CPU cores: {assignment4.cpu_assignments[0]}")

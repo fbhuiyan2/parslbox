@@ -14,7 +14,6 @@ from parslbox.configs.loader import load_config, get_system_config
 from parslbox.helpers.logging_utils import setup_logging
 from parslbox.helpers.config_utils import load_app_config, is_app_configured
 from parslbox.helpers import database, path_utils
-from parslbox.resource_manager.models import create_job_resource_spec
 from parslbox.resource_manager.mpi_launcher import compose_all_mpi_commands
 from parslbox.resource_manager.exceptions import InsufficientResources
 
@@ -22,8 +21,7 @@ from parslbox.resource_manager.exceptions import InsufficientResources
 app = typer.Typer()
 
 
-def create_parsl_future(job, app_instance, app_config, config_name, assignment, 
-                       mpi_commands, db_path, scheduler, resource_manager, futures):
+def create_parsl_future(job, app_instance, app_config, config_name, db_path, scheduler, resource_manager, futures, system_config):
     """
     Create a Parsl future for a job with proper preprocessing and error handling.
     
@@ -32,12 +30,11 @@ def create_parsl_future(job, app_instance, app_config, config_name, assignment,
         app_instance: Application instance
         app_config: Application configuration
         config_name: System configuration name
-        assignment: Resource assignment from resource manager
-        mpi_commands: MPI command dictionary
         db_path: Database path
         scheduler: Scheduler type (PBS, SLURM, etc.)
         resource_manager: Resource manager instance
         futures: List to append the future to
+        system_config: System configuration object
     
     Returns:
         bool: True if successful, False if failed
@@ -47,6 +44,15 @@ def create_parsl_future(job, app_instance, app_config, config_name, assignment,
     logger = logging.getLogger(__name__)
     
     try:
+        # Get resource assignment (should already exist)
+        assignment = resource_manager.get_job_assignment(job_id)
+        if not assignment:
+            raise ValueError(f"No resource assignment found for job {job_id}")
+        
+        # Generate MPI commands
+        mpi_commands = compose_all_mpi_commands(assignment, system_config, assignment.node_occupancy)
+        logger.info(f"Job {job_id}: Generated MPI command - {mpi_commands.get('PBX_MPI_PREFIX', 'None')}")
+        
         # Run preprocessing
         logger.info(f"Running preprocessing for Job ID {job_id}...")
         app_instance.preprocess(
@@ -186,83 +192,74 @@ def run(
     resource_manager = system_config.create_resource_manager()
     logger.info(f"Initialized resource manager for {config_name}")
 
-    # 4. Group Jobs by Application
-    grouped_jobs = {}
-    for job in filtered_jobs:
-        app_name = job['app']
-        if app_name not in grouped_jobs:
-            grouped_jobs[app_name] = []
-        grouped_jobs[app_name].append(job)
+    # 4. Pre-load App Contexts
+    unique_app_names = list(set(job['app'] for job in filtered_jobs))
+    app_instances = {}
+    app_configs = {}
 
-    # 5. Dynamic Plugin Loading and Execution Loop
-    futures = []
-    for app_name, jobs_list in grouped_jobs.items():
-        logger.info(f"Processing {len(jobs_list)} jobs for application: '{app_name}'")
+    for app_name in unique_app_names:
         try:
-            # Get app instance and class from registry
-            from parslbox.apps.app_registry import get_app_instance, get_app_class
+            from parslbox.apps.app_registry import get_app_instance
             app_instance = get_app_instance(app_name)
-            app_class = get_app_class(app_name)
-        except ValueError as e:
-            logger.error(f"Could not load app '{app_name}': {e}. Skipping these jobs.")
-            job_ids_to_fail = [j['job_id'] for j in jobs_list]
-            database.update_jobs(db_path, job_ids=job_ids_to_fail, status="Failed")
-            continue
-        
-        # Load app configuration (gracefully handles missing config)
-        try:
             app_config = load_app_config(app_name=app_name, system_name=config_name)
-        except FileNotFoundError as e:
-            logger.error(f"Configuration file error for app '{app_name}': {e}. Skipping these jobs.")
-            job_ids_to_fail = [j['job_id'] for j in jobs_list]
-            database.update_jobs(db_path, job_ids=job_ids_to_fail, status="Failed")
-            continue
-        
-        # Log configuration status
-        if len(app_config) == 0:
-            if is_app_configured(app_name):
-                logger.warning(f"App '{app_name}' has configuration but no config found for system '{config_name}'. Running with empty configuration.")
+            
+            app_instances[app_name] = app_instance
+            app_configs[app_name] = app_config
+            
+            # Log configuration status
+            if len(app_config) == 0:
+                if is_app_configured(app_name):
+                    logger.warning(f"App '{app_name}' has configuration but no config found for system '{config_name}'. Running with empty configuration.")
+                else:
+                    logger.info(f"App '{app_name}' has no configuration defined. Running with empty configuration.")
             else:
-                logger.info(f"App '{app_name}' has no configuration defined. Running with empty configuration.")
-        else:
-            logger.info(f"App '{app_name}' loaded configuration for system '{config_name}'.")
+                logger.info(f"App '{app_name}' loaded configuration for system '{config_name}'.")
+            
+            logger.info(f"Loaded app '{app_name}' successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to load app '{app_name}': {e}")
+            # Mark all jobs of this app type as failed
+            failed_job_ids = [job['job_id'] for job in filtered_jobs if job['app'] == app_name]
+            database.update_jobs(db_path, job_ids=failed_job_ids, status="Failed")
+            # Remove these jobs from processing
+            filtered_jobs = [job for job in filtered_jobs if job['app'] != app_name]
 
-        # Inner submission loop for this app
-        for job in jobs_list:
-            job_id = job['job_id']
-            job_path = Path(job['path'])
+    # 5. Process Jobs Individually
+    futures = []
+    for job in filtered_jobs:
+        job_id = job['job_id']
+        app_name = job['app']
+        
+        # Skip if app failed to load (already marked as failed above)
+        if app_name not in app_instances:
+            continue
             
-            logger.info(f"Submitting Job ID {job_id}...")
+        logger.info(f"Submitting Job ID {job_id}...")
+        
+        # Allocate resources
+        try:
+            assignment = resource_manager.assign_resources(job)
+            logger.info(f"Job {job_id}: Allocated resources - {assignment.get_summary()}")
             
-            # Create resource specification from job data
-            try:
-                resource_spec = create_job_resource_spec(job)
-                logger.info(f"Job {job_id}: Resource requirements - {resource_spec.get_summary()}")
-                
-                # Allocate resources
-                assignment = resource_manager.assign_resources(resource_spec)
-                logger.info(f"Job {job_id}: Allocated resources - {assignment.get_summary()}")
-                
-                # Generate MPI commands
-                mpi_commands = compose_all_mpi_commands(assignment, system_config, resource_spec.node_occupancy)
-                logger.info(f"Job {job_id}: Generated MPI command - {mpi_commands.get('PBX_MPI_PREFIX', 'None')}")
-                
-                # Create Parsl future using the extracted function
-                create_parsl_future(job, app_instance, app_config, config_name, assignment, 
-                                  mpi_commands, db_path, scheduler, resource_manager, futures)
-                
-            except InsufficientResources as e:
-                # This is NOT an error - just temporary resource unavailability
-                logger.info(f"Job {job_id}: Resources temporarily unavailable, added to backlog: {e}")
-                # The resource manager has already added the job to the backlog queue
-                # Don't mark as failed - the job will be scheduled when resources become available
-                continue
-                
-            except Exception as e:
-                # This IS an actual error (invalid spec, system error, etc.)
-                logger.error(f"Job {job_id}: Failed to allocate resources: {e}")
-                database.update_jobs(db_path, job_ids=[job_id], status="Failed")
-                continue
+            # Create Parsl future with pre-loaded contexts
+            create_parsl_future(
+                job, app_instances[app_name], app_configs[app_name], 
+                config_name, db_path, scheduler, resource_manager, futures, system_config
+            )
+            
+        except InsufficientResources as e:
+            # This is NOT an error - just temporary resource unavailability
+            logger.info(f"Job {job_id}: Resources temporarily unavailable, added to backlog: {e}")
+            # The resource manager has already added the job to the backlog queue
+            # Don't mark as failed - the job will be scheduled when resources become available
+            continue
+            
+        except Exception as e:
+            # This IS an actual error (invalid spec, system error, etc.)
+            logger.error(f"Job {job_id}: Failed to allocate resources: {e}")
+            database.update_jobs(db_path, job_ids=[job_id], status="Failed")
+            continue
 
     # 6. Await and Process Results (Non-blocking with as_completed)
     logger.info(f"Waiting for {len(futures)} submitted jobs to complete...")
@@ -309,8 +306,29 @@ def run(
                 try:
                     resource_manager.free_resources(job_id)
                     logger.info(f"Job {job_id}: Freed allocated resources")
+                    
+                    # Schedule any backlogged jobs that can now run
+                    rescheduled_jobs = resource_manager.schedule_backlog()
+                    
+                    # Create Parsl futures for rescheduled jobs
+                    for rescheduled_job in rescheduled_jobs:
+                        rescheduled_app_name = rescheduled_job['app']
+                        rescheduled_job_id = rescheduled_job['job_id']
+                        
+                        if rescheduled_app_name in app_instances:
+                            logger.info(f"Creating Parsl future for rescheduled job {rescheduled_job_id}")
+                            create_parsl_future(
+                                rescheduled_job, 
+                                app_instances[rescheduled_app_name], 
+                                app_configs[rescheduled_app_name],
+                                config_name, db_path, scheduler, resource_manager, futures, system_config
+                            )
+                        else:
+                            logger.error(f"App context not found for rescheduled job {rescheduled_job_id}")
+                            database.update_jobs(db_path, job_ids=[rescheduled_job_id], status="Failed")
+                            
                 except Exception as e:
-                    logger.error(f"Job {job_id}: Failed to free resources: {e}")
+                    logger.error(f"Job {job_id}: Failed to free resources or schedule backlog: {e}")
 
     # 7. Cleanup
     parsl.dfk().cleanup()
