@@ -20,6 +20,7 @@ def info(
     input_file: bool = typer.Option(False, "--input", "-i", help="Show only the input file field."),
     sched_job_id: bool = typer.Option(False, "--sched-job-id", "-j", help="Show only the scheduler job ID field."),
     timestamp: bool = typer.Option(False, "--timestamp", "-ts", help="Show only the timestamp field."),
+    env_file: bool = typer.Option(False, "--envfile", "-e", help="Show only the environment file field."),
 ):
     """
     Shows detailed information about specific jobs.
@@ -57,6 +58,8 @@ def info(
         selected_fields.append(('sched_job_id', 'Sched Job ID'))
     if timestamp:
         selected_fields.append(('timestamp', 'Timestamp'))
+    if env_file:
+        selected_fields.append(('env_file', 'Env File'))
     
     # If no specific fields selected, show all fields
     if not selected_fields:
@@ -68,6 +71,7 @@ def info(
             ('sched_job_id', 'Sched Job ID'),
             ('tag', 'Tag'),
             ('in_file', 'Input'),
+            ('env_file', 'Env File'),
             ('timestamp', 'Timestamp'),
             ('path', 'Path')
         ]

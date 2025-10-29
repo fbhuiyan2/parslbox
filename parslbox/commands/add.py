@@ -49,6 +49,10 @@ def add(
         Optional[str],
         typer.Option("--mpiopts", help="Additional MPI options to append to the MPI command."),
     ] = None,
+    env_file: Annotated[
+        Optional[str],
+        typer.Option("--envfile", "-e", help="Path to environment setup file (relative or absolute)."),
+    ] = None,
     status: Annotated[
         str,
         typer.Option("--status", "-s", help="Initial status for the job(s)."),
@@ -169,6 +173,36 @@ def add(
     
     typer.secho(f"ℹ️  Resource specification: {display_str}", fg=typer.colors.BLUE)
 
+    # --- Handle environment file validation and processing ---
+    final_env_file = None
+    if env_file:
+        # Convert relative path to absolute path
+        env_file_path = Path(env_file)
+        if not env_file_path.is_absolute():
+            env_file_path = Path.cwd() / env_file_path
+        
+        # Validate that the environment file exists
+        if not env_file_path.exists():
+            typer.secho(f"❌ Error: Environment file '{env_file}' does not exist.", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+        
+        if not env_file_path.is_file():
+            typer.secho(f"❌ Error: Environment file '{env_file}' is not a file.", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+        
+        final_env_file = str(env_file_path.resolve())
+        typer.secho(f"ℹ️  Using environment file: {final_env_file}", fg=typer.colors.BLUE)
+    
+    # --- Special handling for Python app without environment file ---
+    elif app == "python":
+        typer.secho("⚠️  Warning: No environment file specified for Python app.", fg=typer.colors.YELLOW)
+        typer.secho("Python jobs typically need environment setup (conda activate, module load, etc.)", fg=typer.colors.YELLOW)
+        
+        proceed_without_env = typer.confirm("Do you want to proceed without an environment file?")
+        if not proceed_without_env:
+            typer.secho("❌ Job creation cancelled. Please specify an environment file with --envfile/-e", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+
     paths_to_add: List[Path] = []
 
     # --- Determine the list of paths to process ---
@@ -211,6 +245,7 @@ def add(
                 tag=tag,
                 in_file=final_input_file,
                 mpi_opts=mpi_opts,
+                env_file=final_env_file,
                 status=status
             )
             input_info = f" (input: {final_input_file})" if final_input_file else " (no input file)"
@@ -227,52 +262,3 @@ def add(
         typer.secho(f"Summary: Skipped {fail_count} job(s) that already existed.", fg=typer.colors.YELLOW)
 
 
-'''
-def add(
-    paths: Annotated[
-        List[Path],
-        typer.Argument(
-            help="One or more paths to the job directories.",
-            exists=True,
-            resolve_path=True,
-        ),
-    ],
-    app: Annotated[
-        str,
-        typer.Option("--app", "-a", help="The application type (e.g., 'lammps', 'vasp')."),
-    ],
-    tag: Annotated[
-        Optional[str],
-        typer.Option("--tag", "-t", help="An optional tag to categorize the job(s)."),
-    ] = None,
-    ngpus: Annotated[
-        int,
-        typer.Option("--ngpus", "-n", help="Number of GPUs required for the job(s)."),
-    ] = 1,
-):
-    """
-    Adds one or more new jobs to the database.
-    """
-    success_count = 0
-    fail_count = 0
-
-    for path in paths:
-        try:
-            new_id = database.add_job(
-                db_path=path_utils.DB_FILE,
-                path=str(path),
-                app=app,
-                ngpus=ngpus,
-                tag=tag
-            )
-            typer.secho(f"✅ Added job '{path}' with ID {new_id}", fg=typer.colors.GREEN)
-            success_count += 1
-        except sqlite3.IntegrityError:
-            typer.secho(f"❌ Error: Job path '{path}' already exists in the database.", fg=typer.colors.RED)
-            fail_count += 1
-    
-    if fail_count > 0:
-        typer.secho(f"\nSummary: {success_count} jobs added, {fail_count} failed.", fg=typer.colors.YELLOW)
-        raise typer.Exit(code=1)
-
-'''

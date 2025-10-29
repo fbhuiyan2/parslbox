@@ -3,12 +3,83 @@ from pathlib import Path
 from parsl import bash_app
 from parslbox.helpers import database
 from parslbox.apps.base import AppBase
+from parslbox.configs.loader import get_system_config
+import logging
+
+# ===================================================================================
+#  STANDALONE PARSL APP FUNCTION
+# ===================================================================================
+
+@bash_app
+def python_parsl_app(job_id: int, job_path: str, db_path: str, env_vars: dict, total_gpus: int,
+                     assignment_summary: str, mpi_commands: dict, app_config: dict,
+                     config_name: str, in_file: str, mpi_opts: str, env_file: str,
+                     stdout: str, stderr: str):
+    """
+    Standalone Parsl app for running Python scripts directly.
+    This function dynamically constructs the entire shell command using resource-aware MPI commands.
+    """
+    # Get MPI command prefix
+    mpi_prefix = mpi_commands.get('PBX_MPI_PREFIX', '')
+    
+    # Start with base environment setup from app config (if any)
+    env_setup = app_config.get('environment_setup', '')
+    
+    # Environment setup from env_file gets appended to env_setup from app_config
+    # Append additional environment setup from env_file (if provided)
+    if env_file:
+        try:
+            with open(env_file, 'r') as f:
+                env_file_content = f.read()
+                env_setup += "\n" + env_file_content  # Append to existing setup
+        except Exception as e:
+            env_setup += f"\necho 'Warning: Could not read env_file {env_file}: {e}'"
+    
+    # Handle mpi_opts - use empty string if None
+    mpi_opts_str = mpi_opts if mpi_opts is not None else ''
+
+    # Command to update status to 'Running' on the worker node
+    update_status_cmd = f"python -c \"from parslbox.helpers import database; database.update_jobs('{db_path}', job_ids=[{job_id}], status='Running')\""
+
+    # Format environment variables for GPU assignment (inline implementation)
+    env_exports = ""
+    if env_vars:
+        exports = []
+        for key, value in env_vars.items():
+            exports.append(f"export {key}={value}")
+        env_exports = "\n".join(exports)
+
+    # Export MPI command as environment variable for the script to use
+    mpi_env_export = f"export PBX_MPI_PREFIX='{mpi_prefix}'" if mpi_prefix else ""
+
+    return f"""
+cd {job_path}
+
+echo "INFO: Environment Setup {env_setup}"
+
+# Environment Setup (from config.yaml + env_file if provided)
+{env_setup}
+
+# Resource-specific environment variables (GPU assignments, etc.)
+{env_exports}
+
+# Export MPI command for the script to use if needed
+{mpi_env_export}
+
+# Execution
+echo "INFO: Updating job status to Running for job ID {job_id}..."
+{update_status_cmd}
+
+echo "INFO: Executing Python script {in_file} for job ID {job_id}..."
+echo "INFO: Resource assignment: {assignment_summary}"
+echo "INFO: Available MPI command: {mpi_prefix}"
+
+python {in_file}
+"""
+
 
 # ===================================================================================
 #  PYTHON APPLICATION-SPECIFIC IMPLEMENTATION
-# ===================================================================================
-#  This module provides the necessary functions for the `pbx run` orchestrator
-#  to execute Python jobs via bash scripts.
 # ===================================================================================
 
 class PythonApp(AppBase):
@@ -29,64 +100,44 @@ class PythonApp(AppBase):
         Currently no preprocessing is needed for Python jobs.
         """
         pass
-
-    @bash_app
+    
     def parsl_app(self, job_id: int, job_path: Path, db_path: Path, assignment, mpi_commands: dict,
-                  app_config: dict, config_name: str, in_file: str, mpi_opts: str, stdout: str, stderr: str):
+                  app_config: dict, config_name: str, in_file: str, mpi_opts: str, env_file: str, stdout: str, stderr: str):
         """
-        Parsl app for running Python scripts via bash scripts.
-        
-        This function executes a user-provided bash script that can:
-        - Activate any Python/conda environment
-        - Set environment variables
-        - Run Python scripts with any arguments
-        - Perform any other bash operations
-        
-        The user is responsible for creating the bash script with all necessary
-        environment setup and Python execution commands. The script can also
-        use MPI if needed by accessing the provided MPI commands.
+        Wrapper method that calls the standalone Parsl app function.
+        Extracts serializable data from assignment object before passing to Parsl.
         """
-        # Get MPI command prefix and environment variables from resource assignment
-        mpi_prefix = mpi_commands.get('PBX_MPI_PREFIX', '')
-        env_vars = assignment.get_env_vars()
+
+        logger = logging.getLogger(__name__)  
         
-        # Get total GPUs for information
-        total_gpus = assignment.get_total_gpus()
-        
-        # Unpack app configuration from the YAML file (if any)
-        env_setup = app_config.get('environment_setup', '')
-
-        # Command to update status to 'Running' on the worker node
-        update_status_cmd = f"python -c \"from parslbox.helpers import database; database.update_jobs('{db_path}', job_ids=[{job_id}], status='Running')\""
-
-        # Format environment variables for GPU assignment
-        env_exports = self._format_env_vars(env_vars)
-
-        # Export MPI command as environment variable for the script to use
-        mpi_env_export = f"export PBX_MPI_PREFIX='{mpi_prefix}'" if mpi_prefix else ""
-
-        return f"""
-cd {job_path}
-
-# Environment Setup (from config.yaml, if any)
-{env_setup}
-
-# Resource-specific environment variables (GPU assignments, etc.)
-{env_exports}
-
-# Export MPI command for the script to use if needed
-{mpi_env_export}
-
-# Execution
-echo "INFO: Updating job status to Running for job ID {job_id}..."
-{update_status_cmd}
-
-echo "INFO: Executing bash script {in_file} for job ID {job_id}..."
-echo "INFO: Resource assignment: {assignment.get_summary()}"
-echo "INFO: Available MPI command: {mpi_prefix}"
-
-bash {in_file}
-"""
+        try:
+            # Extract serializable data from assignment object
+            env_vars = assignment.get_env_vars()
+            total_gpus = assignment.get_total_gpus()
+            assignment_summary = assignment.get_summary()
+            
+            return python_parsl_app(
+                job_id=job_id,
+                job_path=str(job_path),  # Convert Path to string for serialization
+                db_path=str(db_path),    # Convert Path to string for serialization
+                env_vars=env_vars,
+                total_gpus=total_gpus,
+                assignment_summary=assignment_summary,
+                mpi_commands=mpi_commands,
+                app_config=app_config,
+                config_name=config_name,
+                in_file=in_file,
+                mpi_opts=mpi_opts,
+                env_file=env_file,
+                stdout=stdout,
+                stderr=stderr
+            )
+        except Exception as e:
+            import traceback
+            logger.error(f"Job {job_id}: Failed to submit Parsl app: {e}")
+            print("Python bash_app construction failed:", e)
+            traceback.print_exc()
+            raise
 
     def check_success(self, job_id: int, job_path: Path, db_path: Path) -> str:
         """

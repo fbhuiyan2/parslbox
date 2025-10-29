@@ -3,7 +3,7 @@ import typer
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-# Updated schema with individual resource columns
+# Updated schema with individual resource columns and env_file support
 CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS jobs (
     job_id INTEGER PRIMARY KEY,
@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     tag TEXT,
     in_file TEXT,
     mpi_opts TEXT,
+    env_file TEXT,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 """
@@ -54,13 +55,13 @@ def initialize_database(db_path: Path):
         typer.secho(f"Failed to open or initialize the database at: {db_path}", fg=typer.colors.YELLOW, err=True)
         raise typer.Exit(code=1)
 
-def add_job(db_path: Path, path: str, app: str, num_nodes: int, ngpus: int, node_occupancy: float, tag: Optional[str], in_file: Optional[str] = None, mpi_opts: Optional[str] = None, status: str = 'Ready') -> int:
-    """Adds a new job to the database with app, tag, input file info, resource specification, and MPI options."""
+def add_job(db_path: Path, path: str, app: str, num_nodes: int, ngpus: int, node_occupancy: float, tag: Optional[str], in_file: Optional[str] = None, mpi_opts: Optional[str] = None, env_file: Optional[str] = None, status: str = 'Ready') -> int:
+    """Adds a new job to the database with app, tag, input file info, resource specification, MPI options, and environment file."""
     with sqlite3.connect(db_path) as con:
         cur = con.cursor()
         cur.execute(
-            "INSERT INTO jobs (path, app, tag, in_file, mpi_opts, status, num_nodes, ngpus, node_occupancy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (path, app, tag, in_file, mpi_opts, status, num_nodes, ngpus, node_occupancy)
+            "INSERT INTO jobs (path, app, tag, in_file, mpi_opts, env_file, status, num_nodes, ngpus, node_occupancy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (path, app, tag, in_file, mpi_opts, env_file, status, num_nodes, ngpus, node_occupancy)
         )
         return cur.lastrowid
 
@@ -172,7 +173,8 @@ def update_jobs(
     ngpus: Optional[int] = None,
     node_occupancy: Optional[float] = None,
     in_file: Optional[str] = None,
-    mpi_opts: Optional[str] = None
+    mpi_opts: Optional[str] = None,
+    env_file: Optional[str] = None
 ) -> int:
     """
     Updates jobs with the given IDs. Only fields that are not None will be updated.
@@ -219,6 +221,10 @@ def update_jobs(
     if mpi_opts is not None:
         set_clauses.append("mpi_opts = ?")
         params.append(mpi_opts)
+
+    if env_file is not None:
+        set_clauses.append("env_file = ?")
+        params.append(env_file)
 
     # If no fields to update were provided, do nothing.
     if not set_clauses:

@@ -13,7 +13,7 @@ import logging
 @bash_app
 def lammps_parsl_app(job_id: int, job_path: str, db_path: str, env_vars: dict, total_gpus: int,
                      assignment_summary: str, mpi_commands: dict, app_config: dict,
-                     config_name: str, in_file: str, mpi_opts: str, 
+                     config_name: str, in_file: str, mpi_opts: str, env_file: str,
                      stdout: str, stderr: str):
     """
     Standalone Parsl app for running a single LAMMPS simulation.
@@ -25,7 +25,19 @@ def lammps_parsl_app(job_id: int, job_path: str, db_path: str, env_vars: dict, t
     # Unpack app configuration from the YAML file
     executable = app_config.get('executable_path')
     mpi_extra_tags = app_config.get('mpi_extra')
+    
+    # Start with base environment setup from app config (if any)
     env_setup = app_config.get('environment_setup', '')
+    
+    # Environment setup from env_file gets appended to env_setup from app_config
+    # Append additional environment setup from env_file (if provided)
+    if env_file:
+        try:
+            with open(env_file, 'r') as f:
+                env_file_content = f.read()
+                env_setup += "\n" + env_file_content  # Append to existing setup
+        except Exception as e:
+            env_setup += f"\necho 'Warning: Could not read env_file {env_file}: {e}'"
     
     # Handle mpi_opts - use empty string if None
     mpi_opts_str = mpi_opts if mpi_opts is not None else ''
@@ -53,7 +65,7 @@ def lammps_parsl_app(job_id: int, job_path: str, db_path: str, env_vars: dict, t
     return f"""
 cd {job_path}
 
-# Environment Setup (from config.yaml)
+# Environment Setup (from config.yaml + env_file if provided)
 {env_setup}
 
 # Resource-specific environment variables (GPU assignments, etc.)
@@ -95,7 +107,7 @@ class LammpsApp(AppBase):
         pass
     
     def parsl_app(self, job_id: int, job_path: Path, db_path: Path, assignment, mpi_commands: dict,
-                  app_config: dict, config_name: str, in_file: str, mpi_opts: str, stdout: str, stderr: str):
+                  app_config: dict, config_name: str, in_file: str, mpi_opts: str, env_file: str, stdout: str, stderr: str):
         """
         Wrapper method that calls the standalone Parsl app function.
         Extracts serializable data from assignment object before passing to Parsl.
@@ -121,6 +133,7 @@ class LammpsApp(AppBase):
                 config_name=config_name,
                 in_file=in_file,
                 mpi_opts=mpi_opts,
+                env_file=env_file,
                 stdout=stdout,
                 stderr=stderr
             )

@@ -1,4 +1,5 @@
 import typer
+from pathlib import Path
 from typing import List, Optional
 from typing_extensions import Annotated
 from parslbox.helpers import database, path_utils
@@ -31,15 +32,39 @@ def update(
         Optional[int],
         typer.Option("--ngpus", "-n", help="Update the number of GPUs.")
     ] = None,
+    env_file: Annotated[
+        Optional[str],
+        typer.Option("--envfile", "-e", help="Update the environment setup file path.")
+    ] = None,
 ):
     """
     Updates one or more fields for a given set of jobs.
     """
     # Validate that at least one update option was provided
-    if all(opt is None for opt in [status, app, tag, input_file, ngpus]):
+    if all(opt is None for opt in [status, app, tag, input_file, ngpus, env_file]):
         typer.secho("❌ Error: You must provide at least one field to update.", fg=typer.colors.RED)
         typer.echo("Example: pbx update 1 --status Submitted")
         raise typer.Exit(code=1)
+
+    # Handle environment file validation and processing
+    final_env_file = None
+    if env_file:
+        # Convert relative path to absolute path
+        env_file_path = Path(env_file)
+        if not env_file_path.is_absolute():
+            env_file_path = Path.cwd() / env_file_path
+        
+        # Validate that the environment file exists
+        if not env_file_path.exists():
+            typer.secho(f"❌ Error: Environment file '{env_file}' does not exist.", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+        
+        if not env_file_path.is_file():
+            typer.secho(f"❌ Error: Environment file '{env_file}' is not a file.", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+        
+        final_env_file = str(env_file_path.resolve())
+        typer.secho(f"ℹ️  Using environment file: {final_env_file}", fg=typer.colors.BLUE)
 
     count = database.update_jobs(
         db_path=path_utils.DB_FILE,
@@ -48,7 +73,8 @@ def update(
         app=app,
         tag=tag,
         in_file=input_file,
-        ngpus=ngpus
+        ngpus=ngpus,
+        env_file=final_env_file
     )
     
     if count > 0:
@@ -57,28 +83,3 @@ def update(
         typer.secho("⚠️ No jobs found with the specified IDs to update.", fg=typer.colors.YELLOW)
 
 
-'''def update(
-        status: Optional[str] = typer.Option(
-            None, "--status", "-s", help="Update job status."
-        ),
-        app: Optional[str] = typer.Option(
-            None, "--app", "-a", help="Update job app."
-        ),
-        tag: Optional[str] = typer.Option(
-            None, "--tag", "-t", help="Update job tag."
-        ),
-        ngpus: Optional[str] = typer.Option(
-            None, "--ngpus", "-n", help="Update job ngpu."
-        ),
-        job_ids: List[int] = typer.Argument(..., help="ID(s) of the job(s) to update."),
-        status: str = typer.Argument(..., help="The new status (e.g., Submitted, Completed).")
-):
-    """
-    Updates the status of one or more jobs.
-    """
-    count = database.update_job_status(path_utils.DB_FILE, job_ids, status)
-    if count > 0:
-        typer.secho(f"🔄 Updated {count} job(s) to status '{status.capitalize()}'.", fg=typer.colors.BLUE)
-    else:
-        typer.secho("⚠️ No jobs found with the specified IDs to update.", fg=typer.colors.RED)
-'''
