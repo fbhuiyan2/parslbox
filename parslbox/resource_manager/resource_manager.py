@@ -50,6 +50,7 @@ class ResourceManager:
         self.nodes: List[NodeResource] = []
         self.job_assignments: Dict[int, NodeAssignment] = {}
         self._backlog_queue: queue.PriorityQueue[PrioritizedJob] = queue.PriorityQueue()
+        self._queued_jobs: set = set()  # Track job IDs in backlog to prevent duplicates
         
         # Initialize nodes from system configuration
         self._initialize_nodes()
@@ -174,10 +175,14 @@ class ResourceManager:
             return assignment
             
         except InsufficientResources:
-            # Add to backlog if resources not available
-            priority = resource_spec.num_nodes  # Higher node count = higher priority
-            self._backlog_queue.put(PrioritizedJob(priority, job))
-            logger.info(f"Job {resource_spec.job_id} added to backlog")
+            # Add to backlog if resources not available and not already queued
+            if resource_spec.job_id not in self._queued_jobs:
+                self._queued_jobs.add(resource_spec.job_id)
+                priority = resource_spec.num_nodes  # Higher node count = higher priority
+                self._backlog_queue.put(PrioritizedJob(priority, job))
+                logger.info(f"Job {resource_spec.job_id} added to backlog")
+            else:
+                logger.info(f"Job {resource_spec.job_id} already in backlog, skipping duplicate")
             raise
     
     def _validate_resource_spec(self, spec: JobResourceSpec) -> None:
@@ -331,12 +336,26 @@ class ResourceManager:
         while not self._backlog_queue.empty():
             try:
                 prioritized_job = self._backlog_queue.get(block=False)
+                job_id = prioritized_job.job['job_id']
+                
+                # Remove from queued set since we're processing it
+                self._queued_jobs.discard(job_id)
+                
+                # Skip if already has assignment (handles existing duplicates)
+                if job_id in self.job_assignments:
+                    logger.info(f"Job {job_id} already has resources, skipping duplicate")
+                    continue
+                
                 assignment = self.assign_resources(prioritized_job.job)
                 scheduled_jobs.append(prioritized_job.job)  # Return full job metadata
-                logger.info(f"Scheduled backlogged job {prioritized_job.job['job_id']}")
-            except (InsufficientResources, queue.Empty):
+                logger.info(f"Scheduled backlogged job {job_id}")
+                
+            except InsufficientResources:
                 # Put the job back if it still can't be scheduled
+                self._queued_jobs.add(prioritized_job.job['job_id'])  # Re-add to tracking set
                 self._backlog_queue.put(prioritized_job)
+                break
+            except queue.Empty:
                 break
         
         if scheduled_jobs:
