@@ -1,5 +1,6 @@
 import sqlite3
 import typer
+import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
@@ -33,9 +34,121 @@ BEGIN
 END;
 """
 
+def get_expected_schema() -> Dict[str, str]:
+    """
+    Parse the CREATE_TABLE_SQL to extract expected columns and their types.
+    Returns a dict like: {'column_name': 'column_type', ...}
+    """
+    # Extract the content between parentheses in CREATE TABLE
+    table_content = re.search(r'CREATE TABLE.*?\((.*)\)', CREATE_TABLE_SQL, re.DOTALL)
+    if not table_content:
+        return {}
+    
+    content = table_content.group(1)
+    schema = {}
+    
+    # Split by commas and process each line
+    for line in content.split(','):
+        line = line.strip()
+        if not line or line.upper().startswith(('PRIMARY KEY', 'FOREIGN KEY', 'UNIQUE', 'CHECK', 'CONSTRAINT')):
+            continue
+            
+        # Extract column name and type
+        parts = line.split()
+        if len(parts) >= 2:
+            column_name = parts[0].strip()
+            column_type = parts[1].strip()
+            
+            # Handle DEFAULT values and constraints
+            if 'DEFAULT' in line.upper():
+                # Find the DEFAULT part and include it in the type
+                default_match = re.search(r'DEFAULT\s+([^\s,]+(?:\s+[^\s,]+)*)', line, re.IGNORECASE)
+                if default_match:
+                    column_type += f" DEFAULT {default_match.group(1)}"
+            
+            # Handle NOT NULL
+            if 'NOT NULL' in line.upper():
+                column_type += " NOT NULL"
+                
+            schema[column_name] = column_type
+    
+    return schema
+
+def get_current_schema(db_path: Path) -> Dict[str, str]:
+    """
+    Get the current database schema for the jobs table.
+    Returns a dict like: {'column_name': 'column_type', ...}
+    """
+    try:
+        with sqlite3.connect(db_path) as con:
+            cur = con.cursor()
+            cur.execute("PRAGMA table_info(jobs)")
+            rows = cur.fetchall()
+            
+            schema = {}
+            for row in rows:
+                # row format: (cid, name, type, notnull, dflt_value, pk)
+                column_name = row[1]
+                column_type = row[2]
+                
+                # Add NOT NULL if applicable
+                if row[3]:  # notnull
+                    column_type += " NOT NULL"
+                
+                # Add DEFAULT if applicable
+                if row[4] is not None:  # dflt_value
+                    default_value = row[4]
+                    # Handle string defaults
+                    if isinstance(default_value, str) and not default_value.upper().startswith('CURRENT_'):
+                        default_value = f"'{default_value}'"
+                    column_type += f" DEFAULT {default_value}"
+                
+                schema[column_name] = column_type
+            
+            return schema
+    except sqlite3.OperationalError:
+        # Table doesn't exist yet
+        return {}
+
+def migrate_database(db_path: Path):
+    """
+    Automatically migrate database to match expected schema.
+    Compares current schema with expected schema and adds missing columns.
+    """
+    # Skip migration if database doesn't exist yet
+    if not db_path.exists():
+        return
+    
+    try:
+        expected_schema = get_expected_schema()
+        current_schema = get_current_schema(db_path)
+        
+        # Find missing columns
+        missing_columns = set(expected_schema.keys()) - set(current_schema.keys())
+        
+        if missing_columns:
+            typer.secho(f"🔄 Migrating database schema...", fg=typer.colors.BLUE)
+            
+            with sqlite3.connect(db_path) as con:
+                cur = con.cursor()
+                for column in sorted(missing_columns):  # Sort for consistent order
+                    column_type = expected_schema[column]
+                    try:
+                        cur.execute(f"ALTER TABLE jobs ADD COLUMN {column} {column_type}")
+                        typer.secho(f"✅ Added column: {column} {column_type}", fg=typer.colors.GREEN)
+                    except sqlite3.OperationalError as e:
+                        typer.secho(f"⚠️  Warning: Could not add column {column}: {e}", fg=typer.colors.YELLOW)
+            
+            typer.secho(f"🎉 Database migration completed!", fg=typer.colors.GREEN)
+        
+    except Exception as e:
+        typer.secho(f"⚠️  Warning: Database migration failed: {e}", fg=typer.colors.YELLOW)
+        typer.secho("Database will continue to work, but some features may not be available.", fg=typer.colors.YELLOW)
+
 def initialize_database(db_path: Path):
     """
     Ensures the database directory and file exist, creating them if necessary.
+    Runs migrations to update schema if needed.
     Provides clear error handling if directory creation fails.
     """
     try:
@@ -46,6 +159,10 @@ def initialize_database(db_path: Path):
         raise typer.Exit(code=1)
     
     try:
+        # Run migration first (for existing databases)
+        migrate_database(db_path)
+        
+        # Create table and trigger (for new databases or if migration didn't cover everything)
         with sqlite3.connect(db_path) as con:
             cur = con.cursor()
             cur.execute(CREATE_TABLE_SQL)
