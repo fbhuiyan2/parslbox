@@ -43,8 +43,6 @@ def lammps_parsl_app(job_id: int, job_path: str, db_path: str, env_vars: dict, t
     mpi_opts_str = mpi_opts if mpi_opts is not None else ''
     mpi_extra_tags = mpi_extra_tags if mpi_extra_tags is not None else ''
 
-    # Command to update status to 'Running' on the worker node
-    update_status_cmd = f"python -c \"from parslbox.helpers import database; database.update_jobs('{db_path}', job_ids=[{job_id}], status='Running')\""
 
     # Format environment variables for GPU assignment (inline implementation)
     env_exports = ""
@@ -62,6 +60,10 @@ def lammps_parsl_app(job_id: int, job_path: str, db_path: str, env_vars: dict, t
         # CPU-only LAMMPS command
         lammps_args = f"-in {in_file}"
 
+    # Update status to Running (this runs in Python context on compute node)
+    from parslbox.helpers import database
+    database.update_jobs(db_path, job_ids=[job_id], status='Running')
+
     return f"""
 cd {job_path}
 
@@ -72,9 +74,6 @@ cd {job_path}
 {env_exports}
 
 # Execution
-echo "INFO: Updating job status to Running for job ID {job_id}..."
-{update_status_cmd}
-
 echo "INFO: Starting LAMMPS for job ID {job_id} with input file {in_file}..."
 echo "INFO: Using MPI command: {mpi_prefix} {mpi_opts_str} {mpi_extra_tags} {executable} {lammps_args}"
 echo "INFO: Resource assignment: {assignment_summary}"

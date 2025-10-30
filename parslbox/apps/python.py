@@ -38,8 +38,6 @@ def python_parsl_app(job_id: int, job_path: str, db_path: str, env_vars: dict, t
     # Handle mpi_opts - use empty string if None
     mpi_opts_str = mpi_opts if mpi_opts is not None else ''
 
-    # Command to update status to 'Running' on the worker node
-    update_status_cmd = f"python -c \"from parslbox.helpers import database; database.update_jobs('{db_path}', job_ids=[{job_id}], status='Running')\""
 
     # Format environment variables for GPU assignment (inline implementation)
     env_exports = ""
@@ -51,6 +49,10 @@ def python_parsl_app(job_id: int, job_path: str, db_path: str, env_vars: dict, t
 
     # Export MPI command as environment variable for the script to use
     mpi_env_export = f"export PBX_MPI_PREFIX='{mpi_prefix}'" if mpi_prefix else ""
+
+    # Update status to Running (this runs in Python context on compute node)
+    from parslbox.helpers import database
+    database.update_jobs(db_path, job_ids=[job_id], status='Running')
 
     return f"""
 cd {job_path}
@@ -67,9 +69,6 @@ echo "INFO: Environment Setup {env_setup}"
 {mpi_env_export}
 
 # Execution
-echo "INFO: Updating job status to Running for job ID {job_id}..."
-{update_status_cmd}
-
 echo "INFO: Executing Python script {in_file} for job ID {job_id}..."
 echo "INFO: Resource assignment: {assignment_summary}"
 echo "INFO: Available MPI command: {mpi_prefix}"
