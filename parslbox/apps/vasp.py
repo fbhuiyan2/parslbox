@@ -1,15 +1,8 @@
 import logging
 from pathlib import Path
-from parsl import bash_app
 from parslbox.helpers import database
 from parslbox.apps.base import AppBase
 
-# ===================================================================================
-#  VASP APPLICATION-SPECIFIC IMPLEMENTATION
-# ===================================================================================
-#  This module provides the necessary functions for the `pbx run` orchestrator
-#  to execute VASP jobs.
-# ===================================================================================
 
 class VaspApp(AppBase):
     """
@@ -24,74 +17,66 @@ class VaspApp(AppBase):
     INPUT_REQUIRED = False
     DFLT_INPUT = None
     
-    def preprocess(self, job_id: int, job_path: Path, db_path: Path, app_config: dict, config_name: str):
+    def get_command_template(self, **kwargs) -> str:
         """
-        Preprocessing for VASP jobs.
-        Currently no preprocessing is needed for VASP.
-        """
-        pass
-
-    @bash_app
-    def parsl_app(self, job_id: int, job_path: Path, db_path: Path, assignment, mpi_commands: dict,
-                  app_config: dict, config_name: str, in_file: str, mpi_opts: str, stdout: str, stderr: str):
-        """
-        Parsl app for running a single VASP simulation.
-
-        This function dynamically constructs the entire shell command using resource-aware MPI commands.
-        Note: in_file parameter is accepted for consistency but VASP typically uses
-        standard input files (INCAR, POSCAR, etc.) found in the job directory.
-        """
-        # Get MPI command prefix and environment variables from resource assignment
-        mpi_prefix = mpi_commands.get('PBX_MPI_PREFIX', '')
-        env_vars = assignment.get_env_vars()
+        Construct VASP execution command.
         
-        # Get total GPUs for information
-        total_gpus = assignment.get_total_gpus()
+        VASP command format: {mpi_prefix} {mpi_opts} {executable}
         
-        # Unpack app configuration from the YAML file
-        env_setup = app_config.get('environment_setup', '')
-        # Default to a common VASP GPU executable name if not specified
-        executable = app_config.get('executable_path', 'vasp_gpu' if total_gpus > 0 else 'vasp_std')
+        VASP typically finds its input files (INCAR, POSCAR, POTCAR, KPOINTS)
+        in the current directory.
         
-        # Handle mpi_opts - use empty string if None
-        mpi_opts_str = mpi_opts if mpi_opts is not None else ''
-
-        # Command to update status to 'Running' on the worker node
-        update_status_cmd = f"python -c \"from parslbox.helpers import database; database.update_jobs('{db_path}', job_ids=[{job_id}], status='Running')\""
-
-        # Format environment variables for GPU assignment
-        env_exports = self._format_env_vars(env_vars)
-
-        # VASP is typically MPI-dominant; OpenMP threading is often set to 1
-        nthreads = 1
-
-        return f"""
-cd {job_path}
-
-# Environment Setup (from config.yaml)
-{env_setup}
-
-# Resource-specific environment variables (GPU assignments, etc.)
-{env_exports}
-
-export OMP_NUM_THREADS={nthreads}
-
-# Execution
-echo "INFO: Updating job status to Running for job ID {job_id}..."
-{update_status_cmd}
-
-echo "INFO: Starting VASP for job ID {job_id}..."
-echo "INFO: Using MPI command: {mpi_prefix}"
-echo "INFO: Resource assignment: {assignment.get_summary()}"
-
-# The VASP executable typically finds its input files (INCAR, POSCAR, etc.)
-# in the current directory.
-{mpi_prefix} {mpi_opts_str} {executable}
-"""
-
+        Args:
+            **kwargs: Contains mpi_prefix, mpi_opts_str, executable, total_gpus,
+                     app_config, and other parameters
+        
+        Returns:
+            str: VASP execution command
+        """
+        mpi_prefix = kwargs['mpi_prefix']
+        mpi_opts_str = kwargs['mpi_opts_str']
+        executable = kwargs['executable']
+        total_gpus = kwargs['total_gpus']
+        
+        # VASP-specific: Default executable based on GPU availability
+        if not executable:
+            executable = 'vasp_gpu' if total_gpus > 0 else 'vasp_std'
+        
+        # Log the command being constructed
+        logger = logging.getLogger(__name__)
+        logger.info(f"VASP command: {mpi_prefix} {mpi_opts_str} {executable}")
+        
+        return f"{mpi_prefix} {mpi_opts_str} {executable}"
+    
+    def get_additional_setup(self, **kwargs) -> str:
+        """
+        VASP-specific setup: Set OpenMP thread count.
+        
+        VASP is typically MPI-dominant; OpenMP threading is often set to 1.
+        
+        Args:
+            **kwargs: Contains various parameters (not used for VASP)
+        
+        Returns:
+            str: Environment variable export command for OMP_NUM_THREADS
+        """
+        return "export OMP_NUM_THREADS=1"
+    
     def check_success(self, job_id: int, job_path: Path, db_path: Path) -> str:
         """
-        Checks for success and updates the database with the final status.
+        Check if VASP job completed successfully.
+        
+        For VASP jobs, we assume success if the script exits with code 0.
+        A more advanced version could check for "Voluntary context switches" 
+        in the OUTCAR file.
+        
+        Args:
+            job_id (int): The job ID
+            job_path (Path): Path to the job directory
+            db_path (Path): Path to the database file
+            
+        Returns:
+            str: Final job status ('Done')
         """
         logger = logging.getLogger(__name__)
         logger.info(f"Job {job_id}: VASP job completed. Assuming success based on exit code.")
@@ -109,12 +94,13 @@ echo "INFO: Resource assignment: {assignment.get_summary()}"
         """
         Post-processing for a VASP job.
 
-        This is a simple implementation that assumes the job was successful if
-        the Parsl app future completed without an exception. It updates the
-        database status to 'Done'.
+        Simple implementation that assumes the job was successful if
+        the Parsl app future completed without an exception.
         
-        A more advanced version could check for "Voluntary context switches" in
-        the OUTCAR file.
+        Args:
+            job_id (int): The job ID
+            job_path (Path): Path to the job directory
+            db_path (Path): Path to the database file
         """
         logger = logging.getLogger(__name__)
         logger.info(f"Job {job_id}: Basic post-processing started.")

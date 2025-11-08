@@ -53,6 +53,14 @@ def add(
         Optional[str],
         typer.Option("--envfile", "-e", help="Path to environment setup file (relative or absolute)."),
     ] = None,
+    parents: Annotated[
+        Optional[List[int]],
+        typer.Option("--parents", "-p", help="Space-separated job IDs this job depends on"),
+    ] = None,
+    parent_tag: Annotated[
+        Optional[str],
+        typer.Option("--parent-tag", help="Wait for all jobs with this tag to complete"),
+    ] = None,
     status: Annotated[
         str,
         typer.Option("--status", "-s", help="Initial status for the job(s)."),
@@ -203,6 +211,38 @@ def add(
             typer.secho("❌ Job creation cancelled. Please specify an environment file with --envfile/-e", fg=typer.colors.RED)
             raise typer.Exit(code=1)
 
+    # --- Handle parent dependencies ---
+    final_parents = parents or []
+    
+    # Handle parent_tag conversion to parent IDs
+    if parent_tag:
+        # Get all jobs with the specified tag that are Done
+        tag_jobs = database.get_jobs(path_utils.DB_FILE, tag=parent_tag, status='Done')
+        tag_parent_ids = [job['job_id'] for job in tag_jobs]
+        final_parents.extend(tag_parent_ids)
+        
+        if tag_parent_ids:
+            typer.secho(f"ℹ️  Added {len(tag_parent_ids)} parent jobs from tag '{parent_tag}': {tag_parent_ids}", 
+                       fg=typer.colors.BLUE)
+        else:
+            typer.secho(f"⚠️  Warning: No completed jobs found with tag '{parent_tag}'", 
+                       fg=typer.colors.YELLOW)
+    
+    # Validate parent job IDs exist
+    if final_parents:
+        existing_jobs = database.get_jobs_by_ids(path_utils.DB_FILE, final_parents)
+        existing_ids = {job['job_id'] for job in existing_jobs}
+        missing_ids = set(final_parents) - existing_ids
+        
+        if missing_ids:
+            typer.secho(f"❌ Error: Parent job IDs do not exist: {sorted(missing_ids)}", 
+                       fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+        
+        # Check for circular dependencies (basic check - job can't depend on itself)
+        # More sophisticated cycle detection could be added later
+        typer.secho(f"ℹ️  Job will depend on parent jobs: {final_parents}", fg=typer.colors.BLUE)
+
     paths_to_add: List[Path] = []
 
     # --- Determine the list of paths to process ---
@@ -246,10 +286,12 @@ def add(
                 in_file=final_input_file,
                 mpi_opts=mpi_opts,
                 env_file=final_env_file,
+                parents=final_parents,
                 status=status
             )
             input_info = f" (input: {final_input_file})" if final_input_file else " (no input file)"
-            typer.secho(f"✅ Added job '{path}' with ID {new_id}{input_info}", fg=typer.colors.GREEN)
+            parent_info = f" (parents: {final_parents})" if final_parents else ""
+            typer.secho(f"✅ Added job '{path}' with ID {new_id}{input_info}{parent_info}", fg=typer.colors.GREEN)
             success_count += 1
         except sqlite3.IntegrityError:
             typer.secho(f"⚠️  Skipped: Job path '{path}' already exists in the database.", fg=typer.colors.YELLOW)
@@ -260,5 +302,3 @@ def add(
         typer.secho(f"Summary: Successfully added {success_count} job(s).", fg=typer.colors.GREEN)
     if fail_count > 0:
         typer.secho(f"Summary: Skipped {fail_count} job(s) that already existed.", fg=typer.colors.YELLOW)
-
-

@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-# Updated schema with individual resource columns and env_file support
+# Updated schema with individual resource columns, env_file support, and parent dependencies
 CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS jobs (
     job_id INTEGER PRIMARY KEY,
@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     in_file TEXT,
     mpi_opts TEXT,
     env_file TEXT,
+    parents TEXT,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 """
@@ -172,13 +173,20 @@ def initialize_database(db_path: Path):
         typer.secho(f"Failed to open or initialize the database at: {db_path}", fg=typer.colors.YELLOW, err=True)
         raise typer.Exit(code=1)
 
-def add_job(db_path: Path, path: str, app: str, num_nodes: int, ngpus: int, node_occupancy: float, tag: Optional[str], in_file: Optional[str] = None, mpi_opts: Optional[str] = None, env_file: Optional[str] = None, status: str = 'Ready') -> int:
-    """Adds a new job to the database with app, tag, input file info, resource specification, MPI options, and environment file."""
+def add_job(db_path: Path, path: str, app: str, num_nodes: int, ngpus: int, node_occupancy: float, tag: Optional[str], in_file: Optional[str] = None, mpi_opts: Optional[str] = None, env_file: Optional[str] = None, parents: Optional[List[int]] = None, status: str = 'Ready') -> int:
+    """Adds a new job to the database with app, tag, input file info, resource specification, MPI options, environment file, and parent dependencies."""
+    
+    # Convert parent list to JSON string
+    parents_str = None
+    if parents:
+        import json
+        parents_str = json.dumps([str(p) for p in parents])
+    
     with sqlite3.connect(db_path) as con:
         cur = con.cursor()
         cur.execute(
-            "INSERT INTO jobs (path, app, tag, in_file, mpi_opts, env_file, status, num_nodes, ngpus, node_occupancy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (path, app, tag, in_file, mpi_opts, env_file, status, num_nodes, ngpus, node_occupancy)
+            "INSERT INTO jobs (path, app, tag, in_file, mpi_opts, env_file, parents, status, num_nodes, ngpus, node_occupancy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (path, app, tag, in_file, mpi_opts, env_file, parents_str, status, num_nodes, ngpus, node_occupancy)
         )
         return cur.lastrowid
 
@@ -291,7 +299,8 @@ def update_jobs(
     node_occupancy: Optional[float] = None,
     in_file: Optional[str] = None,
     mpi_opts: Optional[str] = None,
-    env_file: Optional[str] = None
+    env_file: Optional[str] = None,
+    parents: Optional[List[int]] = None
 ) -> int:
     """
     Updates jobs with the given IDs. Only fields that are not None will be updated.
@@ -342,6 +351,13 @@ def update_jobs(
     if env_file is not None:
         set_clauses.append("env_file = ?")
         params.append(env_file)
+
+    if parents is not None:
+        set_clauses.append("parents = ?")
+        # Convert parent list to JSON string
+        import json
+        parents_str = json.dumps([str(p) for p in parents]) if parents else None
+        params.append(parents_str)
 
     # If no fields to update were provided, do nothing.
     if not set_clauses:

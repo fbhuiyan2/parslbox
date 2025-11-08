@@ -21,6 +21,60 @@ from parslbox.resource_manager.exceptions import InsufficientResources
 app = typer.Typer()
 
 
+def parse_parents(parents_str):
+    """Parse parents string into list of job IDs."""
+    if not parents_str:
+        return []
+    
+    import json
+    return [int(x) for x in json.loads(parents_str)]
+
+
+def are_parents_done(job, job_futures, db_path):
+    """
+    Check if job's parent dependencies are satisfied.
+    
+    Args:
+        job: Job dictionary from database
+        job_futures: Dict of job_id -> future for currently running jobs
+        db_path: Path to database file
+    
+    Returns:
+        (parents_done: bool, parent_futures: list)
+    """
+    parents_str = job.get('parents')
+    if not parents_str:
+        return True, []
+    
+    parent_ids = parse_parents(parents_str)
+    parent_futures = []
+    
+    for parent_id in parent_ids:
+        if parent_id in job_futures:
+            # Parent in current run
+            parent_futures.append(job_futures[parent_id])
+        else:
+            # Parent not in current run - check if completed
+            parent_job = database.get_jobs_by_ids(db_path, [parent_id])
+            if not parent_job:
+                raise ValueError(f"Job {job['job_id']} has non-existent parent {parent_id}")
+            
+            if parent_job[0]['status'] != 'Done':
+                return False, []  # Can't submit yet
+    
+    return True, parent_futures
+
+
+def get_ready_jobs(backlog_jobs, job_futures, db_path):
+    """Filter jobs whose parents are done."""
+    ready_jobs = []
+    for job in backlog_jobs:
+        parents_done, parent_futures = are_parents_done(job, job_futures, db_path)
+        if parents_done:
+            ready_jobs.append(job)
+    return ready_jobs
+
+
 def create_parsl_future(job, app_instance, app_config, config_name, db_path, scheduler, resource_manager, futures, system_config):
     """
     Create a Parsl future for a job with proper preprocessing and error handling.
@@ -226,10 +280,12 @@ def run(
             # Remove these jobs from processing
             filtered_jobs = [job for job in filtered_jobs if job['app'] != app_name]
 
-    # Process Jobs Individually
+    # Process Jobs Individually with dependency checking
     # First attempt to create futures. Jobs without resource assignment will be put in the backlogged queue
-    # After this, futures will be created for backlogged jobs as resource becomes availabe
+    # After this, futures will be created for backlogged jobs as resource becomes available
     futures = []
+    job_futures = {}  # job_id -> future mapping for dependency tracking
+    
     for job in filtered_jobs:
         job_id = job['job_id']
         app_name = job['app']
@@ -240,16 +296,33 @@ def run(
             
         logger.info(f"Submitting Job ID {job_id}...")
         
+        # Check dependencies first
+        try:
+            parents_done, parent_futures = are_parents_done(job, job_futures, db_path)
+            
+            if not parents_done:
+                logger.info(f"Job {job_id}: Parent dependencies not satisfied, skipping for now")
+                continue
+                
+        except Exception as e:
+            logger.error(f"Job {job_id}: Error checking parent dependencies: {e}")
+            database.update_jobs(db_path, job_ids=[job_id], status="Failed")
+            continue
+        
         # Allocate resources
         try:
             assignment = resource_manager.assign_resources(job)
             logger.info(f"Job {job_id}: Allocated resources - {assignment.get_summary()}")
             
             # Create Parsl future with pre-loaded contexts
-            create_parsl_future(
+            success = create_parsl_future(
                 job, app_instances[app_name], app_configs[app_name], 
                 config_name, db_path, scheduler, resource_manager, futures, system_config
             )
+            
+            if success and futures:
+                # Track the future for dependency checking
+                job_futures[job_id] = futures[-1]['future']
             
         except InsufficientResources as e:
             # This is NOT an error - just temporary resource unavailability
@@ -316,8 +389,11 @@ def run(
                         resource_manager.free_resources(job_id)
                         logger.info(f"Job {job_id}: Freed allocated resources")
                         
-                        # Schedule any backlogged jobs that can now run
-                        rescheduled_jobs = resource_manager.schedule_backlog()
+                        # Filter backlog by dependency satisfaction, then schedule
+                        dependency_ready_jobs = get_ready_jobs(resource_manager.get_backlog_jobids(), job_futures, db_path)
+                        
+                        # Schedule only dependency-ready jobs
+                        rescheduled_jobs = resource_manager.schedule_backlog(dependency_ready_jobs)
                         
                         # Create Parsl futures for rescheduled jobs
                         for rescheduled_job in rescheduled_jobs:
@@ -327,17 +403,19 @@ def run(
                             if rescheduled_app_name in app_instances:
                                 logger.info(f"Creating Parsl future for rescheduled job {rescheduled_job_id}")
                                 new_futures = []
-                                create_parsl_future(
+                                success = create_parsl_future(
                                     rescheduled_job, 
                                     app_instances[rescheduled_app_name], 
                                     app_configs[rescheduled_app_name],
                                     config_name, db_path, scheduler, resource_manager, 
                                     new_futures, system_config
                                 )
+                                
                                 # Add each new future to tracking dict
                                 for new_item in new_futures:
                                     new_fut = new_item['future']
                                     fut_to_item[new_fut] = new_item
+                                    job_futures[rescheduled_job_id] = new_fut  # Track for dependencies
                                     logger.info(f"Added rescheduled job {rescheduled_job_id} to tracking (total active: {len(fut_to_item)})")
                             else:
                                 logger.error(f"App context not found for rescheduled job {rescheduled_job_id}")

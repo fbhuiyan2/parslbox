@@ -1,90 +1,8 @@
 import logging
 from pathlib import Path
-from parsl import bash_app
 from parslbox.helpers import database
 from parslbox.apps.base import AppBase
-from parslbox.configs.loader import get_system_config
-import logging
 
-# ===================================================================================
-#  STANDALONE PARSL APP FUNCTION
-# ===================================================================================
-
-@bash_app
-def lammps_parsl_app(job_id: int, job_path: str, db_path: str, env_vars: dict, total_gpus: int,
-                     assignment_summary: str, mpi_commands: dict, app_config: dict,
-                     config_name: str, in_file: str, mpi_opts: str, env_file: str,
-                     stdout: str, stderr: str):
-    """
-    Standalone Parsl app for running a single LAMMPS simulation.
-    This function dynamically constructs the entire shell command using resource-aware MPI commands.
-    """
-    # Get MPI command prefix
-    mpi_prefix = mpi_commands.get('PBX_MPI_PREFIX', '')
-    
-    # Unpack app configuration from the YAML file
-    executable = app_config.get('executable_path')
-    mpi_extra_tags = app_config.get('mpi_extra')
-    
-    # Start with base environment setup from app config (if any)
-    env_setup = app_config.get('environment_setup', '')
-    
-    # Environment setup from env_file gets appended to env_setup from app_config
-    # Append additional environment setup from env_file (if provided)
-    if env_file:
-        try:
-            with open(env_file, 'r') as f:
-                env_file_content = f.read()
-                env_setup += "\n" + env_file_content  # Append to existing setup
-        except Exception as e:
-            env_setup += f"\necho 'Warning: Could not read env_file {env_file}: {e}'"
-    
-    # Handle mpi_opts - use empty string if None
-    mpi_opts_str = mpi_opts if mpi_opts is not None else ''
-    mpi_extra_tags = mpi_extra_tags if mpi_extra_tags is not None else ''
-
-
-    # Format environment variables for GPU assignment (inline implementation)
-    env_exports = ""
-    if env_vars:
-        exports = []
-        for key, value in env_vars.items():
-            exports.append(f"export {key}={value}")
-        env_exports = "\n".join(exports)
-
-    # Construct the full command string
-    if total_gpus > 0:
-        # GPU-enabled LAMMPS command
-        lammps_args = f"-k on g {total_gpus} -sf kk -pk kokkos newton on neigh half -in {in_file}"
-    else:
-        # CPU-only LAMMPS command
-        lammps_args = f"-in {in_file}"
-
-    # Update status to Running (this runs in Python context on compute node)
-    from parslbox.helpers import database
-    database.update_jobs(db_path, job_ids=[job_id], status='Running')
-
-    return f"""
-cd {job_path}
-
-# Environment Setup (from config.yaml + env_file if provided)
-{env_setup}
-
-# Resource-specific environment variables (GPU assignments, etc.)
-{env_exports}
-
-# Execution
-echo "INFO: Starting LAMMPS for job ID {job_id} with input file {in_file}..."
-echo "INFO: Using MPI command: {mpi_prefix} {mpi_opts_str} {mpi_extra_tags} {executable} {lammps_args}"
-echo "INFO: Resource assignment: {assignment_summary}"
-
-{mpi_prefix} {mpi_opts_str} {mpi_extra_tags} {executable} {lammps_args}
-"""
-
-
-# ===================================================================================
-#  LAMMPS APPLICATION-SPECIFIC IMPLEMENTATION
-# ===================================================================================
 
 class LammpsApp(AppBase):
     """
@@ -98,54 +16,57 @@ class LammpsApp(AppBase):
     INPUT_REQUIRED = True
     DFLT_INPUT = "in.lammps"
     
-    def preprocess(self, job_id: int, job_path: Path, db_path: Path, app_config: dict, config_name: str):
+    def get_command_template(self, **kwargs) -> str:
         """
-        Preprocessing for LAMMPS jobs.
-        Currently no preprocessing is needed for LAMMPS.
-        """
-        pass
-    
-    def parsl_app(self, job_id: int, job_path: Path, db_path: Path, assignment, mpi_commands: dict,
-                  app_config: dict, config_name: str, in_file: str, mpi_opts: str, env_file: str, stdout: str, stderr: str):
-        """
-        Wrapper method that calls the standalone Parsl app function.
-        Extracts serializable data from assignment object before passing to Parsl.
-        """
-
-        logger = logging.getLogger(__name__)  
+        Construct LAMMPS-specific execution command.
         
-        try:
-            # Extract serializable data from assignment object
-            env_vars = assignment.get_env_vars()
-            total_gpus = assignment.get_total_gpus()
-            assignment_summary = assignment.get_summary()
-            
-            return lammps_parsl_app(
-                job_id=job_id,
-                job_path=str(job_path),  # Convert Path to string for serialization
-                db_path=str(db_path),    # Convert Path to string for serialization
-                env_vars=env_vars,
-                total_gpus=total_gpus,
-                assignment_summary=assignment_summary,
-                mpi_commands=mpi_commands,
-                app_config=app_config,
-                config_name=config_name,
-                in_file=in_file,
-                mpi_opts=mpi_opts,
-                env_file=env_file,
-                stdout=stdout,
-                stderr=stderr
-            )
-        except Exception as e:
-            import traceback
-            logger.error(f"Job {job_id}: Failed to submit Parsl app: {e}")
-            print("LAMMPS bash_app construction failed:", e)
-            traceback.print_exc()
-            raise
-
+        LAMMPS command format:
+        {mpi_prefix} {mpi_opts} {mpi_extra_tags} {executable} {lammps_args}
+        
+        Args:
+            **kwargs: Contains mpi_prefix, mpi_opts_str, executable, in_file,
+                     total_gpus, app_config, mpi_commands
+        
+        Returns:
+            str: LAMMPS execution command
+        """
+        mpi_prefix = kwargs['mpi_prefix']
+        mpi_opts_str = kwargs['mpi_opts_str']
+        executable = kwargs['executable']
+        in_file = kwargs['in_file']
+        total_gpus = kwargs['total_gpus']
+        app_config = kwargs['app_config']
+        
+        # LAMMPS-specific: GPU vs CPU arguments
+        if total_gpus > 0:
+            # GPU-enabled LAMMPS command with Kokkos
+            lammps_args = f"-k on g {total_gpus} -sf kk -pk kokkos newton on neigh half -in {in_file}"
+        else:
+            # CPU-only LAMMPS command
+            lammps_args = f"-in {in_file}"
+        
+        # LAMMPS-specific: mpi_extra_tags from app config
+        mpi_extra_tags = app_config.get('mpi_extra', '') or ''
+        
+        # Log the command being constructed
+        logger = logging.getLogger(__name__)
+        logger.info(f"LAMMPS command: {mpi_prefix} {mpi_opts_str} {mpi_extra_tags} {executable} {lammps_args}")
+        
+        return f"{mpi_prefix} {mpi_opts_str} {mpi_extra_tags} {executable} {lammps_args}"
+    
     def check_success(self, job_id: int, job_path: Path, db_path: Path) -> str:
         """
-        Checks for success and updates the database with the final status.
+        Check if LAMMPS job completed successfully.
+        
+        LAMMPS-specific: Looks for "Total wall time:" in log.lammps file.
+        
+        Args:
+            job_id (int): The job ID
+            job_path (Path): Path to the job directory
+            db_path (Path): Path to the database file
+            
+        Returns:
+            str: Final job status ('Done' or 'Failed')
         """
         logger = logging.getLogger(__name__)
         log_file = job_path / "log.lammps"
@@ -169,16 +90,23 @@ class LammpsApp(AppBase):
         logger.info(f"Job {job_id}: Final status set to '{final_status}'.")
 
         return final_status
-
+    
     def postprocess(self, job_id: int, job_path: Path, db_path: Path):
         """
         Post-processing for a LAMMPS job.
-        Checks for success and updates the database with the final status.
+        
+        Simple implementation that sets status to 'Done'.
+        The actual success checking is done in check_success().
+        
+        Args:
+            job_id (int): The job ID
+            job_path (Path): Path to the job directory
+            db_path (Path): Path to the database file
         """
         logger = logging.getLogger(__name__)
         logger.info(f"Job {job_id}: Post-processing started.")
 
-        # Since there's no complex check, we assume success and set status to 'Done'.
+        # Since there's no complex post-processing, we assume success
         final_status = "Done"
 
         database.update_jobs(db_path, job_ids=[job_id], status=final_status)

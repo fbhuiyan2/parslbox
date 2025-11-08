@@ -6,9 +6,7 @@ and scheduling for jobs across HPC systems.
 """
 
 import logging
-import queue
 from typing import List, Dict, Optional, TYPE_CHECKING
-from dataclasses import dataclass, field
 
 from .models import NodeResource, JobResourceSpec, NodeAssignment, create_job_resource_spec
 from .exceptions import InsufficientResources, JobNotFound, InvalidResourceSpec
@@ -17,13 +15,6 @@ if TYPE_CHECKING:
     from parslbox.configs.base import SystemConfig
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(order=True)
-class PrioritizedJob:
-    """Job with priority for backlog queue."""
-    priority: int
-    job: dict = field(compare=False)
 
 
 class ResourceManager:
@@ -49,8 +40,7 @@ class ResourceManager:
         self.system_config = system_config
         self.nodes: List[NodeResource] = []
         self.job_assignments: Dict[int, NodeAssignment] = {}
-        self._backlog_queue: queue.PriorityQueue[PrioritizedJob] = queue.PriorityQueue()
-        self._queued_jobs: set = set()  # Track job IDs in backlog to prevent duplicates
+        self._backlogged_jobs_set: set = set()  # Track job IDs in backlog
         
         # Initialize nodes from system configuration
         self._initialize_nodes()
@@ -176,10 +166,8 @@ class ResourceManager:
             
         except InsufficientResources:
             # Add to backlog if resources not available and not already queued
-            if resource_spec.job_id not in self._queued_jobs:
-                self._queued_jobs.add(resource_spec.job_id)
-                priority = resource_spec.num_nodes  # Higher node count = higher priority
-                self._backlog_queue.put(PrioritizedJob(priority, job))
+            if resource_spec.job_id not in self._backlogged_jobs_set:
+                self._backlogged_jobs_set.add(resource_spec.job_id)
                 logger.info(f"Job {resource_spec.job_id} added to backlog")
             else:
                 logger.info(f"Job {resource_spec.job_id} already in backlog, skipping duplicate")
@@ -413,3 +401,7 @@ class ResourceManager:
     def get_backlog_size(self) -> int:
         """Get number of jobs in the backlog queue."""
         return self._backlog_queue.qsize()
+    
+    def get_backlog_jobids(self) -> List[int]:
+        """Get job ids of jobs in the backlog queue."""
+        return list(self._queued_jobs)
