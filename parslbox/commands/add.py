@@ -141,7 +141,7 @@ def add(
         
         # Multi-node jobs: set parameters
         final_num_nodes = nnodes
-        final_ngpus = 0  # Not used for multi-node jobs
+        final_ngpus = nnodes * gpus_per_node  # Multi-node jobs use up all cpus or gpus on the nodes. This here is only for display purposes though
         final_node_occupancy = 1.0
         typer.secho(f"ℹ️  Multi-node job will use {nnodes * gpus_per_node} total GPUs ({gpus_per_node} per node)", fg=typer.colors.BLUE)
     else:
