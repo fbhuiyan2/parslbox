@@ -86,7 +86,6 @@ def info(
     if env_file:
         selected_fields.append(('env_file', 'Env File'))
     if parents:
-        selected_fields.append(('job_id', 'ID'))
         selected_fields.append(('parents', 'Parents'))
     
     # If no specific fields selected, show all fields
@@ -104,9 +103,8 @@ def info(
             ('path', 'Path')
         ]
     else:
-        # Always include job_id when specific fields are selected (unless parents is already selected)
-        if not parents:
-            selected_fields.insert(0, ('job_id', 'ID'))
+        # Always include job_id as the first column when specific fields are selected
+        selected_fields.insert(0, ('job_id', 'ID'))
     
     # Create and populate table
     headers = [field[1] for field in selected_fields]
