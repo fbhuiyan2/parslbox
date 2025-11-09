@@ -1,5 +1,5 @@
 import typer
-from typing import Optional
+from typing import Optional, List
 from rich.console import Console
 from rich.table import Table
 
@@ -70,6 +70,30 @@ def truncate_sched_job_id(sched_job_id: str, max_length: int = 11) -> str:
     
     return sched_job_id[:max_length] + "..."
 
+
+def parse_parents(parents_str: str) -> List[int]:
+    """Parse JSON parent string to list of integers"""
+    if not parents_str:
+        return []
+    import json
+    return [int(x) for x in json.loads(parents_str)]
+
+
+def format_job_id_with_parents(job_id: int, parents: List[int]) -> str:
+    """Format job ID with parent dependencies"""
+    if not parents:
+        return str(job_id)
+    
+    if len(parents) <= 4:
+        parents_str = ",".join(str(p) for p in parents)
+        return f"{job_id} ({parents_str})"
+    else:
+        # Truncate after 4 parents: "100 (1,2,...,5)"
+        first_parents = ",".join(str(p) for p in parents[:2])
+        last_parent = parents[-1]
+        return f"{job_id} ({first_parents},...,{last_parent})"
+
+
 @app.command()
 def ls(
     status: Optional[str] = typer.Option(
@@ -109,8 +133,12 @@ def ls(
         else:
             resources_display = f"n:1-g:0-nocc:{node_occupancy}"
         
+        # Format job ID with parent dependencies
+        parents = parse_parents(job.get('parents'))
+        formatted_id = format_job_id_with_parents(job['job_id'], parents)
+        
         table.add_row(
-            str(job['job_id']),
+            formatted_id,
             job['app'],
             job['status'],
             resources_display,

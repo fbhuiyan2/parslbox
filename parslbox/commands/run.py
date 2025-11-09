@@ -65,13 +65,20 @@ def are_parents_done(job, job_futures, db_path):
     return True, parent_futures
 
 
-def get_ready_jobs(backlog_jobs, job_futures, db_path):
+def get_dependency_ready_jobs(backlog_jobs, job_futures, db_path):
     """Filter jobs whose parents are done."""
     ready_jobs = []
+    logger = logging.getLogger(__name__)
+    
     for job in backlog_jobs:
-        parents_done, parent_futures = are_parents_done(job, job_futures, db_path)
-        if parents_done:
-            ready_jobs.append(job)
+        try:
+            parents_done, parent_futures = are_parents_done(job, job_futures, db_path)
+            if parents_done:
+                ready_jobs.append(job)
+        except Exception as e:
+            logger.error(f"Error when checking dependencies for job {job['job_id']}: {e}")
+            # Don't add to ready_jobs, but don't fail either - job stays in backlog
+            continue
     return ready_jobs
 
 
@@ -301,7 +308,8 @@ def run(
             parents_done, parent_futures = are_parents_done(job, job_futures, db_path)
             
             if not parents_done:
-                logger.info(f"Job {job_id}: Parent dependencies not satisfied, skipping for now")
+                logger.info(f"Job {job_id}: Parent dependencies not satisfied, adding to backlog")
+                resource_manager.add_to_backlog(job_id)
                 continue
                 
         except Exception as e:
@@ -390,10 +398,14 @@ def run(
                         logger.info(f"Job {job_id}: Freed allocated resources")
                         
                         # Filter backlog by dependency satisfaction, then schedule
-                        dependency_ready_jobs = get_ready_jobs(resource_manager.get_backlog_jobids(), job_futures, db_path)
-                        
-                        # Schedule only dependency-ready jobs
-                        rescheduled_jobs = resource_manager.schedule_backlog(dependency_ready_jobs)
+                        try:
+                            dependency_ready_jobs = get_dependency_ready_jobs(resource_manager.backlog, job_futures, db_path)
+                            
+                            # Schedule only dependency-ready jobs
+                            rescheduled_jobs = resource_manager.schedule_backlog(dependency_ready_jobs)
+                        except Exception as e:
+                            logger.error(f"Error during backlog scheduling: {e}")
+                            rescheduled_jobs = []
                         
                         # Create Parsl futures for rescheduled jobs
                         for rescheduled_job in rescheduled_jobs:
@@ -420,6 +432,12 @@ def run(
                             else:
                                 logger.error(f"App context not found for rescheduled job {rescheduled_job_id}")
                                 database.update_jobs(db_path, job_ids=[rescheduled_job_id], status="Failed")
+                        
+                        # Log comprehensive status after rescheduling
+                        status = resource_manager.get_resource_status()
+                        dependency_ready_count = len(dependency_ready_jobs) if 'dependency_ready_jobs' in locals() else 0
+                        logger.info(f"Run Status: jobs running {len(fut_to_item)}, jobs backlogged {status['backlogged_jobs']}, dependency ready jobs {dependency_ready_count}")
+                        logger.info(f"Resource Status: Total {status['available_gpus']} GPUs and {status['available_cpu_capacity']:.1f} cores available on {status['available_nodes']} nodes")
                                 
                     except Exception as e:
                         logger.error(f"Job {job_id}: Failed to free resources or schedule backlog: {e}")

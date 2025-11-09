@@ -165,12 +165,8 @@ class ResourceManager:
             return assignment
             
         except InsufficientResources:
-            # Add to backlog if resources not available and not already queued
-            if resource_spec.job_id not in self._backlogged_jobs_set:
-                self._backlogged_jobs_set.add(resource_spec.job_id)
-                logger.info(f"Job {resource_spec.job_id} added to backlog")
-            else:
-                logger.info(f"Job {resource_spec.job_id} already in backlog, skipping duplicate")
+            # Add to backlog using centralized method
+            self.add_to_backlog(resource_spec.job_id)
             raise
     
     def _validate_resource_spec(self, spec: JobResourceSpec) -> None:
@@ -278,9 +274,21 @@ class ResourceManager:
             available={'cores': max_available_cores}
         )
     
+    def add_to_backlog(self, job_id: int) -> None:
+        """
+        Add a job to the backlog queue.
+        
+        Args:
+            job_id: The job ID to add to backlog
+        """
+        if job_id not in self._backlogged_jobs_set:
+            self._backlogged_jobs_set.add(job_id)
+            logger.info(f"Job {job_id} added to backlog")
+
+    
     def free_resources(self, job_id: int) -> None:
         """
-        Free resources assigned to a job.
+        Free up resources assigned to a job.
         
         Args:
             job_id: The job ID to free resources for
@@ -311,43 +319,52 @@ class ResourceManager:
                 return node
         return None
     
-    def schedule_backlog(self) -> List[dict]:
-        """
-        Attempt to schedule jobs from the backlog.
+    @property
+    def backlog(self) -> List[dict]:
+        """Get list of jobs currently in backlog by querying database."""
+        if not self._backlogged_jobs_set:
+            return []
         
-        Returns:
-            List of job metadata for successfully scheduled jobs
-        """
+        # Import here to avoid circular imports
+        from parslbox.helpers import database, path_utils
+        
+        # Get job details from database
+        job_ids = list(self._backlogged_jobs_set)
+        return database.get_jobs_by_ids(path_utils.DB_FILE, job_ids)
+    
+    def schedule_backlog(self, candidate_jobs: List[dict]) -> List[dict]:
+        """Schedule jobs from candidate list that are in backlog."""
+        
+        if not candidate_jobs:
+            return []
+        
+        # Filter candidates that are actually in backlog
+        candidates_in_backlog = [job for job in candidate_jobs if job['job_id'] in self._backlogged_jobs_set]
+        
+        if not candidates_in_backlog:
+            return []
+        
+        # Sort by priority (LOWER num_nodes first - easier to schedule)
+        candidates_in_backlog.sort(key=lambda job: job.get('num_nodes', 1))
+        
         scheduled_jobs = []
-        
-        # Try to schedule jobs from backlog
-        while not self._backlog_queue.empty():
+        for job in candidates_in_backlog:
+            job_id = job['job_id']
+            
             try:
-                prioritized_job = self._backlog_queue.get(block=False)
-                job_id = prioritized_job.job['job_id']
+                assignment = self.assign_resources(job)
+                scheduled_jobs.append(job)
                 
-                # Remove from queued set since we're processing it
-                self._queued_jobs.discard(job_id)
+                # Remove from backlog tracking
+                self._backlogged_jobs_set.discard(job_id)
+                logger.info(f"Successfully rescheduled job {job_id}: {assignment.get_summary()}")
                 
-                # Skip if already has assignment (handles existing duplicates)
-                if job_id in self.job_assignments:
-                    logger.info(f"Job {job_id} already has resources, skipping duplicate")
-                    continue
-                
-                assignment = self.assign_resources(prioritized_job.job)
-                scheduled_jobs.append(prioritized_job.job)  # Return full job metadata
-                logger.info(f"Scheduled backlogged job {job_id}")
-                
-            except InsufficientResources:
-                # Put the job back if it still can't be scheduled
-                self._queued_jobs.add(prioritized_job.job['job_id'])  # Re-add to tracking set
-                self._backlog_queue.put(prioritized_job)
-                break
-            except queue.Empty:
-                break
-        
-        if scheduled_jobs:
-            logger.info(f"Scheduled {len(scheduled_jobs)} jobs from backlog")
+            except InsufficientResources as e:
+                logger.debug(f"Job {job_id} still cannot be scheduled: {e}")
+                continue  # Try next job
+            except Exception as e:
+                logger.error(f"Error scheduling job {job_id}: {e}")
+                continue
         
         return scheduled_jobs
     
@@ -378,7 +395,7 @@ class ResourceManager:
             'used_cpu_capacity': used_cpu_capacity,
             'available_cpu_capacity': total_cpu_capacity - used_cpu_capacity,
             'active_jobs': len(self.job_assignments),
-            'backlogged_jobs': self._backlog_queue.qsize(),
+            'backlogged_jobs': len(self._backlogged_jobs_set),
             'nodes': [node.get_status() for node in self.nodes]
         }
     
@@ -399,9 +416,9 @@ class ResourceManager:
         return list(self.job_assignments.keys())
     
     def get_backlog_size(self) -> int:
-        """Get number of jobs in the backlog queue."""
-        return self._backlog_queue.qsize()
+        """Get number of jobs in the backlog."""
+        return len(self._backlogged_jobs_set)
     
     def get_backlog_jobids(self) -> List[int]:
-        """Get job ids of jobs in the backlog queue."""
-        return list(self._queued_jobs)
+        """Get job ids of jobs in the backlog."""
+        return list(self._backlogged_jobs_set)

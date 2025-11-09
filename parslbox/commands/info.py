@@ -9,6 +9,30 @@ console = Console()
 
 app = typer.Typer()
 
+
+def parse_parents(parents_str: str) -> List[int]:
+    """Parse JSON parent string to list of integers"""
+    if not parents_str:
+        return []
+    import json
+    return [int(x) for x in json.loads(parents_str)]
+
+
+def format_job_id_with_parents(job_id: int, parents: List[int], show_all: bool = False) -> str:
+    """Format job ID with parent dependencies"""
+    if not parents:
+        return str(job_id)
+    
+    if show_all or len(parents) <= 4:
+        parents_str = ",".join(str(p) for p in parents)
+        return f"{job_id} ({parents_str})"
+    else:
+        # Truncate after 4 parents: "100 (1,2,...,5)"
+        first_parents = ",".join(str(p) for p in parents[:2])
+        last_parent = parents[-1]
+        return f"{job_id} ({first_parents},...,{last_parent})"
+
+
 @app.command()
 def info(
     job_ids: List[int] = typer.Argument(..., help="ID(s) of the job(s) to get information about."),
@@ -21,6 +45,7 @@ def info(
     sched_job_id: bool = typer.Option(False, "--sched-job-id", "-j", help="Show only the scheduler job ID field."),
     timestamp: bool = typer.Option(False, "--timestamp", "-ts", help="Show only the timestamp field."),
     env_file: bool = typer.Option(False, "--envfile", "-e", help="Show only the environment file field."),
+    parents: bool = typer.Option(False, "--parents", "-d", help="Show all parent dependencies without truncation."),
 ):
     """
     Shows detailed information about specific jobs.
@@ -92,7 +117,10 @@ def info(
             elif field_key == 'ngpus':
                 row_data.append(str(value))
             elif field_key == 'job_id':
-                row_data.append(str(value))
+                # Format job ID with parent dependencies
+                job_parents = parse_parents(job.get('parents'))
+                formatted_id = format_job_id_with_parents(job['job_id'], job_parents, show_all=parents)
+                row_data.append(formatted_id)
             else:
                 row_data.append(str(value))
         table.add_row(*row_data)

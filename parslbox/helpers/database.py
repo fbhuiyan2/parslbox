@@ -190,21 +190,6 @@ def add_job(db_path: Path, path: str, app: str, num_nodes: int, ngpus: int, node
         )
         return cur.lastrowid
 
-'''
-def get_jobs(db_path: Path, status_filter: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Retrieves jobs from the database, optionally filtering by status."""
-    with sqlite3.connect(db_path) as con:
-        con.row_factory = sqlite3.Row
-        cur = con.cursor()
-        query = "SELECT * FROM jobs"
-        params = []
-        if status_filter:
-            query += " WHERE status = ?"
-            params.append(status_filter.capitalize())
-        query += " ORDER BY job_id ASC"
-        results = cur.execute(query, params).fetchall()
-        return [dict(row) for row in results]
-'''
 
 def get_jobs(db_path: Path, status: Optional[str] = None, app: Optional[str] = None, tag: Optional[str] = None, path: Optional[str] = None, in_file: Optional[str] = None) -> List[Dict[str, Any]]:
     """
@@ -286,6 +271,89 @@ def get_jobs_by_ids(db_path: Path, job_ids: List[int]) -> List[Dict[str, Any]]:
         
         results = cur.execute(query, job_ids).fetchall()
         return [dict(row) for row in results]
+
+def parse_existing_parents(parents_str: Optional[str]) -> List[int]:
+    """
+    Parse existing parents from JSON string to list of integers.
+    
+    Args:
+        parents_str: JSON string of parent IDs (e.g., '["1", "2", "3"]')
+        
+    Returns:
+        List of parent job IDs as integers
+    """
+    if not parents_str:
+        return []
+    
+    try:
+        import json
+        parent_strings = json.loads(parents_str)
+        return [int(p) for p in parent_strings]
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return []
+
+
+def add_dependencies(existing_parents: List[int], new_parents: List[int]) -> List[int]:
+    """
+    Add new parent dependencies to existing ones, avoiding duplicates.
+    
+    Args:
+        existing_parents: Current list of parent job IDs
+        new_parents: New parent job IDs to add
+        
+    Returns:
+        Updated list of parent job IDs (sorted, no duplicates)
+    """
+    # Combine lists and remove duplicates
+    combined = set(existing_parents + new_parents)
+    return sorted(list(combined))
+
+
+def remove_dependencies(existing_parents: List[int], remove_parents: List[int]) -> tuple[List[int], List[int]]:
+    """
+    Remove parent dependencies from existing ones.
+    
+    Args:
+        existing_parents: Current list of parent job IDs
+        remove_parents: Parent job IDs to remove
+        
+    Returns:
+        Tuple of (updated_parents_list, not_found_parents_list)
+    """
+    existing_set = set(existing_parents)
+    remove_set = set(remove_parents)
+    
+    # Find parents that don't exist in current list
+    not_found = sorted(list(remove_set - existing_set))
+    
+    # Remove existing parents
+    updated = sorted(list(existing_set - remove_set))
+    
+    return updated, not_found
+
+
+def validate_parent_job_ids(db_path: Path, parent_ids: List[int]) -> tuple[List[int], List[int]]:
+    """
+    Validate that parent job IDs exist in the database.
+    
+    Args:
+        db_path: Path to database file
+        parent_ids: List of parent job IDs to validate
+        
+    Returns:
+        Tuple of (valid_ids, invalid_ids)
+    """
+    if not parent_ids:
+        return [], []
+    
+    existing_jobs = get_jobs_by_ids(db_path, parent_ids)
+    existing_ids = {job['job_id'] for job in existing_jobs}
+    
+    #valid_ids = [pid for pid in parent_ids if pid in existing_ids]
+    invalid_ids = [pid for pid in parent_ids if pid not in existing_ids]
+    
+    return invalid_ids
+
 
 def update_jobs(
     db_path: Path,

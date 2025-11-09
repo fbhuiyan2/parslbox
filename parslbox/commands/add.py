@@ -55,7 +55,7 @@ def add(
     ] = None,
     parents: Annotated[
         Optional[List[int]],
-        typer.Option("--parents", "-p", help="Space-separated job IDs this job depends on"),
+        typer.Option("--parents", "-d", help="Space-separated job IDs this job depends on"),
     ] = None,
     parent_tag: Annotated[
         Optional[str],
@@ -239,7 +239,8 @@ def add(
                        fg=typer.colors.RED)
             raise typer.Exit(code=1)
         
-        # Check for circular dependencies (basic check - job can't depend on itself)
+        # Check for circular dependencies (basic check - job can't depend on itself) 
+        # ^ This cannot happen since the job id for this job does not exist yet and non-existing job ids lead to missing_ids error
         # More sophisticated cycle detection could be added later
         typer.secho(f"ℹ️  Job will depend on parent jobs: {final_parents}", fg=typer.colors.BLUE)
 
