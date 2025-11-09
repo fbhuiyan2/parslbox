@@ -85,6 +85,9 @@ def info(
         selected_fields.append(('timestamp', 'Timestamp'))
     if env_file:
         selected_fields.append(('env_file', 'Env File'))
+    if parents:
+        selected_fields.append(('job_id', 'ID'))
+        selected_fields.append(('parents', 'Parents'))
     
     # If no specific fields selected, show all fields
     if not selected_fields:
@@ -101,8 +104,9 @@ def info(
             ('path', 'Path')
         ]
     else:
-        # Always include job_id when specific fields are selected
-        selected_fields.insert(0, ('job_id', 'ID'))
+        # Always include job_id when specific fields are selected (unless parents is already selected)
+        if not parents:
+            selected_fields.insert(0, ('job_id', 'ID'))
     
     # Create and populate table
     headers = [field[1] for field in selected_fields]
@@ -117,10 +121,22 @@ def info(
             elif field_key == 'ngpus':
                 row_data.append(str(value))
             elif field_key == 'job_id':
-                # Format job ID with parent dependencies
+                # When parents flag is used, show plain job ID (parents will be in separate column)
+                if parents:
+                    row_data.append(str(job['job_id']))
+                else:
+                    # Format job ID with parent dependencies
+                    job_parents = parse_parents(job.get('parents'))
+                    formatted_id = format_job_id_with_parents(job['job_id'], job_parents, show_all=parents)
+                    row_data.append(formatted_id)
+            elif field_key == 'parents':
+                # Handle the separate parents column
                 job_parents = parse_parents(job.get('parents'))
-                formatted_id = format_job_id_with_parents(job['job_id'], job_parents, show_all=parents)
-                row_data.append(formatted_id)
+                if job_parents:
+                    parents_str = ",".join(str(p) for p in job_parents)
+                    row_data.append(parents_str)
+                else:
+                    row_data.append("None")
             else:
                 row_data.append(str(value))
         table.add_row(*row_data)
