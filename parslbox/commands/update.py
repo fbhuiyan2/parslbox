@@ -45,12 +45,12 @@ def update(
         typer.Option("--nodealloc", "-na", help="Update the node allocation fraction for CPU-only jobs (0.0-1.0).")
     ] = None,
     add_deps: Annotated[
-        Optional[List[int]],
-        typer.Option("--add_deps", "--padd", help="Job IDs to add as new parent dependencies.")
+        Optional[str],
+        typer.Option("--add_deps", "--padd", help="Space-separated job IDs to add as parents (e.g., '1 2 3')")
     ] = None,
     rm_deps: Annotated[
-        Optional[List[int]],
-        typer.Option("--rm_deps", "--parm", help="Job IDs to remove from parent dependencies.")
+        Optional[str],
+        typer.Option("--rm_deps", "--parm", help="Space-separated job IDs to remove from parents (e.g., '1 2 3')")
     ] = None,
 ):
     """
@@ -125,12 +125,25 @@ def update(
             typer.secho("❌ Error: No jobs found with the specified IDs.", fg=typer.colors.RED)
             raise typer.Exit(code=1)
         
-        # Validate parent job IDs exist in database
-        all_parent_ids = []
+        # Parse dependency strings and validate parent job IDs exist in database
+        parsed_add_deps = []
+        parsed_rm_deps = []
+        
         if add_deps:
-            all_parent_ids.extend(add_deps)
+            try:
+                parsed_add_deps = [int(x) for x in add_deps.split()]
+            except ValueError:
+                typer.secho("❌ Error: Invalid add_deps job IDs. Use space-separated integers in quotes.", fg=typer.colors.RED)
+                raise typer.Exit(code=1)
+        
         if rm_deps:
-            all_parent_ids.extend(rm_deps)
+            try:
+                parsed_rm_deps = [int(x) for x in rm_deps.split()]
+            except ValueError:
+                typer.secho("❌ Error: Invalid rm_deps job IDs. Use space-separated integers in quotes.", fg=typer.colors.RED)
+                raise typer.Exit(code=1)
+        
+        all_parent_ids = parsed_add_deps + parsed_rm_deps
         
         if all_parent_ids:
             # Remove duplicates and validate
@@ -142,8 +155,8 @@ def update(
                 raise typer.Exit(code=1)
         
         # Prevent circular dependencies (job can't be parent of itself)
-        if add_deps:
-            circular_deps = [dep for dep in add_deps if dep in job_ids]
+        if parsed_add_deps:
+            circular_deps = [dep for dep in parsed_add_deps if dep in job_ids]
             if circular_deps:
                 typer.secho(f"❌ Error: Jobs cannot be parents of themselves: {', '.join(map(str, circular_deps))}", fg=typer.colors.RED)
                 raise typer.Exit(code=1)
@@ -158,14 +171,14 @@ def update(
             updated_parents = existing_parents.copy()
             
             # Process removals first
-            if rm_deps:
-                updated_parents, not_found = database.remove_dependencies(updated_parents, rm_deps)
+            if parsed_rm_deps:
+                updated_parents, not_found = database.remove_dependencies(updated_parents, parsed_rm_deps)
                 if not_found:
                     all_warnings.append(f"Job {job_id}: Parent IDs {', '.join(map(str, not_found))} were not found in existing dependencies")
             
             # Process additions
-            if add_deps:
-                updated_parents = database.add_dependencies(updated_parents, add_deps)
+            if parsed_add_deps:
+                updated_parents = database.add_dependencies(updated_parents, parsed_add_deps)
             
             dependency_updates[job_id] = {
                 'old_parents': existing_parents,

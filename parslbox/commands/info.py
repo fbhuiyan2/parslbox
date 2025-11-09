@@ -45,7 +45,7 @@ def info(
     sched_job_id: bool = typer.Option(False, "--sched-job-id", "-j", help="Show only the scheduler job ID field."),
     timestamp: bool = typer.Option(False, "--timestamp", "-ts", help="Show only the timestamp field."),
     env_file: bool = typer.Option(False, "--envfile", "-e", help="Show only the environment file field."),
-    parents: bool = typer.Option(False, "--parents", "-d", help="Show all parent dependencies without truncation."),
+    parents: bool = typer.Option(False, "--parents", "-P", help="Show all parent dependencies without truncation."),
 ):
     """
     Shows detailed information about specific jobs.

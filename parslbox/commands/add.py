@@ -54,8 +54,8 @@ def add(
         typer.Option("--envfile", "-e", help="Path to environment setup file (relative or absolute)."),
     ] = None,
     parents: Annotated[
-        Optional[List[int]],
-        typer.Option("--parents", "-d", help="Space-separated job IDs this job depends on"),
+        Optional[str],
+        typer.Option("--parents", "-P", help="Space-separated job IDs in quotes (e.g., '1 2 3')"),
     ] = None,
     parent_tag: Annotated[
         Optional[str],
@@ -212,7 +212,15 @@ def add(
             raise typer.Exit(code=1)
 
     # --- Handle parent dependencies ---
-    final_parents = parents or []
+    final_parents = []
+    
+    # Parse parents string if provided
+    if parents:
+        try:
+            final_parents = [int(x) for x in parents.split()]
+        except ValueError:
+            typer.secho("❌ Error: Invalid parent job IDs. Use space-separated integers in quotes.", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
     
     # Handle parent_tag conversion to parent IDs
     if parent_tag:
