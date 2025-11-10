@@ -217,12 +217,38 @@ echo "INFO: Resource assignment: {assignment_summary}"
 {command}
 """
     
-    def check_success(self, job_id: int, job_path: Path, db_path: Path) -> str:
+    def check_success(self, job_id: int, job_path: Path, db_path: Path, error_message: str = None) -> str:
         """
         Check if the job completed successfully and return final status.
         
-        Default implementation assumes success based on exit code.
+        Default implementation assumes success if no error_message is provided.
         Override this method for app-specific success checking.
+        
+        Args:
+            job_id (int): The job ID
+            job_path (Path): Path to the job directory
+            db_path (Path): Path to the database file
+            error_message (str, optional): Error message from fut.result() if any
+            
+        Returns:
+            str: Final job status ('Done', 'Failed', etc.)
+        """
+        logger = logging.getLogger(__name__)
+        
+        if error_message:
+            logger.warning(f"Job {job_id}: Execution error occurred: {error_message}")
+            logger.info(f"Job {job_id}: Default behavior - marking as Failed due to execution error.")
+            return "Failed"
+        else:
+            logger.info(f"Job {job_id}: Job completed without execution errors. Assuming success.")
+            return "Done"
+    
+    def postprocess(self, job_id: int, job_path: Path, db_path: Path) -> str:
+        """
+        Perform any post-processing after job completion.
+        
+        Default implementation does basic post-processing and returns 'Done'.
+        Override this method for app-specific post-processing.
         
         Args:
             job_id (int): The job ID
@@ -230,39 +256,14 @@ echo "INFO: Resource assignment: {assignment_summary}"
             db_path (Path): Path to the database file
             
         Returns:
-            str: Final job status ('Done', 'Failed', etc.)
+            str: Final job status after post-processing ('Done', 'Failed', etc.)
         """
-        from parslbox.helpers import database
         logger = logging.getLogger(__name__)
-        
-        logger.info(f"Job {job_id}: Job completed. Assuming success based on exit code.")
-        final_status = "Done"
-        
-        database.update_jobs(db_path, job_ids=[job_id], status=final_status)
-        logger.info(f"Job {job_id}: Final status set to '{final_status}'.")
-        
-        return final_status
-    
-    def postprocess(self, job_id: int, job_path: Path, db_path: Path):
-        """
-        Perform any post-processing after job completion.
-        
-        Default implementation sets status to 'Done'.
-        Override this method for app-specific post-processing.
-        
-        Args:
-            job_id (int): The job ID
-            job_path (Path): Path to the job directory
-            db_path (Path): Path to the database file
-        """
-        from parslbox.helpers import database
-        logger = logging.getLogger(__name__)
-        
         logger.info(f"Job {job_id}: Post-processing started.")
-        final_status = "Done"
         
-        database.update_jobs(db_path, job_ids=[job_id], status=final_status)
-        logger.info(f"Job {job_id}: Final status set to '{final_status}'.")
+        # Default post-processing - just return Done
+        logger.info(f"Job {job_id}: Post-processing completed successfully.")
+        return "Done"
     
     def _format_env_vars(self, env_vars: dict) -> str:
         """

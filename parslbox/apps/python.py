@@ -57,11 +57,36 @@ class PythonApp(AppBase):
         
         return ""
     
-    def check_success(self, job_id: int, job_path: Path, db_path: Path) -> str:
+    def check_success(self, job_id: int, job_path: Path, db_path: Path, error_message: str = None) -> str:
         """
         Check if Python job completed successfully.
         
-        For Python jobs, we assume success if the script exits with code 0.
+        Python-specific: Fails immediately if there was an execution error.
+        For Python jobs, execution errors typically indicate script failures.
+        
+        Args:
+            job_id (int): The job ID
+            job_path (Path): Path to the job directory
+            db_path (Path): Path to the database file
+            error_message (str, optional): Error message from fut.result()
+            
+        Returns:
+            str: Final job status ('Done' or 'Failed')
+        """
+        logger = logging.getLogger(__name__)
+        
+        if error_message:
+            logger.error(f"Job {job_id}: Python script execution failed: {error_message}")
+            return "Failed"
+        else:
+            logger.info(f"Job {job_id}: Python script completed successfully.")
+            return "Done"
+
+    def postprocess(self, job_id: int, job_path: Path, db_path: Path) -> str:
+        """
+        Post-processing for a Python job.
+        
+        Simple implementation that returns 'Done'.
         Users can implement their own success checking within their scripts.
         
         Args:
@@ -70,20 +95,11 @@ class PythonApp(AppBase):
             db_path (Path): Path to the database file
             
         Returns:
-            str: Final job status ('Done')
+            str: Status after post-processing ('Done')
         """
-        pass
-
-    def postprocess(self, job_id: int, job_path: Path, db_path: Path):
-        """
-        Post-processing for a Python job.
+        logger = logging.getLogger(__name__)
+        logger.info(f"Job {job_id}: Post-processing started.")
         
-        Simple implementation that assumes the job was successful if
-        the Parsl app future completed without an exception.
-        
-        Args:
-            job_id (int): The job ID
-            job_path (Path): Path to the job directory
-            db_path (Path): Path to the database file
-        """
-        pass
+        # No complex post-processing for Python jobs
+        logger.info(f"Job {job_id}: Post-processing completed.")
+        return "Done"

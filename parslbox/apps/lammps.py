@@ -54,11 +54,52 @@ class LammpsApp(AppBase):
         
         return f"{mpi_prefix} {mpi_opts_str} {mpi_extra_tags} {executable} {lammps_args}"
     
-    def check_success(self, job_id: int, job_path: Path, db_path: Path) -> str:
+    def check_success(self, job_id: int, job_path: Path, db_path: Path, error_message: str = None) -> str:
         """
         Check if LAMMPS job completed successfully.
         
-        LAMMPS-specific: Looks for "Total wall time:" in log.lammps file.
+        LAMMPS-specific: Ignores execution errors and looks for "Total wall time:" in log.lammps file.
+        LAMMPS can exit ungracefully even after a successful run.
+        
+        Args:
+            job_id (int): The job ID
+            job_path (Path): Path to the job directory
+            db_path (Path): Path to the database file
+            error_message (str, optional): Error message from fut.result() (ignored for LAMMPS)
+            
+        Returns:
+            str: Final job status ('Done' or 'Failed')
+        """
+        logger = logging.getLogger(__name__)
+        
+        # LAMMPS-specific: Ignore execution errors, check output files instead
+        if error_message:
+            logger.info(f"Job {job_id}: Execution error occurred but ignoring for LAMMPS: {error_message}")
+        
+        log_file = job_path / "log.lammps"
+        
+        if not log_file.is_file():
+            logger.warning(f"Job {job_id}: log.lammps not found. Marking as Failed.")
+            return "Failed"
+        
+        try:
+            with open(log_file, 'r') as f:
+                if "Total wall time:" in f.read():
+                    logger.info(f"Job {job_id}: Success marker found in log.lammps.")
+                    return "Done"
+                else:
+                    logger.warning(f"Job {job_id}: Success marker not found in log.lammps. Marking as Failed.")
+                    return "Failed"
+        except Exception as e:
+            logger.error(f"Job {job_id}: Error reading log.lammps: {e}")
+            return "Failed"
+    
+    def postprocess(self, job_id: int, job_path: Path, db_path: Path) -> str:
+        """
+        Post-processing for a LAMMPS job.
+        
+        Simple implementation that returns 'Done'.
+        The actual success checking is done in check_success().
         
         Args:
             job_id (int): The job ID
@@ -66,48 +107,11 @@ class LammpsApp(AppBase):
             db_path (Path): Path to the database file
             
         Returns:
-            str: Final job status ('Done' or 'Failed')
-        """
-        logger = logging.getLogger(__name__)
-        log_file = job_path / "log.lammps"
-        final_status = "Failed"  # Assume failure unless proven otherwise
-
-        if not log_file.is_file():
-            logger.warning(f"Job {job_id}: Post-processing failed. log.lammps not found.")
-        else:
-            try:
-                with open(log_file, 'r') as f:
-                    if "Total wall time:" in f.read():
-                        logger.info(f"Job {job_id}: Success marker found in log.lammps.")
-                        final_status = "Done"
-                    else:
-                        logger.warning(f"Job {job_id}: Finished but success marker not found in log.lammps.")
-            except Exception as e:
-                logger.error(f"Job {job_id}: Error reading log.lammps during post-processing: {e}")
-
-        # Update the database with the final determined status
-        database.update_jobs(db_path, job_ids=[job_id], status=final_status)
-        logger.info(f"Job {job_id}: Final status set to '{final_status}'.")
-
-        return final_status
-    
-    def postprocess(self, job_id: int, job_path: Path, db_path: Path):
-        """
-        Post-processing for a LAMMPS job.
-        
-        Simple implementation that sets status to 'Done'.
-        The actual success checking is done in check_success().
-        
-        Args:
-            job_id (int): The job ID
-            job_path (Path): Path to the job directory
-            db_path (Path): Path to the database file
+            str: Status after post-processing ('Done')
         """
         logger = logging.getLogger(__name__)
         logger.info(f"Job {job_id}: Post-processing started.")
-
-        # Since there's no complex post-processing, we assume success
-        final_status = "Done"
-
-        database.update_jobs(db_path, job_ids=[job_id], status=final_status)
-        logger.info(f"Job {job_id}: Final status set to '{final_status}'.")
+        
+        # No complex post-processing for LAMMPS
+        logger.info(f"Job {job_id}: Post-processing completed.")
+        return "Done"

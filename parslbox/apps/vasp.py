@@ -62,7 +62,7 @@ class VaspApp(AppBase):
         """
         return "export OMP_NUM_THREADS=1"
     
-    def check_success(self, job_id: int, job_path: Path, db_path: Path) -> str:
+    def check_success(self, job_id: int, job_path: Path, db_path: Path, error_message: str = None) -> str:
         """
         Check if VASP job completed successfully.
         
@@ -74,45 +74,38 @@ class VaspApp(AppBase):
             job_id (int): The job ID
             job_path (Path): Path to the job directory
             db_path (Path): Path to the database file
+            error_message (str, optional): Error message from fut.result()
             
         Returns:
-            str: Final job status ('Done')
+            str: Final job status ('Done' or 'Failed')
         """
+        logger = logging.getLogger(__name__)
+        
+        if error_message:
+            logger.warning(f"Job {job_id}: VASP execution error occurred: {error_message}")
+            logger.info(f"Job {job_id}: Marking as Failed due to execution error.")
+            return "Failed"
+        else:
+            logger.info(f"Job {job_id}: VASP job completed successfully based on exit code.")
+            return "Done"
 
-        '''logger = logging.getLogger(__name__)
-        logger.info(f"Job {job_id}: VASP job completed. Assuming success based on exit code.")
-        
-        # Since we don't have a specific output file to check for VASP jobs,
-        # we rely on the bash script's exit code (handled by Parsl)
-        final_status = "Done"
-        
-        database.update_jobs(db_path, job_ids=[job_id], status=final_status)
-        logger.info(f"Job {job_id}: Final status set to '{final_status}'.")
-        
-        return final_status'''
-        
-        pass
-
-    def postprocess(self, job_id: int, job_path: Path, db_path: Path):
+    def postprocess(self, job_id: int, job_path: Path, db_path: Path) -> str:
         """
         Post-processing for a VASP job.
 
-        Simple implementation that assumes the job was successful if
-        the Parsl app future completed without an exception.
+        Simple implementation that returns 'Done'.
         
         Args:
             job_id (int): The job ID
             job_path (Path): Path to the job directory
             db_path (Path): Path to the database file
+            
+        Returns:
+            str: Status after post-processing ('Done')
         """
-        
-        '''logger = logging.getLogger(__name__)
+        logger = logging.getLogger(__name__)
         logger.info(f"Job {job_id}: Basic post-processing started.")
 
-        # Since there's no complex check, we assume success and set status to 'Done'.
-        final_status = "Done"
-
-        database.update_jobs(db_path, job_ids=[job_id], status=final_status)
-        logger.info(f"Job {job_id}: Final status set to '{final_status}'.")'''
-
-        pass
+        # No complex post-processing for VASP
+        logger.info(f"Job {job_id}: Post-processing completed.")
+        return "Done"

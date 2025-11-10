@@ -17,8 +17,45 @@ from parslbox.helpers import database, path_utils
 from parslbox.resource_manager.mpi_launcher import compose_all_mpi_commands
 from parslbox.resource_manager.exceptions import InsufficientResources
 
-
 app = typer.Typer()
+
+# Valid job status values (stored in lowercase for comparison)
+VALID_JOB_STATUSES = ["ready", "done", "failed", "restart", "running", "submitted", "warning"]
+
+
+def validate_and_normalize_status(status: str, job_id: int = None) -> str:
+    """
+    Validate job status and return normalized (capitalized) version.
+    If invalid, return 'Warning' and log the issue.
+    
+    Args:
+        status: Status string to validate
+        job_id: Optional job ID for logging context
+        
+    Returns:
+        Normalized status string (capitalized)
+    """
+    logger = logging.getLogger(__name__)
+    
+    if not status or not isinstance(status, str):
+        if job_id:
+            logger.warning(f"Job {job_id}: Invalid status type '{type(status)}' with value '{status}'. Setting to 'Warning'.")
+        else:
+            logger.warning(f"Invalid status type '{type(status)}' with value '{status}'. Setting to 'Warning'.")
+        return "Warning"
+    
+    status_lower = status.lower().strip()
+    if status_lower in VALID_JOB_STATUSES:
+        return status_lower.capitalize()
+    else:
+        if job_id:
+            logger.warning(f"Job {job_id}: Invalid status '{status}' returned. Valid statuses are: {VALID_JOB_STATUSES}. Setting to 'Warning'.")
+        else:
+            logger.warning(f"Invalid status '{status}' provided. Valid statuses are: {VALID_JOB_STATUSES}. Setting to 'Warning'.")
+        return "Warning"
+
+
+
 
 
 def parse_parents(parents_str):
@@ -171,6 +208,10 @@ def get_default_run_dir() -> Path:
     date_str = now.strftime("%d%m%y")  # ddmmyy format
     dir_name = f"{time_str}_{date_str}"
     return Path.home() / ".parslbox" / "runs" / dir_name / "log.pbx"
+
+
+
+# Main command function
 
 @app.command()
 def run(
@@ -359,78 +400,96 @@ def run(
                 job_id = job['job_id']
                 job_path = Path(job['path'])
                 
+                # Capture execution result and any errors
+                error_message = None
                 try:
                     fut.result()  # Get result (may raise exception)
-                    job_status = app_instance.check_success(job_id=job_id, job_path=job_path, db_path=db_path)
-                    if job_status and job_status != 'Failed':
-                        database.update_jobs(db_path, job_ids=[job_id], status=job_status)
-                        logger.info(f"Job {job_id} execution finished. Running post-processing...")
-                        app_instance.postprocess(job_id=job_id, job_path=job_path, db_path=db_path)
-                    elif job_status == 'Failed':
-                        database.update_jobs(db_path, job_ids=[job_id], status="Failed")
+                    logger.info(f"Job {job_id}: Execution completed without errors.")
+                except Exception as e:
+                    error_message = str(e)
+                    logger.error(f"Job {job_id}: Execution error occurred: {error_message}")
                 
-                except Exception as e:      
-                    logger.error(f"Job {job_id} hit following error: {e}")
-                    # Sometimes apps can exit ungracefully even after a good run
-                    logger.info(f"Job {job_id} running success-check on the job...")
-                    job_status = app_instance.check_success(job_id=job_id, job_path=job_path, db_path=db_path)
-                    if job_status and job_status != 'Failed':
-                        database.update_jobs(db_path, job_ids=[job_id], status=job_status)
-                        logger.info(f"Job {job_id} completed successfully. Running post-processing...")
-                        app_instance.postprocess(job_id=job_id, job_path=job_path, db_path=db_path)
-                    elif job_status == 'Failed':
-                        logger.error(f"Job {job_id} Failed.")
-                        database.update_jobs(db_path, job_ids=[job_id], status="Failed")
+                # Always call check_success, let app decide based on error_message
+                job_status = app_instance.check_success(
+                    job_id=job_id, 
+                    job_path=job_path, 
+                    db_path=db_path,
+                    error_message=error_message
+                )
                 
-                finally:
-                    # Always free resources after job completion (success or failure)
+                # Validate and normalize the status from check_success
+                job_status = validate_and_normalize_status(job_status, job_id)
+                
+                # If job succeeded, run post-processing
+                if job_status == "Done":
+                    logger.info(f"Job {job_id}: Success check passed. Running post-processing...")
                     try:
-                        resource_manager.free_resources(job_id)
-                        logger.info(f"Job {job_id}: Freed allocated resources")
+                        final_status = app_instance.postprocess(job_id=job_id, job_path=job_path, db_path=db_path)
                         
-                        # Filter backlog by dependency satisfaction, then schedule
-                        try:
-                            dependency_ready_jobs = get_dependency_ready_jobs(resource_manager.backlog, db_path)
-                            
-                            # Schedule only dependency-ready jobs
-                            rescheduled_jobs = resource_manager.schedule_backlog(dependency_ready_jobs)
-                        except Exception as e:
-                            logger.error(f"Error during backlog scheduling: {e}")
-                            rescheduled_jobs = []
+                        # Validate and use postprocess result if it returns a valid status
+                        if final_status:
+                            validated_final_status = validate_and_normalize_status(final_status, job_id)
+                            job_status = validated_final_status
+                        # If postprocess returns None/empty, keep the check_success result
                         
-                        # Create Parsl futures for rescheduled jobs
-                        for rescheduled_job in rescheduled_jobs:
-                            rescheduled_app_name = rescheduled_job['app']
-                            rescheduled_job_id = rescheduled_job['job_id']
-                            
-                            if rescheduled_app_name in app_instances:
-                                logger.info(f"Creating Parsl future for rescheduled job {rescheduled_job_id}")
-                                new_futures = []
-                                success = create_parsl_future(
-                                    rescheduled_job, 
-                                    app_instances[rescheduled_app_name], 
-                                    app_configs[rescheduled_app_name],
-                                    config_name, db_path, scheduler, resource_manager, 
-                                    new_futures, system_config
-                                )
-                                
-                                # Add each new future to tracking dict
-                                for new_item in new_futures:
-                                    new_fut = new_item['future']
-                                    fut_to_item[new_fut] = new_item
-                                    logger.info(f"Added rescheduled job {rescheduled_job_id} to tracking (total active: {len(fut_to_item)})")
-                            else:
-                                logger.error(f"App context not found for rescheduled job {rescheduled_job_id}")
-                                database.update_jobs(db_path, job_ids=[rescheduled_job_id], status="Failed")
-                        
-                        # Log comprehensive status after rescheduling
-                        status = resource_manager.get_resource_status()
-                        dependency_ready_count = len(dependency_ready_jobs) if 'dependency_ready_jobs' in locals() else 0
-                        logger.info(f"Run Status: jobs running {len(fut_to_item)}, jobs backlogged {status['backlogged_jobs']}, dependency ready jobs {dependency_ready_count}")
-                        logger.info(f"Resource Status: Total {status['available_gpus']} GPUs and {status['available_cpu_capacity']:.1f} cores available on {status['available_nodes']} nodes")
-                                
                     except Exception as e:
-                        logger.error(f"Job {job_id}: Failed to free resources or schedule backlog: {e}")
+                        logger.error(f"Job {job_id}: Post-processing failed: {e}")
+                        job_status = "Failed"
+                else:
+                    logger.info(f"Job {job_id}: Success check failed. Skipping post-processing.")
+                
+                # Update database with final validated status
+                database.update_jobs(db_path, job_ids=[job_id], status=job_status)
+                logger.info(f"Job {job_id}: Final status set to '{job_status}'.")
+                
+                # Always free resources after job completion (success or failure)
+                try:
+                    resource_manager.free_resources(job_id)
+                    logger.info(f"Job {job_id}: Finished running. Freed allocated resources.")
+                    
+                    # Filter backlog by dependency satisfaction, then schedule
+                    try:
+                        dependency_ready_jobs = get_dependency_ready_jobs(resource_manager.backlog, db_path)
+                        
+                        # Schedule only dependency-ready jobs
+                        rescheduled_jobs = resource_manager.schedule_backlog(dependency_ready_jobs)
+                    except Exception as e:
+                        logger.error(f"Error during backlog scheduling: {e}")
+                        rescheduled_jobs = []
+                    
+                    # Create Parsl futures for rescheduled jobs
+                    for rescheduled_job in rescheduled_jobs:
+                        rescheduled_app_name = rescheduled_job['app']
+                        rescheduled_job_id = rescheduled_job['job_id']
+                        
+                        if rescheduled_app_name in app_instances:
+                            logger.info(f"Creating Parsl future for rescheduled job {rescheduled_job_id}")
+                            new_futures = []
+                            success = create_parsl_future(
+                                rescheduled_job, 
+                                app_instances[rescheduled_app_name], 
+                                app_configs[rescheduled_app_name],
+                                config_name, db_path, scheduler, resource_manager, 
+                                new_futures, system_config
+                            )
+                            
+                            # Add each new future to tracking dict
+                            for new_item in new_futures:
+                                new_fut = new_item['future']
+                                fut_to_item[new_fut] = new_item
+                                logger.info(f"Added rescheduled job {rescheduled_job_id} to tracking (total active: {len(fut_to_item)})")
+                        else:
+                            logger.error(f"App context not found for rescheduled job {rescheduled_job_id}")
+                            database.update_jobs(db_path, job_ids=[rescheduled_job_id], status="Failed")
+                    
+                    # Log comprehensive status after rescheduling
+                    status = resource_manager.get_resource_status()
+                    dependency_ready_count = len(dependency_ready_jobs) if 'dependency_ready_jobs' in locals() else 0
+                    logger.info(f"Run Status: jobs running {len(fut_to_item)}, jobs backlogged {status['backlogged_jobs']}, dependency ready jobs {dependency_ready_count}")
+                    logger.info(f"Resource Status: Total {status['available_gpus']} GPUs and {status['available_cpu_capacity']:.1f} cores available on {status['available_nodes']} nodes")
+                            
+                except Exception as e:
+                    logger.error(f"Job {job_id}: Failed to free resources or schedule backlog: {e}")
                 
                 # Break to refresh as_completed() with new futures
                 break
