@@ -1,340 +1,180 @@
 # ParslBox
 
-A powerful CLI workflow management tool for computational simulations built on top of [Parsl](https://parsl-project.org/). ParslBox simplifies the management and execution of high-performance computing (HPC) workflows, with built-in support for popular simulation codes like LAMMPS and VASP.
+Your autopilot for running HPC simulations. CLI orchestration built based on Parsl. Manage jobs for LAMMPS, VASP, and Python apps with resource‑aware scheduling, dependency tracking, and PBS submission.
 
-## Features
+Note on usage:
+- Users should submit via pbx qsub. The qsub command generates a submit.sh and submits it to the scheduler; submit.sh invokes pbx run under the hood.
+- pbx run is the engine used by qsub and is not intended to be called directly by users.
 
-- **Job Management**: Add, list, remove, update, and run computational simulation jobs
-- **Multi-Application Support**: Built-in support for LAMMPS and VASP simulations
-- **Database Tracking**: Persistent tracking of job status, metadata, and execution history
-- **HPC Integration**: Pre-configured support for major HPC systems (Polaris, Sophia)
-- **GPU-Aware Execution**: Intelligent GPU resource allocation and management
-- **Flexible Configuration**: YAML-based configuration for different compute environments
-- **Rich CLI Interface**: User-friendly command-line interface with colored output and tables
+## Highlights
+
+- Job lifecycle management with dependency support (parents, tags)
+- Multi-application plugins: lammps, vasp, python
+- Resource‑aware execution:
+  - Single‑node GPU jobs with explicit GPU assignment
+  - CPU‑only jobs via fractional node occupancy
+  - Multi‑node MPI jobs with exclusive node allocation
+- PBS integration via pbx qsub
+- Auto‑generated config template and run directories
+- Rich CLI output (tables, colors)
 
 ## Installation
 
-ParslBox uses [Poetry](https://python-poetry.org/) for dependency management. Create a Python virtual environment or a Conda envrironment (Python version >=3.11, <3.14) with Poetry installed.
+Requirements:
+- Python >= 3.11, < 3.14
+- Parsl >= 2025.9.8
 
-For a Conda envrironment, you can do:
-
+Using Conda + Poetry:
 ```bash
 conda create --name parslbox python=3.11.9
 conda activate parslbox
 pip install poetry
-```
 
-```bash
-# Clone the repository
+# Clone and install
 git clone https://github.com/fbhuiyan2/parslbox.git
 cd parslbox
-
-# Activate your Python virtual env or Conda env if you have not done so yet
-
-# Install dependencies
 poetry install
 
-# Check installation
+# First call initializes ~/.parslbox/config.yaml and the job database
 pbx ls
 ```
+
+On first run, a default config is created at ~/.parslbox/config.yaml. Edit this file to set correct executable paths, environment setup, and system settings before running jobs.
 
 ## Quick Start
 
-After installation, you can use the `pbx` command to manage your simulation workflows:
-
+Add jobs:
 ```bash
-# List all jobs
-pbx ls
+# Add a single LAMMPS job (requires system config name)
+pbx add /path/to/sim --app lammps --config polaris --ngpus 2 --tag run1
 
-# Add a new job, note the --path is the path to the directory where simulation or calculation files are present
-pbx add --app lammps --path /path/to/simulation --ngpus 2 --tag my-simulation
+# Add all subdirectories in current folder as VASP jobs
+pbx add all --app vasp --config polaris --tag ManyVaspCalc
 
-# If you have many calculations (like 100 VASP calculations) in sub-dirs inside a dir, then add all
-pbx add all -a vasp -n 1 -t ManyVaspCalc
-
-# Run ready jobs on Polaris
-pbx qsub \
-  --config polaris \
-  --job-name first_run \
-  --queue debug \
-  --select 1 \
-  --walltime 30 \
-  --project myproject \
-  --run-dir /path/to/custom/directory
-
-# pbx qsub command will create a submit.sh file in the run-dir and submit it to the queue
-# Inside the submit file, the qsub command runs the `pbx run` command
-pbx run --config polaris
-
-# Update job status
-pbx update 1 2 3 --status "Failed"
-
-# Remove completed jobs (using filter)
-pbx rm $(pbx filter --status done)
+# Add with explicit resources and dependencies
+pbx add /path/to/calc --app vasp --config polaris --nnodes 1 --nodealloc 0.5 \
+  --parents "10 11" --tag stage2
+# or wait for all jobs with a tag to finish
+pbx add /path/to/calc2 --app vasp --config polaris --parent-tag stage1
 ```
 
-## Commands
-
-### `pbx ls` - List Jobs
-Display all jobs in the database with filtering options:
-
+Submit via PBS:
 ```bash
-# List all jobs
-pbx ls
-
-# Filter by status
-pbx ls --status "Running"
-
-# Filter by application
-pbx ls --app "lammps"
-
-# Filter by tag
-pbx ls --tag "production"
-```
-
-### `pbx add` - Add Jobs
-Add new simulation jobs to the database:
-
-```bash
-# Add a LAMMPS job
-pbx add --app lammps --path /path/to/lammps/simulation --ngpus 4 --tag "md-simulation"
-
-# Add a VASP job
-pbx add --app vasp --path /path/to/vasp/calculation --ngpus 2 --tag "dft-calc"
-```
-
-### `pbx run` - Execute Jobs
-Run ready jobs on HPC systems:
-
-```bash
-# Run all ready jobs on Polaris
-pbx run --config polaris
-
-# Run with specific filters
-pbx run --config polaris --apps lammps --tags production
-```
-
-### `pbx update` - Update Jobs
-Modify job properties:
-
-```bash
-# Update job status
-pbx update 1 2 3 --status "Failed"
-
-# Update job tags
-pbx update 4 5 --tag "high-priority"
-
-# Update failed jobs to restart (using filter)
-pbx update $(pbx filter --status failed) --status "Ready"
-```
-
-### `pbx info` - Show Job Information
-Display detailed information about specific jobs:
-
-```bash
-# Show all information for specific jobs
-pbx info 1 2 7 12
-
-# Show only paths for specific jobs
-pbx info 1 2 --path
-
-# Show multiple fields (path and number of GPUs)
-pbx info 1 2 --path --ngpus
-
-# Show only status for specific jobs
-pbx info 5 --status
-
-# Available flags:
-# --path, -p: Show job paths
-# --ngpus, -n: Show number of GPUs
-# --app, -a: Show application type
-# --status, -s: Show job status
-# --tag, -t: Show job tags
-# --sched-job-id, -j: Show scheduler job ID
-# --timestamp, -ts: Show timestamps
-```
-
-### `pbx filter` - Filter Jobs
-Get job IDs matching specific criteria for use with other commands:
-
-```bash
-# Get IDs of all done jobs
-pbx filter --status done
-
-# Get IDs of LAMMPS jobs
-pbx filter --app lammps
-
-# Get IDs of jobs with specific tag
-pbx filter --tag production
-
-# Combine filters (AND logic)
-pbx filter --status failed --app vasp
-
-# Short flags
-pbx filter -s done -a lammps -t test
-```
-
-### `pbx rm` - Remove Jobs
-Remove jobs from the database:
-
-```bash
-# Remove completed jobs (using filter)
-pbx rm $(pbx filter --status done)
-
-# Remove specific jobs
-pbx rm 1 2 3
-
-# Remove all jobs
-pbx rm all
-
-# Remove jobs by tag (using filter)
-pbx rm $(pbx filter --tag test)
-
-# Remove failed LAMMPS jobs (using filter)
-pbx rm $(pbx filter --status failed --app lammps)
-```
-
-### `pbx qsub` - Submit PBS Jobs
-Generate and submit PBS job scripts for running parslbox workflows:
-
-```bash
-# Basic PBS job submission
 pbx qsub \
   --config sophia \
   --job-name myrun \
   --queue gpu \
   --select 2 \
   --walltime 90 \
-  --project myproject
-
-# With application and tag filters
-pbx qsub \
-  --config sophia \
-  --job-name lammps_production \
-  --queue gpu \
-  --select 4 \
-  --walltime 180 \
   --project myproject \
-  --apps lammps \
-  --tags production \
-  --filesystems home:eagle
-
-# With custom run directory
-pbx qsub \
-  --config sophia \
-  --job-name custom_run \
-  --queue gpu \
-  --select 1 \
-  --walltime 60 \
-  --project myproject \
-  --run-dir /path/to/custom/directory
+  --apps lammps --tags production
+# Creates a timestamped run dir with submit.sh and calls qsub.
+# submit.sh invokes: pbx run --config sophia [--apps ... --tags ... --retries ...]
 ```
 
-**Required Parameters:**
-- `--config, -c`: System configuration (e.g., 'sophia', 'polaris')
-- `--job-name, -N`: PBS job name
-- `--queue, -q`: PBS queue name  
-- `--select`: Number of nodes to request
-- `--walltime, -T`: Wall time in minutes (e.g., 90 for 1.5 hours)
-- `--project, -A`: Project/account name
+Inspect, filter, update, remove:
+```bash
+# List jobs (rich table)
+pbx ls
+pbx ls --status Running --app lammps --tag production
 
-**Optional Parameters:**
-- `--filesystems`: Comma-separated list of filesystems (e.g., 'home:eagle')
-- `--run-dir`: Custom run directory (default: timestamped directory)
-- `--apps, -a`: Comma-separated list of apps to run (e.g., 'lammps,vasp')
-- `--tags, -t`: Comma-separated list of tags to run (e.g., 'run1,run2')
-- `--retries`: Number of retries for failed tasks (default: 0)
+# Show fields per job
+pbx info 1 2 --path --ngpus --envfile --parents
 
-The command automatically:
-- Creates timestamped run directories when `--run-dir` is not specified
-- Converts walltime from minutes to HH:MM:SS format
-- Generates PBS submission script using scheduler templates
-- Submits the job with `qsub` and provides the Job ID
-- Integrates with existing `pbx run` command parameters
+# Get IDs via filters (use in command composition)
+pbx filter --status done --app vasp
+pbx filter -s failed -a lammps -t test -p /path/part -i input.lammps
+
+# Update fields and dependencies
+pbx update 4 5 --status Restart --tag high-priority
+pbx update 10 --nnodes 2          # multi-node
+pbx update 11 --nodealloc 0.25    # CPU-only fractional occupancy
+pbx update 12 --add_deps "8 9" --rm_deps "7"
+pbx update 13 --envfile ./env.sh
+
+# Remove jobs
+pbx rm 1 2 3
+pbx rm all
+pbx rm $(pbx filter --status done)
+```
+
+## Commands Overview
+
+- pbx add
+  - Arguments: paths (one or more directories, or 'all')
+  - Required: --app/-a, --config/-c
+  - Common options: --tag/-t, --input/-i, --ngpus/-g, --nnodes/-n, --nodealloc/-na, --mpiopts, --envfile/-e
+  - Dependencies: --parents/-P "1 2 3", --parent-tag
+  - Initial status: --status/-s (default Ready)
+
+- pbx qsub
+  - Required: --config/-c, --job-name/-N, --queue/-q, --select, --walltime/-T, --project/-A
+  - Optional: --filesystems, --run-dir, --apps/-a, --tags/-t, --retries
+  - Behavior: creates run dir, generates submit.sh from config template, runs qsub submit.sh
+
+- pbx ls
+  - Filters: --status/-s, --app/-a, --tag/-t
+  - Displays resources as n:{nodes}-g:{gpus|auto}-nocc:{fraction|NA}
+
+- pbx info
+  - Field selectors: --path/-p, --ngpus/-n, --app/-a, --status/-s, --tag/-t,
+    --input/-i, --sched-job-id/-j, --timestamp/-ts, --envfile/-e, --parents/-P
+
+- pbx filter
+  - Filters: --status/-s, --app/-a, --tag/-t, --path/-p, --in-file/-i
+  - Outputs space‑separated job IDs for command composition
+
+- pbx update
+  - Fields: --status, --app, --tag, --input/-i, --ngpus/-g, --envfile/-e,
+    --nnodes/-n, --nodealloc/-na
+  - Dependencies: --add_deps/--padd, --rm_deps/--parm
+
+- pbx rm
+  - Remove by explicit IDs, or pbx rm all (with confirmation)
+
+- pbx run (internal)
+  - Engine used by qsub; not intended for direct user invocation.
+  - Options (for completeness): --config/-c, --apps/-a, --tags/-t, --retries, --run-dir
 
 ## Configuration
 
-ParslBox uses YAML configuration files to define execution environments for different HPC systems. Configuration files are automatically created in your home directory under `.parslbox/`.
+- A template is created at ~/.parslbox/config.yaml on first run.
+- Edit system entries (e.g., polaris, sophia) and per‑app settings (environment setup, executable paths, MPI options).
+- See parslbox/configs/*.py for programmatic configs and examples used by the engine.
 
-### Supported Systems
+Data locations:
+- Database: ~/.parslbox/job_database.db
+- Runs: ~/.parslbox/runs/<timestamp>/
+- Config file: ~/.parslbox/config.yaml
 
-- **Polaris** (Argonne National Laboratory)
-- **Sophia** (Custom HPC configuration)
+## Resource Manager (summary)
 
-### Application Configuration
+- Single‑node GPU jobs: assign specific GPU IDs (e.g., 0,1) so multiple GPU jobs can share a node when capacity allows.
+- CPU‑only jobs: use --nodealloc to share a node fractionally (e.g., 0.25); multiple jobs can co‑reside up to occupancy 1.0.
+- Multi‑node jobs: require exclusive free nodes; MPI hostlist is generated.
+- Backlog and scheduling when resources are temporarily unavailable; dependency‑aware rescheduling after resources free up.
 
-Each supported application (LAMMPS, VASP) can be configured with:
+Details and examples: parslbox/resource_manager/README.md
 
-- Environment setup commands
-- MPI environment variables
-- Executable paths
-- System-specific optimizations
+## Job Lifecycle
 
-Example configuration structure:
-```yaml
-apps:
-  lammps:
-    environment_setup: |
-      module load lammps
-      export CUDA_VISIBLE_DEVICES=$SLURM_LOCALID
-    mpi_env: "-x CUDA_VISIBLE_DEVICES"
-    executable_path: "/path/to/lmp"
-  
-  vasp:
-    environment_setup: |
-      module load vasp
-    executable_path: "/path/to/vasp_gpu"
-```
+Statuses used across the system:
+- Ready → Restart → Submitted → Running → Done | Failed
+- Warning is used if an app returns an invalid/unknown status
 
-## Job Status Workflow
+## Supported Applications
 
-Jobs progress through the following states:
-
-1. **Ready** - Job added to database, ready for execution
-2. **Restart** - Job marked for re-execution
-3. **Submitted** - Job submitted to scheduler
-4. **Running** - Job currently executing on compute resources
-5. **Done** - Job completed successfully
-6. **Failed** - Job encountered an error during execution
-
-## Database Schema
-
-ParslBox maintains a SQLite database with the following job information:
-
-- **Job ID** - Unique identifier
-- **Application** - Simulation code (lammps, vasp)
-- **Status** - Current job state
-- **NGPUs** - Number of GPUs allocated
-- **Scheduler Job ID** - HPC scheduler job identifier
-- **Tag** - User-defined label for organization
-- **Timestamp** - Job creation time
-- **Path** - Simulation directory path
-
-## Requirements
-
-- Python ≥ 3.11, < 3.14
-- Parsl ≥ 2025.9.8
-- Additional scientific computing libraries (NumPy, Pandas, SciPy, etc.)
-
-## Dependencies
-
-ParslBox includes the following key dependencies:
-
-- **Parsl** - Parallel scripting library
-- **Typer** - CLI framework
-- **Rich** - Terminal formatting and tables
-- **PyYAML** - YAML configuration parsing
-- **Scientific Stack** - NumPy, Pandas, SciPy, scikit-learn
-- **Chemistry Tools** - RDKit, ASE, Pymatgen
+- lammps
+- vasp
+- python
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit issues, feature requests, or pull requests.
+Issues and PRs welcome at:
+- https://github.com/fbhuiyan2/parslbox/issues
 
 ## License
 
-[Add your license information here]
+Author and developer: Fakhrul Hasan Bhuiyan
 
-## Support
-
-For questions, issues, or feature requests, please [open an issue](link-to-issues) on the project repository.
+Copyright Argonne UChicago LLC, 2025. All rights reserved.
