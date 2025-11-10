@@ -1,10 +1,7 @@
 # ParslBox
 
-Your autopilot for running HPC simulations. CLI orchestration built based on Parsl. Manage jobs for LAMMPS, VASP, and Python apps with resource‑aware scheduling, dependency tracking, and PBS submission.
+Your autopilot for running HPC simulations. CLI orchestration built based on Parsl. Manage jobs for LAMMPS, VASP, and Python apps with resource‑aware scheduling, dependency tracking, and PBS submission. HPC configurations come out-of-the-box. Adding new apps and new HPC configurations is super simple.
 
-Note on usage:
-- Users should submit via pbx qsub. The qsub command generates a submit.sh and submits it to the scheduler; submit.sh invokes pbx run under the hood.
-- pbx run is the engine used by qsub and is not intended to be called directly by users.
 
 ## Highlights
 
@@ -99,6 +96,10 @@ pbx rm $(pbx filter --status done)
 ```
 
 ## Commands Overview
+
+Note on usage:
+- Users should submit via pbx qsub. The qsub command generates a submit.sh and submits it to the scheduler; submit.sh invokes pbx run under the hood.
+- pbx run is the engine used by qsub and is not intended to be called directly by users.
 
 - pbx add
   - Arguments: paths (one or more directories, or 'all')
