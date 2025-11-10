@@ -72,17 +72,7 @@ class PythonApp(AppBase):
         Returns:
             str: Final job status ('Done')
         """
-        logger = logging.getLogger(__name__)
-        logger.info(f"Job {job_id}: Python job completed. Assuming success based on exit code.")
-        
-        # Since we don't have a specific output file to check for Python jobs,
-        # we rely on the bash script's exit code (handled by Parsl)
-        final_status = "Done"
-        
-        database.update_jobs(db_path, job_ids=[job_id], status=final_status)
-        logger.info(f"Job {job_id}: Final status set to '{final_status}'.")
-        
-        return final_status
+        pass
 
     def postprocess(self, job_id: int, job_path: Path, db_path: Path):
         """
@@ -96,11 +86,4 @@ class PythonApp(AppBase):
             job_path (Path): Path to the job directory
             db_path (Path): Path to the database file
         """
-        logger = logging.getLogger(__name__)
-        logger.info(f"Job {job_id}: Python job post-processing started.")
-
-        # Since there's no complex check, we assume success and set status to 'Done'.
-        final_status = "Done"
-
-        database.update_jobs(db_path, job_ids=[job_id], status=final_status)
-        logger.info(f"Job {job_id}: Final status set to '{final_status}'.")
+        pass

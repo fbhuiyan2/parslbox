@@ -114,7 +114,9 @@ class AppBase(ABC):
             assignment_summary = assignment.get_summary()
             
             # Call the generic bash app with all parameters
-            return self._general_bash_app_engine(
+            # Note: _general_bash_app_engine is decorated with @bash_app, so it's a standalone function
+            return AppBase._general_bash_app_engine(
+                self,  # Pass self as first argument since it's still a method
                 job_id=job_id,
                 job_path=str(job_path),
                 db_path=str(db_path),

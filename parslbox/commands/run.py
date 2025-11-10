@@ -30,49 +30,42 @@ def parse_parents(parents_str):
     return [int(x) for x in json.loads(parents_str)]
 
 
-def are_parents_done(job, job_futures, db_path):
+def are_parents_done(job, db_path):
     """
     Check if job's parent dependencies are satisfied.
     
     Args:
         job: Job dictionary from database
-        job_futures: Dict of job_id -> future for currently running jobs
         db_path: Path to database file
     
     Returns:
-        (parents_done: bool, parent_futures: list)
+        bool: True if all parents are done, False otherwise
     """
     parents_str = job.get('parents')
     if not parents_str:
-        return True, []
+        return True
     
     parent_ids = parse_parents(parents_str)
-    parent_futures = []
     
     for parent_id in parent_ids:
-        if parent_id in job_futures:
-            # Parent in current run
-            parent_futures.append(job_futures[parent_id])
-        else:
-            # Parent not in current run - check if completed
-            parent_job = database.get_jobs_by_ids(db_path, [parent_id])
-            if not parent_job:
-                raise ValueError(f"Job {job['job_id']} has non-existent parent {parent_id}")
-            
-            if parent_job[0]['status'] != 'Done':
-                return False, []  # Can't submit yet
+        parent_job = database.get_jobs_by_ids(db_path, [parent_id])
+        if not parent_job:
+            raise ValueError(f"Job {job['job_id']} has non-existent parent {parent_id}")
+        
+        if parent_job[0]['status'] != 'Done':
+            return False  # Can't submit yet
     
-    return True, parent_futures
+    return True
 
 
-def get_dependency_ready_jobs(backlog_jobs, job_futures, db_path):
+def get_dependency_ready_jobs(backlog_jobs, db_path):
     """Filter jobs whose parents are done."""
     ready_jobs = []
     logger = logging.getLogger(__name__)
     
     for job in backlog_jobs:
         try:
-            parents_done, parent_futures = are_parents_done(job, job_futures, db_path)
+            parents_done = are_parents_done(job, db_path)
             if parents_done:
                 ready_jobs.append(job)
         except Exception as e:
@@ -291,7 +284,6 @@ def run(
     # First attempt to create futures. Jobs without resource assignment will be put in the backlogged queue
     # After this, futures will be created for backlogged jobs as resource becomes available
     futures = []
-    job_futures = {}  # job_id -> future mapping for dependency tracking
     
     for job in filtered_jobs:
         job_id = job['job_id']
@@ -305,7 +297,7 @@ def run(
         
         # Check dependencies first
         try:
-            parents_done, parent_futures = are_parents_done(job, job_futures, db_path)
+            parents_done = are_parents_done(job, db_path)
             
             if not parents_done:
                 logger.info(f"Job {job_id}: Parent dependencies not satisfied, adding to backlog")
@@ -328,9 +320,8 @@ def run(
                 config_name, db_path, scheduler, resource_manager, futures, system_config
             )
             
-            if success and futures:
-                # Track the future for dependency checking
-                job_futures[job_id] = futures[-1]['future']
+            # Future created successfully - no additional tracking needed
+            # Dependencies are now checked via database
             
         except InsufficientResources as e:
             # This is NOT an error - just temporary resource unavailability
@@ -399,7 +390,7 @@ def run(
                         
                         # Filter backlog by dependency satisfaction, then schedule
                         try:
-                            dependency_ready_jobs = get_dependency_ready_jobs(resource_manager.backlog, job_futures, db_path)
+                            dependency_ready_jobs = get_dependency_ready_jobs(resource_manager.backlog, db_path)
                             
                             # Schedule only dependency-ready jobs
                             rescheduled_jobs = resource_manager.schedule_backlog(dependency_ready_jobs)
@@ -427,7 +418,6 @@ def run(
                                 for new_item in new_futures:
                                     new_fut = new_item['future']
                                     fut_to_item[new_fut] = new_item
-                                    job_futures[rescheduled_job_id] = new_fut  # Track for dependencies
                                     logger.info(f"Added rescheduled job {rescheduled_job_id} to tracking (total active: {len(fut_to_item)})")
                             else:
                                 logger.error(f"App context not found for rescheduled job {rescheduled_job_id}")
@@ -441,6 +431,9 @@ def run(
                                 
                     except Exception as e:
                         logger.error(f"Job {job_id}: Failed to free resources or schedule backlog: {e}")
+                
+                # Break to refresh as_completed() with new futures
+                break
                         
         except TimeoutError:
             # No futures completed in timeout period, continue waiting
