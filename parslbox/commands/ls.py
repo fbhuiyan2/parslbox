@@ -1,5 +1,5 @@
 import typer
-from typing import Optional, List
+from typing import Optional, List, Tuple, Dict, Any
 from rich.console import Console
 from rich.table import Table
 
@@ -94,6 +94,51 @@ def format_job_id_with_parents(job_id: int, parents: List[int]) -> str:
         return f"{job_id} ({first_parents},...,{last_parent})"
 
 
+def select_jobs_to_display(job_list: List[Dict[str, Any]], all_jobs_flag: bool, n_flag: Optional[int]) -> Tuple[List[Any], List[str]]:
+    """
+    Select which jobs to display based on flags and return info messages.
+    Returns: (jobs_to_display, info_messages)
+    
+    The jobs_to_display list may contain job dictionaries or the string "SEPARATOR"
+    to indicate where to show "..." in the table.
+    """
+    total_jobs = len(job_list)
+    info_messages = []
+    
+    # Handle --all flag
+    if all_jobs_flag:
+        return job_list, info_messages
+    
+    # Handle -n flag
+    if n_flag is not None:
+        if n_flag == 0:
+            return job_list, info_messages
+        elif n_flag > 0:
+            if n_flag >= total_jobs:
+                info_messages.append(f"Found {total_jobs} jobs in the database")
+                return job_list, info_messages
+            else:
+                info_messages.append(f"Showing the first {n_flag} jobs")
+                return job_list[:n_flag], info_messages
+        else:  # negative n_flag
+            abs_n = abs(n_flag)
+            if abs_n >= total_jobs:
+                info_messages.append(f"Found {total_jobs} jobs in the database")
+                return job_list, info_messages
+            else:
+                info_messages.append(f"Showing the last {abs_n} jobs")
+                return job_list[-abs_n:], info_messages
+    
+    # Default behavior (no flags)
+    if total_jobs <= 25:
+        return job_list, info_messages
+    else:
+        # Show first 10 + last 10 with separator
+        first_10 = job_list[:10]
+        last_10 = job_list[-10:]
+        return first_10 + ["SEPARATOR"] + last_10, info_messages
+
+
 @app.command()
 def ls(
     status: Optional[str] = typer.Option(
@@ -105,49 +150,70 @@ def ls(
     tag: Optional[str] = typer.Option(
         None, "--tag", "-t", help="Filter jobs by tag."
     ),
+    all_jobs: bool = typer.Option(
+        False, "--all", help="Show all jobs regardless of count."
+    ),
+    n: Optional[int] = typer.Option(
+        None, "-n", help="Number of jobs to show. Negative for last N jobs, 0 for all."
+    ),
 ):
     """
-    Lists all jobs in the database.
+    Lists jobs in the database with various display options.
     """
+    # Check for conflicting flags
+    if all_jobs and n is not None:
+        console.print("[red]❌ Error: Cannot use both --all and -n flags together. Please use only one.[/red]")
+        raise typer.Exit(code=1)
+    
     job_list = database.get_jobs(path_utils.DB_FILE, status=status, app=app, tag=tag)
     
     if not job_list:
         console.print("[yellow]ℹ️ No jobs found in the database.[/yellow]")
-        #raise typer.Exit()
-    else:
-        console.print(f"[green]# of jobs in the database: {len(job_list)}[/green]")
+        return
+    
+    # Select which jobs to display based on flags
+    jobs_to_display, info_messages = select_jobs_to_display(job_list, all_jobs, n)
+    
+    # Print job count and any info messages
+    console.print(f"[green]# of jobs in the database: {len(job_list)}[/green]")
+    for message in info_messages:
+        console.print(f"[blue]ℹ️ {message}[/blue]")
 
-    # Add the new 'App', 'Tag', 'Input', and 'Resources' columns to the table header
+    # Create table
     table = Table("ID", "App", "Status", "Resources", "Sched Job ID", "Tag", "Input", "Timestamp", "Path")
     
-    for job in job_list:
-        # Generate resource display string
-        num_nodes = job.get('num_nodes', 1)
-        ngpus = job.get('ngpus', 0)
-        node_occupancy = job.get('node_occupancy', 1.0)
-        
-        if num_nodes > 1:
-            resources_display = f"n:{num_nodes}-g:auto-nocc:NA"
-        elif ngpus > 0:
-            resources_display = f"n:1-g:{ngpus}-nocc:NA"
+    for item in jobs_to_display:
+        if item == "SEPARATOR":
+            # Add separator row
+            table.add_row("...", "", "", "", "", "", "", "", "")
         else:
-            resources_display = f"n:1-g:0-nocc:{node_occupancy}"
-        
-        # Format job ID with parent dependencies
-        parents = parse_parents(job.get('parents'))
-        formatted_id = format_job_id_with_parents(job['job_id'], parents)
-        
-        table.add_row(
-            formatted_id,
-            job['app'],
-            job['status'],
-            resources_display,
-            truncate_sched_job_id(job['sched_job_id'] or "None"),
-            job['tag'] or "None",  # Display 'None' if tag is None
-            job['in_file'] or "None",  # Display 'None' if in_file is None
-            job['timestamp'],
-            truncate_path(job['path'])
-        )
+            job = item
+            # Generate resource display string
+            num_nodes = job.get('num_nodes', 1)
+            ngpus = job.get('ngpus', 0)
+            node_occupancy = job.get('node_occupancy', 1.0)
+            
+            if num_nodes > 1:
+                resources_display = f"n:{num_nodes}-g:auto-nocc:NA"
+            elif ngpus > 0:
+                resources_display = f"n:1-g:{ngpus}-nocc:NA"
+            else:
+                resources_display = f"n:1-g:0-nocc:{node_occupancy}"
+            
+            # Format job ID with parent dependencies
+            parents = parse_parents(job.get('parents'))
+            formatted_id = format_job_id_with_parents(job['job_id'], parents)
+            
+            table.add_row(
+                formatted_id,
+                job['app'],
+                job['status'],
+                resources_display,
+                truncate_sched_job_id(job['sched_job_id'] or "None"),
+                job['tag'] or "None",  # Display 'None' if tag is None
+                job['in_file'] or "None",  # Display 'None' if in_file is None
+                job['timestamp'],
+                truncate_path(job['path'])
+            )
     
     console.print(table)
-    #console.print(f"[green]Found {len(job_list)} job(s).[/green]")
