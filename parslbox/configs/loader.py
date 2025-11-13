@@ -5,11 +5,13 @@ from parslbox.configs.base import SystemConfig
 # Import the system configuration classes
 from parslbox.configs.polaris import PolarisConfig
 from parslbox.configs.sophia import SophiaConfig
+from parslbox.configs.crux import CruxConfig
 
 # Create a dictionary that maps the config name to its configuration class
 CONFIG_FACTORIES = {
     "polaris": PolarisConfig,
     "sophia": SophiaConfig,
+    "crux": CruxConfig,
     # To add a new system, create its module and add it here.
 }
 
