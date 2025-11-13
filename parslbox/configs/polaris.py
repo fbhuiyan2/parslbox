@@ -18,10 +18,12 @@ class PolarisConfig(SystemConfig):
     """
     
     # System specifications
-    CORES_PER_NODE = 32
+    CORES_PER_NODE = 64 #32 --> 64 with hyperthreading
     GPUS_PER_NODE = 4
     SCHEDULER = "PBS"
     MPI_CMD_TO_USE = "mpiexec"
+    MAX_WORKERS_PER_NODE = 4
+    WORKER_CPU_AFFINITY = "list:24-31,56-63:16-23,48-55:8-15,40-47:0-7,32-39"
     
     def detect_resources(self) -> tuple[int, int]:
         """
@@ -66,7 +68,7 @@ class PolarisConfig(SystemConfig):
         nodes, total_gpus = self.detect_resources()
         
         # Calculate how many physical cores each worker (mapped to a GPU) gets
-        cores_per_worker = self.CORES_PER_NODE // self.GPUS_PER_NODE
+        cores_per_worker = self.CORES_PER_NODE // self.MAX_WORKERS_PER_NODE
 
         return Config(
             executors=[
@@ -77,14 +79,12 @@ class PolarisConfig(SystemConfig):
                     worker_debug=True,
                     # Tell the executor how many total GPUs are available
                     available_accelerators=total_gpus,
-                    # One worker per GPU on each node
-                    max_workers_per_node=self.GPUS_PER_NODE,
+                    # Use the configurable max workers per node
+                    max_workers_per_node=self.MAX_WORKERS_PER_NODE,
                     # Assign a balanced number of cores to each worker
                     cores_per_worker=cores_per_worker,
-                    # This CPU affinity string is optimized for Polaris's architecture,
-                    # ensuring each worker's threads are bound to cores physically
-                    # close to the GPU it's managing.
-                    cpu_affinity="list:24-31,56-63:16-23,48-55:8-15,40-47:0-7,32-39",
+                    # Use the configurable CPU affinity for Parsl workers
+                    cpu_affinity=self.WORKER_CPU_AFFINITY,
                     prefetch_capacity=0,  # Recommended for GPU workloads
                     provider=LocalProvider(
                         init_blocks=1,
@@ -96,13 +96,3 @@ class PolarisConfig(SystemConfig):
             run_dir=str(run_dir), # run_dir must be a string
             retries=retries,
         )
-
-
-# Backward compatibility: create instance and expose original function
-_polaris_config = PolarisConfig()
-
-def get_config(run_dir: Path, retries: int = 0) -> Config:
-    """
-    Backward compatibility function for the original get_config interface.
-    """
-    return _polaris_config.get_config(run_dir, retries)

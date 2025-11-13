@@ -23,6 +23,8 @@ class SophiaConfig(SystemConfig):
     GPUS_PER_NODE = 8
     SCHEDULER = "PBS"
     MPI_CMD_TO_USE = "mpirun"
+    MAX_WORKERS_PER_NODE = 8
+    WORKER_CPU_AFFINITY = None  
     
     def detect_resources(self) -> tuple[int, int]:
         """
@@ -85,7 +87,7 @@ class SophiaConfig(SystemConfig):
             nodes = 1
         
         detected_gpus_per_node = total_gpus // nodes
-        cores_per_worker = self.CORES_PER_NODE // detected_gpus_per_node
+        cores_per_worker = self.CORES_PER_NODE // self.MAX_WORKERS_PER_NODE
 
         return Config(
             executors=[
@@ -95,8 +97,9 @@ class SophiaConfig(SystemConfig):
                     heartbeat_threshold=120,
                     worker_debug=True,
                     available_accelerators=total_gpus,
-                    max_workers_per_node=detected_gpus_per_node,
+                    max_workers_per_node=self.MAX_WORKERS_PER_NODE,
                     cores_per_worker=cores_per_worker,
+                    cpu_affinity=self.WORKER_CPU_AFFINITY,
                     prefetch_capacity=0,
                     provider=LocalProvider(
                         init_blocks=1,
@@ -108,13 +111,3 @@ class SophiaConfig(SystemConfig):
             run_dir=str(run_dir),
             retries=retries,
         )
-
-
-# Backward compatibility: create instance and expose original function
-_sophia_config = SophiaConfig()
-
-def get_config(run_dir: Path, retries: int = 0) -> Config:
-    """
-    Backward compatibility function for the original get_config interface.
-    """
-    return _sophia_config.get_config(run_dir, retries)

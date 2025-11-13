@@ -10,6 +10,7 @@ from typing import List, Dict, Optional, TYPE_CHECKING
 
 from .models import NodeResource, JobResourceSpec, NodeAssignment, create_job_resource_spec
 from .exceptions import InsufficientResources, JobNotFound, InvalidResourceSpec
+from .cpu_affinity import CPUAffinityManager
 
 if TYPE_CHECKING:
     from parslbox.configs.base import SystemConfig
@@ -41,6 +42,12 @@ class ResourceManager:
         self.nodes: List[NodeResource] = []
         self.job_assignments: Dict[int, NodeAssignment] = {}
         self._backlogged_jobs_set: set = set()  # Track job IDs in backlog
+        
+        # Initialize CPU affinity manager
+        self.cpu_affinity_manager = CPUAffinityManager(
+            system_config.WORKER_CPU_AFFINITY,
+            system_config.CORES_PER_NODE
+        )
         
         # Initialize nodes from system configuration
         self._initialize_nodes()
@@ -227,7 +234,7 @@ class ResourceManager:
         for node in self.nodes:
             if node.can_fit_gpu_job(spec.ngpus) and node.can_fit_cpu_cores(num_cores_needed):
                 assigned_gpus = node.assign_gpu_job(spec.job_id, spec.ngpus)
-                assigned_cores = node.assign_cpu_cores(spec.job_id, num_cores_needed)
+                assigned_cores = node.assign_cpu_cores_with_affinity(spec.job_id, num_cores_needed, self.cpu_affinity_manager)
                 
                 return NodeAssignment(
                     job_id=spec.job_id,
@@ -255,7 +262,7 @@ class ResourceManager:
         # Find a node with enough CPU cores
         for node in self.nodes:
             if node.can_fit_cpu_cores(num_cores_needed):
-                assigned_cores = node.assign_cpu_cores(spec.job_id, num_cores_needed)
+                assigned_cores = node.assign_cpu_cores_with_affinity(spec.job_id, num_cores_needed, self.cpu_affinity_manager)
                 
                 return NodeAssignment(
                     job_id=spec.job_id,
