@@ -8,7 +8,7 @@ and generating Parsl configurations.
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 from parsl.config import Config
 
 if TYPE_CHECKING:
@@ -28,6 +28,8 @@ class SystemConfig(ABC):
     GPUS_PER_NODE: int
     SCHEDULER: str
     MPI_CMD_TO_USE: str
+    MAX_WORKERS_PER_NODE: int
+    WORKER_CPU_AFFINITY: Optional[str] = None
     
     @abstractmethod
     def detect_resources(self) -> tuple[int, int]:
