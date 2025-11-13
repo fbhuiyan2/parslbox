@@ -303,7 +303,8 @@ def add(
             typer.secho(f"✅ Added job '{path}' with ID {new_id}{input_info}{parent_info}", fg=typer.colors.GREEN)
             success_count += 1
         except sqlite3.IntegrityError:
-            typer.secho(f"⚠️  Skipped: Job path '{path}' already exists in the database.", fg=typer.colors.YELLOW)
+            input_display = f"input file '{final_input_file}'" if final_input_file else "no input file"
+            typer.secho(f"⚠️  Skipped: Job with path '{path}' and {input_display} already exists in the database.", fg=typer.colors.YELLOW)
             fail_count += 1
 
     typer.echo("---") # Separator

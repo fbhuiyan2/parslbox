@@ -3,13 +3,14 @@ import typer
 import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional
+from .database_migrate import needs_migration, migrate_database, save_current_db_schema
 
 # Updated schema with individual resource columns, env_file support, and parent dependencies
 CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS jobs (
     job_id INTEGER PRIMARY KEY,
     app TEXT NOT NULL,
-    path TEXT NOT NULL UNIQUE,
+    path TEXT NOT NULL,
     status TEXT NOT NULL,
     num_nodes INTEGER DEFAULT 1,
     ngpus INTEGER DEFAULT 0,
@@ -20,7 +21,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     mpi_opts TEXT,
     env_file TEXT,
     parents TEXT,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(path, in_file)
 );
 """
 
@@ -111,41 +113,6 @@ def get_current_schema(db_path: Path) -> Dict[str, str]:
         # Table doesn't exist yet
         return {}
 
-def migrate_database(db_path: Path):
-    """
-    Automatically migrate database to match expected schema.
-    Compares current schema with expected schema and adds missing columns.
-    """
-    # Skip migration if database doesn't exist yet
-    if not db_path.exists():
-        return
-    
-    try:
-        expected_schema = get_expected_schema()
-        current_schema = get_current_schema(db_path)
-        
-        # Find missing columns
-        missing_columns = set(expected_schema.keys()) - set(current_schema.keys())
-        
-        if missing_columns:
-            typer.secho(f"🔄 Migrating database schema...", fg=typer.colors.BLUE)
-            
-            with sqlite3.connect(db_path) as con:
-                cur = con.cursor()
-                for column in sorted(missing_columns):  # Sort for consistent order
-                    column_type = expected_schema[column]
-                    try:
-                        cur.execute(f"ALTER TABLE jobs ADD COLUMN {column} {column_type}")
-                        typer.secho(f"✅ Added column: {column} {column_type}", fg=typer.colors.GREEN)
-                    except sqlite3.OperationalError as e:
-                        typer.secho(f"⚠️  Warning: Could not add column {column}: {e}", fg=typer.colors.YELLOW)
-            
-            typer.secho(f"🎉 Database migration completed!", fg=typer.colors.GREEN)
-        
-    except Exception as e:
-        typer.secho(f"⚠️  Warning: Database migration failed: {e}", fg=typer.colors.YELLOW)
-        typer.secho("Database will continue to work, but some features may not be available.", fg=typer.colors.YELLOW)
-
 def initialize_database(db_path: Path):
     """
     Ensures the database directory and file exist, creating them if necessary.
@@ -160,14 +127,21 @@ def initialize_database(db_path: Path):
         raise typer.Exit(code=1)
     
     try:
-        # Run migration first (for existing databases)
-        migrate_database(db_path)
+        schema_file_path = db_path.parent / "current_db_schema.yaml"
         
-        # Create table and trigger (for new databases or if migration didn't cover everything)
+        # Check if migration is needed
+        if needs_migration(schema_file_path, CREATE_TABLE_SQL, CREATE_TRIGGER_SQL):
+            migrate_database(db_path, CREATE_TABLE_SQL, CREATE_TRIGGER_SQL)
+        
+        # Create/update database
         with sqlite3.connect(db_path) as con:
             cur = con.cursor()
             cur.execute(CREATE_TABLE_SQL)
             cur.execute(CREATE_TRIGGER_SQL)
+        
+        # Always update schema file after successful initialization
+        save_current_db_schema(schema_file_path, CREATE_TABLE_SQL, CREATE_TRIGGER_SQL)
+        
     except sqlite3.OperationalError as e:
         typer.secho(f"❌ A database error occurred: {e}", fg=typer.colors.RED, err=True)
         typer.secho(f"Failed to open or initialize the database at: {db_path}", fg=typer.colors.YELLOW, err=True)
@@ -175,6 +149,9 @@ def initialize_database(db_path: Path):
 
 def add_job(db_path: Path, path: str, app: str, num_nodes: int, ngpus: int, node_occupancy: float, tag: Optional[str], in_file: Optional[str] = None, mpi_opts: Optional[str] = None, env_file: Optional[str] = None, parents: Optional[List[int]] = None, status: str = 'Ready') -> int:
     """Adds a new job to the database with app, tag, input file info, resource specification, MPI options, environment file, and parent dependencies."""
+    
+    # Convert None to empty string for in_file to ensure consistent UNIQUE constraint behavior
+    in_file_value = in_file if in_file is not None else ""
     
     # Convert parent list to JSON string
     parents_str = None
@@ -186,7 +163,7 @@ def add_job(db_path: Path, path: str, app: str, num_nodes: int, ngpus: int, node
         cur = con.cursor()
         cur.execute(
             "INSERT INTO jobs (path, app, tag, in_file, mpi_opts, env_file, parents, status, num_nodes, ngpus, node_occupancy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (path, app, tag, in_file, mpi_opts, env_file, parents_str, status, num_nodes, ngpus, node_occupancy)
+            (path, app, tag, in_file_value, mpi_opts, env_file, parents_str, status, num_nodes, ngpus, node_occupancy)
         )
         return cur.lastrowid
 

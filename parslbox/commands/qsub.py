@@ -107,7 +107,7 @@ def qsub(
     
     # Get system-specific python environment setup
     system_config = config[config_name]
-    python_env_setup = system_config.get('python_env_setup', '')
+    pbx_python_env_setup = system_config.get('pbx_python_env_setup', '')
     
     # Determine run directory
     if run_dir is None:
@@ -139,7 +139,7 @@ def qsub(
         'walltime': walltime_formatted,
         'filesystems': filesystems or '',
         'project': project,
-        'python_env_setup': python_env_setup,
+        'pbx_python_env_setup': pbx_python_env_setup,
         'config': config_name,
         'run_dir': './', #str(run_dir.resolve()),  # Use absolute path for the run directory
         'run_options': run_options_str

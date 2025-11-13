@@ -177,8 +177,8 @@ def create_parsl_future(job, app_instance, app_config, config_name, db_path, sch
             in_file=job['in_file'],
             mpi_opts=job['mpi_opts'],
             env_file=job.get('env_file'),
-            stdout=(str(job_path / "pbx.out"), 'w'),
-            stderr=(str(job_path / "pbx.out"), 'a')
+            stdout=(str(job_path / f"pbx_job_{job_id}.out"), 'w'),
+            stderr=(str(job_path / f"pbx_job_{job_id}.out"), 'a')
         )
         
         # Add to futures list

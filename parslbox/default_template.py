@@ -31,7 +31,7 @@ schedulers:
       echo "Job ID: $PBS_JOBID"
       echo "Job Name: $PBS_JOBNAME"
       
-      {python_env_setup}
+      {pbx_python_env_setup}
       
       pbx run --config {config} --run-dir {run_dir} {run_options}
 
@@ -52,18 +52,18 @@ schedulers:
       echo "Job ID: $SLURM_JOB_ID"
       echo "Job Name: $SLURM_JOB_NAME"
       
-      {python_env_setup}
+      {pbx_python_env_setup}
       
       pbx run --config {config} --run-dir {run_dir} {run_options}
 
 # System-specific configurations
 sophia:
-  python_env_setup: |
+  pbx_python_env_setup: |
     module load conda
     conda activate parslbox
 
 polaris:
-  python_env_setup: |
+  pbx_python_env_setup: |
     module load conda
     conda activate parslbox
 
