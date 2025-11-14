@@ -2,6 +2,7 @@ import sqlite3
 import yaml
 import typer
 from pathlib import Path
+
 from datetime import datetime
 from typing import Dict, Optional
 
@@ -18,20 +19,6 @@ def get_current_db_schema(schema_file_path: Path) -> Dict[str, str]:
         typer.secho(f"⚠️  Warning: Could not read schema file: {e}", fg=typer.colors.YELLOW)
         return {}
 
-
-def save_current_db_schema(schema_file_path: Path, create_table_sql: str, create_trigger_sql: str):
-    """Save current schema to YAML file"""
-    schema_data = {
-        'create_table_sql': create_table_sql.strip(),
-        'create_trigger_sql': create_trigger_sql.strip(),
-        'last_updated': datetime.now().isoformat()
-    }
-    
-    try:
-        with open(schema_file_path, 'w') as f:
-            yaml.dump(schema_data, f, default_flow_style=False)
-    except Exception as e:
-        typer.secho(f"⚠️  Warning: Could not save schema file: {e}", fg=typer.colors.YELLOW)
 
 
 def needs_migration(schema_file_path: Path, current_create_table: str, current_create_trigger: str) -> bool:
