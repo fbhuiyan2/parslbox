@@ -40,9 +40,13 @@ def update(
         Optional[int],
         typer.Option("--nnodes", "-n", help="Update the number of nodes required for the job(s).")
     ] = None,
-    nodealloc: Annotated[
+    node_occupancy: Annotated[
         Optional[float],
-        typer.Option("--nodealloc", "-na", help="Update the node allocation fraction for CPU-only jobs (0.0-1.0).")
+        typer.Option("--nocc", "-o", help="Update the node occupancy fraction for CPU-only jobs (0.0-1.0).")
+    ] = None,
+    ranks_per_node: Annotated[
+        Optional[int],
+        typer.Option("--ranks-per-node", "-rpn", help="Update the number of MPI ranks per node. For CPU jobs only; ignored for GPU jobs.")
     ] = None,
     add_deps: Annotated[
         Optional[str],
@@ -57,7 +61,7 @@ def update(
     Updates one or more fields for a given set of jobs.
     """
     # Validate that at least one update option was provided
-    if all(opt is None for opt in [status, app, tag, input_file, ngpus, env_file, nnodes, nodealloc, add_deps, rm_deps]):
+    if all(opt is None for opt in [status, app, tag, input_file, ngpus, env_file, nnodes, node_occupancy, ranks_per_node, add_deps, rm_deps]):
         typer.secho("❌ Error: You must provide at least one field to update.", fg=typer.colors.RED)
         typer.echo("Example: pbx update 1 --status Submitted")
         typer.echo("         pbx update 1 --add_deps 2 3 --rm_deps 4")
@@ -88,33 +92,38 @@ def update(
         typer.secho(f"❌ Error: --nnodes must be at least 1, got {nnodes}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
-    # Validate nodealloc parameter
-    if nodealloc is not None and not (0.0 < nodealloc <= 1.0):
-        typer.secho(f"❌ Error: --nodealloc must be between 0.0 and 1.0", fg=typer.colors.RED)
+    # Validate node occupancy parameter
+    if node_occupancy is not None and not (0.0 < node_occupancy <= 1.0):
+        typer.secho(f"❌ Error: --nocc must be between 0.0 and 1.0", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
-    # Handle nodealloc vs ngpus conflict
+    # Validate ranks_per_node parameter
+    if ranks_per_node is not None and ranks_per_node < 1:
+        typer.secho(f"❌ Error: --ranks-per-node must be a positive integer, got {ranks_per_node}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    # Handle node occupancy vs ngpus conflict
     final_ngpus = ngpus
-    final_node_occupancy = nodealloc
+    final_node_occupancy = node_occupancy
     
-    if nodealloc is not None:
+    if node_occupancy is not None:
         # Check if any of the jobs currently have ngpus > 0
         jobs = database.get_jobs_by_ids(path_utils.DB_FILE, job_ids)
         jobs_with_gpus = [job for job in jobs if job.get('ngpus', 0) > 0]
         
         if jobs_with_gpus:
             job_ids_with_gpus = [str(job['job_id']) for job in jobs_with_gpus]
-            typer.secho(f"⚠️  Warning: Setting node allocation will set ngpus to 0 for jobs: {', '.join(job_ids_with_gpus)}", fg=typer.colors.YELLOW)
-            typer.secho("Node allocation is for CPU-only jobs.", fg=typer.colors.YELLOW)
+            typer.secho(f"⚠️  Warning: Setting node occupancy will set ngpus to 0 for jobs: {', '.join(job_ids_with_gpus)}", fg=typer.colors.YELLOW)
+            typer.secho("Node occupancy is for CPU-only jobs.", fg=typer.colors.YELLOW)
             
             proceed = typer.confirm("Do you want to proceed and set ngpus=0 for these jobs?")
             if not proceed:
                 typer.secho("❌ Update cancelled.", fg=typer.colors.RED)
                 raise typer.Exit(code=1)
             
-            # Set ngpus to 0 when nodealloc is specified
+            # Set ngpus to 0 when node occupancy is specified
             final_ngpus = 0
-            typer.secho("Setting ngpus=0 for CPU-only jobs with node allocation", fg=typer.colors.GREEN)
+            typer.secho("Setting ngpus=0 for CPU-only jobs with node occupancy", fg=typer.colors.GREEN)
 
     # Handle dependency management first before other flags
     final_parents = None
@@ -220,7 +229,7 @@ def update(
             typer.secho("✅ Dependencies updated successfully.", fg=typer.colors.GREEN)
 
     # Update other fields (non-dependency fields)
-    non_dependency_updates = any(opt is not None for opt in [status, app, tag, input_file, final_ngpus, final_env_file, nnodes, final_node_occupancy])
+    non_dependency_updates = any(opt is not None for opt in [status, app, tag, input_file, final_ngpus, final_env_file, nnodes, final_node_occupancy, ranks_per_node])
     
     if non_dependency_updates:
         count = database.update_jobs(
@@ -233,7 +242,8 @@ def update(
             ngpus=final_ngpus,
             env_file=final_env_file,
             num_nodes=nnodes,
-            node_occupancy=final_node_occupancy
+            node_occupancy=final_node_occupancy,
+            ranks_per_node=ranks_per_node
         )
         
         if count > 0:

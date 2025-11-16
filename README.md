@@ -49,7 +49,7 @@ pbx add /path/to/sim --app lammps --config polaris --ngpus 2 --tag run1
 pbx add all --app vasp --config polaris --tag ManyVaspCalc
 
 # Add with explicit resources and dependencies
-pbx add /path/to/calc --app vasp --config polaris --nnodes 1 --nodealloc 0.5 \
+pbx add /path/to/calc --app vasp --config polaris --nnodes 1 --nocc 0.5 \
   --parents "10 11" --tag stage2
 # or wait for all jobs with a tag to finish
 pbx add /path/to/calc2 --app vasp --config polaris --parent-tag stage1
@@ -85,7 +85,7 @@ pbx filter -s failed -a lammps -t test -p /path/part -i input.lammps
 # Update fields and dependencies
 pbx update 4 5 --status Restart --tag high-priority
 pbx update 10 --nnodes 2          # multi-node
-pbx update 11 --nodealloc 0.25    # CPU-only fractional occupancy
+pbx update 11 --nocc 0.25    # CPU-only fractional occupancy
 pbx update 12 --add_deps "8 9" --rm_deps "7"
 pbx update 13 --envfile ./env.sh
 
@@ -104,7 +104,7 @@ Note on usage:
 - pbx add
   - Arguments: paths (one or more directories, or 'all')
   - Required: --app/-a, --config/-c
-  - Common options: --tag/-t, --input/-i, --ngpus/-g, --nnodes/-n, --nodealloc/-na, --mpiopts, --envfile/-e
+  - Common options: --tag/-t, --input/-i, --ngpus/-g, --nnodes/-n, --nocc/-o, --mpiopts, --envfile/-e
   - Dependencies: --parents/-P "1 2 3", --parent-tag
   - Initial status: --status/-s (default Ready)
 
@@ -127,7 +127,7 @@ Note on usage:
 
 - pbx update
   - Fields: --status, --app, --tag, --input/-i, --ngpus/-g, --envfile/-e,
-    --nnodes/-n, --nodealloc/-na
+    --nnodes/-n, --nocc/-o
   - Dependencies: --add_deps/--padd, --rm_deps/--parm
 
 - pbx rm
@@ -151,7 +151,7 @@ Data locations:
 ## Resource Manager (summary)
 
 - Single‑node GPU jobs: assign specific GPU IDs (e.g., 0,1) so multiple GPU jobs can share a node when capacity allows.
-- CPU‑only jobs: use --nodealloc to share a node fractionally (e.g., 0.25); multiple jobs can co‑reside up to occupancy 1.0.
+- CPU‑only jobs: use --nocc to share a node fractionally (e.g., 0.25); multiple jobs can co‑reside up to occupancy 1.0.
 - Multi‑node jobs: require exclusive free nodes; MPI hostlist is generated.
 - Backlog and scheduling when resources are temporarily unavailable; dependency‑aware rescheduling after resources free up.
 

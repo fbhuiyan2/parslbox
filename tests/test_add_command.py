@@ -100,7 +100,7 @@ class TestAddCommand:
             result = runner.invoke(add_app, [
                 str(temp_job_dirs["job1"]),
                 "--app", "python",
-                "--nodealloc", "0.5",
+                "--nocc", "0.5",
                 "--tag", "test-cpu"
             ])
             
@@ -135,12 +135,12 @@ class TestAddCommand:
                 "--app", "lammps",
                 "--nnodes", "2",
                 "--ngpus", "4",  # Should be ignored
-                "--nodealloc", "0.5"  # Should be ignored
+                "--nocc", "0.5"  # Should be ignored
             ])
             
             assert result.exit_code == 0
             assert "✅ Added job" in result.stdout
-            assert "⚠️  Warning: Ignoring --ngpus 4 and --nodealloc 0.5 for multi-node job" in result.stdout
+            assert "⚠️  Warning: Ignoring --ngpus 4 and --nocc 0.5 for multi-node job" in result.stdout
             assert "Resource specification: n:2-g:auto-nocc:NA" in result.stdout
             assert "Multi-node job will use 8 total GPUs (4 per node)" in result.stdout
             
@@ -171,11 +171,11 @@ class TestAddCommand:
                     str(temp_job_dirs["job1"]),
                     "--app", "python",
                     "--ngpus", "2",
-                    "--nodealloc", "0.5"
+                    "--nocc", "0.5"
                 ])
                 
                 assert result.exit_code == 0
-                assert "⚠️  Warning: Both --ngpus and --nodealloc specified" in result.stdout
+                assert "⚠️  Warning: Both --ngpus and --nocc specified" in result.stdout
                 assert "Setting ngpus=0 for CPU-only job" in result.stdout
                 assert "Resource specification: n:1-g:0-nocc:0.5" in result.stdout
     
@@ -200,8 +200,8 @@ class TestAddCommand:
             assert result.exit_code == 1
             assert "❌ Error: Requested 8 GPUs but only 4 available per node" in result.stdout
     
-    def test_invalid_nodealloc(self, temp_db, temp_job_dirs, mock_system_config):
-        """Test validation of node allocation range."""
+    def test_invalid_nocc(self, temp_db, temp_job_dirs, mock_system_config):
+        """Test validation of node occupancy range."""
         runner = CliRunner()
         
         with patch('parslbox.commands.add.path_utils.DB_FILE', temp_db), \
@@ -215,11 +215,11 @@ class TestAddCommand:
             result = runner.invoke(add_app, [
                 str(temp_job_dirs["job1"]),
                 "--app", "python",
-                "--nodealloc", "1.5"  # Invalid range
+                "--nocc", "1.5"  # Invalid range
             ])
             
             assert result.exit_code == 1
-            assert "❌ Error: --nodealloc must be between 0.0 and 1.0" in result.stdout
+            assert "❌ Error: --nocc must be between 0.0 and 1.0" in result.stdout
     
     def test_invalid_nnodes(self, temp_db, temp_job_dirs, mock_system_config):
         """Test validation of node count."""

@@ -41,9 +41,13 @@ def add(
         int,
         typer.Option("--nnodes", "-n", help="Number of nodes required for the job(s)."),
     ] = 1,
-    nodealloc: Annotated[
+    node_occupancy: Annotated[
         Optional[float],
-        typer.Option("--nodealloc", "-na", help="Node allocation fraction for CPU-only jobs (0.0-1.0)."),
+        typer.Option("--nocc", "-o", help="Node occupancy fraction for CPU-only jobs (0.0-1.0)."),
+    ] = None,
+    ranks_per_node: Annotated[
+        Optional[int],
+        typer.Option("--ranks-per-node", "-rpn", help="Number of MPI ranks per node. For CPU jobs only; ignored for GPU jobs. If not specified, defaults to cores_per_node * node_occupancy."),
     ] = None,
     mpi_opts: Annotated[
         Optional[str],
@@ -110,10 +114,19 @@ def add(
         raise typer.Exit(code=1)
 
     # --- Validate resource parameters and generate resource string ---
-    # Validate nodealloc range
-    if nodealloc is not None and not (0.0 < nodealloc <= 1.0):
-        typer.secho(f"❌ Error: --nodealloc must be between 0.0 and 1.0", fg=typer.colors.RED)
+    # Validate node occupancy range
+    if node_occupancy is not None and not (0.0 < node_occupancy <= 1.0):
+        typer.secho(f"❌ Error: --nocc must be between 0.0 and 1.0", fg=typer.colors.RED)
         raise typer.Exit(code=1)
+    
+    # Validate ranks_per_node if specified
+    if ranks_per_node is not None and ranks_per_node < 1:
+        typer.secho(f"❌ Error: --ranks-per-node must be a positive integer, got {ranks_per_node}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    
+    # Warn if ranks_per_node is specified for GPU jobs
+    if ngpus > 0 and ranks_per_node is not None and ranks_per_node != 1:
+        typer.secho("⚠️  Warning: --ranks-per-node is ignored for GPU jobs (1 rank per GPU)", fg=typer.colors.YELLOW)
     
     # Validate nnodes
     if nnodes < 1:
@@ -130,13 +143,13 @@ def add(
     
     # Determine final resource parameters
     if nnodes > 1:
-        # Multi-node job: ignore ngpus and nodealloc
-        if ngpus > 0 or nodealloc is not None:
+        # Multi-node job: ignore ngpus and node occupancy
+        if ngpus > 0 or node_occupancy is not None:
             ignored_flags = []
             if ngpus > 0:
                 ignored_flags.append(f"--ngpus {ngpus}")
-            if nodealloc is not None:
-                ignored_flags.append(f"--nodealloc {nodealloc}")
+            if node_occupancy is not None:
+                ignored_flags.append(f"--nocc {node_occupancy}")
             typer.secho(f"⚠️  Warning: Ignoring {' and '.join(ignored_flags)} for multi-node job", fg=typer.colors.YELLOW)
         
         # Multi-node jobs: set parameters
@@ -146,10 +159,10 @@ def add(
         typer.secho(f"ℹ️  Multi-node job will use {nnodes * gpus_per_node} total GPUs ({gpus_per_node} per node)", fg=typer.colors.BLUE)
     else:
         # Single-node job: check for conflicting parameters
-        if ngpus > 0 and nodealloc is not None:
-            typer.secho("⚠️  Warning: Both --ngpus and --nodealloc specified.", fg=typer.colors.YELLOW)
+        if ngpus > 0 and node_occupancy is not None:
+            typer.secho("⚠️  Warning: Both --ngpus and --nocc specified.", fg=typer.colors.YELLOW)
             typer.secho(f"--ngpus {ngpus} suggests GPU job", fg=typer.colors.BLUE)
-            typer.secho(f"--nodealloc {nodealloc} suggests CPU job with {nodealloc} node occupancy", fg=typer.colors.BLUE)
+            typer.secho(f"--nocc {node_occupancy} suggests CPU job with {node_occupancy} node occupancy", fg=typer.colors.BLUE)
             
             use_gpus = typer.confirm("Do you want to use GPUs for this job?")
             if not use_gpus:
@@ -169,15 +182,40 @@ def add(
             # Single-node CPU-only job
             final_num_nodes = 1
             final_ngpus = 0
-            final_node_occupancy = nodealloc if nodealloc is not None else 1.0
+            final_node_occupancy = node_occupancy if node_occupancy is not None else 1.0
+    
+    # Calculate smart default for ranks_per_node if not specified
+    if ranks_per_node is None:
+        if final_ngpus > 0:
+            # GPU jobs: 1 rank per GPU
+            final_ranks_per_node = 1
+        else:
+            # CPU jobs: calculate based on cores_per_node * node_occupancy
+            calculated_ranks = int(system_config.CORES_PER_NODE * final_node_occupancy)
+            final_ranks_per_node = max(1, calculated_ranks)  # Ensure at least 1
+            typer.secho(f"ℹ️  Using smart default: ranks_per_node = {final_ranks_per_node} (cores_per_node={system_config.CORES_PER_NODE} * node_occupancy={final_node_occupancy})", fg=typer.colors.BLUE)
+    else:
+        # User specified ranks_per_node
+        if final_ngpus > 0:
+            # GPU jobs: force to 1 regardless of user input (ranks_per_node is ignored)
+            final_ranks_per_node = 1
+        else:
+            # CPU jobs: use user-specified value
+            final_ranks_per_node = ranks_per_node
+    
+    # Calculate total ranks for display
+    if final_ngpus > 0:
+        total_ranks = final_num_nodes * final_ngpus
+    else:
+        total_ranks = final_num_nodes * final_ranks_per_node
     
     # Display resource specification for user
     if final_num_nodes > 1:
-        display_str = f"n:{final_num_nodes}-g:auto-nocc:NA"
+        display_str = f"n:{final_num_nodes}-r:{total_ranks}-g:auto-nocc:NA"
     elif final_ngpus > 0:
-        display_str = f"n:1-g:{final_ngpus}-nocc:NA"
+        display_str = f"n:1-r:{total_ranks}-g:{final_ngpus}-nocc:NA"
     else:
-        display_str = f"n:1-g:0-nocc:{final_node_occupancy}"
+        display_str = f"n:1-r:{total_ranks}-g:0-nocc:{final_node_occupancy}"
     
     typer.secho(f"ℹ️  Resource specification: {display_str}", fg=typer.colors.BLUE)
 
@@ -291,6 +329,7 @@ def add(
                 num_nodes=final_num_nodes,
                 ngpus=final_ngpus,
                 node_occupancy=final_node_occupancy,
+                ranks_per_node=final_ranks_per_node,
                 tag=tag,
                 in_file=final_input_file,
                 mpi_opts=mpi_opts,

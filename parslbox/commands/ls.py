@@ -192,13 +192,20 @@ def ls(
             num_nodes = job.get('num_nodes', 1)
             ngpus = job.get('ngpus', 0)
             node_occupancy = job.get('node_occupancy', 1.0)
+            ranks_per_node = job.get('ranks_per_node', 1)
+            
+            # Calculate total ranks
+            if ngpus > 0:
+                total_ranks = num_nodes * ngpus
+            else:
+                total_ranks = num_nodes * ranks_per_node
             
             if num_nodes > 1:
-                resources_display = f"n:{num_nodes}-g:auto-nocc:NA"
+                resources_display = f"n:{num_nodes}-r:{total_ranks}-g:auto-nocc:NA"
             elif ngpus > 0:
-                resources_display = f"n:1-g:{ngpus}-nocc:NA"
+                resources_display = f"n:1-r:{total_ranks}-g:{ngpus}-nocc:NA"
             else:
-                resources_display = f"n:1-g:0-nocc:{node_occupancy}"
+                resources_display = f"n:1-r:{total_ranks}-g:0-nocc:{node_occupancy}"
             
             # Format job ID with parent dependencies
             parents = parse_parents(job.get('parents'))

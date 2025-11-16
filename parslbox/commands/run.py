@@ -16,6 +16,7 @@ from parslbox.helpers.config_utils import load_app_config, is_app_configured
 from parslbox.helpers import database, path_utils
 from parslbox.resource_manager.mpi_launcher import compose_all_mpi_commands
 from parslbox.resource_manager.exceptions import InsufficientResources
+from parslbox.resource_manager.models import create_job_resource_spec
 
 app = typer.Typer()
 
@@ -140,8 +141,11 @@ def create_parsl_future(job, app_instance, app_config, config_name, db_path, sch
         if not assignment:
             raise ValueError(f"No resource assignment found for job {job_id}")
         
+        # Create JobResourceSpec from job data
+        job_spec = create_job_resource_spec(job)
+        
         # Generate MPI commands
-        mpi_commands = compose_all_mpi_commands(assignment, system_config, assignment.node_occupancy)
+        mpi_commands = compose_all_mpi_commands(assignment, system_config, job_spec)
         logger.info(f"Job {job_id}: Generated MPI command - {mpi_commands.get('PBX_MPI_PREFIX', 'None')}")
         
         # Run preprocessing

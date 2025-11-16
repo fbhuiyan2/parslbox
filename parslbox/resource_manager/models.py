@@ -29,7 +29,8 @@ def create_job_resource_spec(job_data: dict) -> 'JobResourceSpec':
         job_id=job_data['job_id'],
         num_nodes=job_data.get('num_nodes', 1),
         ngpus=job_data.get('ngpus', 0),
-        node_occupancy=job_data.get('node_occupancy', 1.0)
+        node_occupancy=job_data.get('node_occupancy', 1.0),
+        ranks_per_node=job_data.get('ranks_per_node', 1)
     )
 
 
@@ -282,6 +283,7 @@ class JobResourceSpec:
     num_nodes: int = 1
     ngpus: int = 0  # Total GPUs needed (only relevant for single-node jobs)
     node_occupancy: float = 1.0  # For CPU-only jobs, fraction of node to use
+    ranks_per_node: int = 1  # MPI ranks per node (for CPU jobs)
     
     def __post_init__(self):
         """Validate the resource specification."""
@@ -306,6 +308,15 @@ class JobResourceSpec:
     def is_multinode_job(self) -> bool:
         """Check if this is a multi-node job."""
         return self.num_nodes > 1
+    
+    def get_total_ranks(self) -> int:
+        """Calculate total number of MPI ranks for this job."""
+        if self.is_gpu_job():
+            # GPU jobs: 1 rank per GPU
+            return self.num_nodes * self.ngpus
+        else:
+            # CPU jobs: use ranks_per_node
+            return self.num_nodes * self.ranks_per_node
     
     def get_summary(self) -> str:
         """Get a human-readable summary of the resource spec."""

@@ -38,6 +38,7 @@ def get_column_default(column_name: str):
         'num_nodes': 1,
         'ngpus': 0,
         'node_occupancy': 1.0,
+        'ranks_per_node': 1,
         'in_file': '',
         'mpi_opts': None,
         'env_file': None,

@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     num_nodes INTEGER DEFAULT 1,
     ngpus INTEGER DEFAULT 0,
     node_occupancy REAL DEFAULT 1.0,
+    ranks_per_node INTEGER DEFAULT 1,
     sched_job_id TEXT,
     tag TEXT,
     in_file TEXT,
@@ -90,7 +91,7 @@ def initialize_database(db_path: Path):
         typer.secho(f"Failed to open or initialize the database at: {db_path}", fg=typer.colors.YELLOW, err=True)
         raise typer.Exit(code=1)
 
-def add_job(db_path: Path, path: str, app: str, num_nodes: int, ngpus: int, node_occupancy: float, tag: Optional[str], in_file: Optional[str] = None, mpi_opts: Optional[str] = None, env_file: Optional[str] = None, parents: Optional[List[int]] = None, status: str = 'Ready') -> int:
+def add_job(db_path: Path, path: str, app: str, num_nodes: int, ngpus: int, node_occupancy: float, tag: Optional[str], in_file: Optional[str] = None, mpi_opts: Optional[str] = None, env_file: Optional[str] = None, parents: Optional[List[int]] = None, ranks_per_node: int = 1, status: str = 'Ready') -> int:
     """Adds a new job to the database with app, tag, input file info, resource specification, MPI options, environment file, and parent dependencies."""
     
     # Convert None to empty string for in_file to ensure consistent UNIQUE constraint behavior
@@ -105,8 +106,8 @@ def add_job(db_path: Path, path: str, app: str, num_nodes: int, ngpus: int, node
     with sqlite3.connect(db_path) as con:
         cur = con.cursor()
         cur.execute(
-            "INSERT INTO jobs (path, app, tag, in_file, mpi_opts, env_file, parents, status, num_nodes, ngpus, node_occupancy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (path, app, tag, in_file_value, mpi_opts, env_file, parents_str, status, num_nodes, ngpus, node_occupancy)
+            "INSERT INTO jobs (path, app, tag, in_file, mpi_opts, env_file, parents, status, num_nodes, ngpus, node_occupancy, ranks_per_node) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (path, app, tag, in_file_value, mpi_opts, env_file, parents_str, status, num_nodes, ngpus, node_occupancy, ranks_per_node)
         )
         return cur.lastrowid
 
@@ -285,6 +286,7 @@ def update_jobs(
     num_nodes: Optional[int] = None,
     ngpus: Optional[int] = None,
     node_occupancy: Optional[float] = None,
+    ranks_per_node: Optional[int] = None,
     in_file: Optional[str] = None,
     mpi_opts: Optional[str] = None,
     env_file: Optional[str] = None,
@@ -323,6 +325,10 @@ def update_jobs(
     if node_occupancy is not None:
         set_clauses.append("node_occupancy = ?")
         params.append(node_occupancy)
+
+    if ranks_per_node is not None:
+        set_clauses.append("ranks_per_node = ?")
+        params.append(ranks_per_node)
 
     if sched_job_id is not None:
         set_clauses.append("sched_job_id = ?")
