@@ -69,6 +69,8 @@ class PolarisConfig(SystemConfig):
         
         # Calculate how many physical cores each worker (mapped to a GPU) gets
         cores_per_worker = self.CORES_PER_NODE // self.MAX_WORKERS_PER_NODE
+        max_workers_per_node=self.MAX_WORKERS_PER_NODE*nodes    # Because LocalProvider does not launch workers on compute nodes.
+                                                                # It only launches workers on the first node where the Parsl manager is running.
 
         return Config(
             executors=[
@@ -80,11 +82,11 @@ class PolarisConfig(SystemConfig):
                     # Tell the executor how many total GPUs are available
                     available_accelerators=total_gpus,
                     # Use the configurable max workers per node
-                    max_workers_per_node=self.MAX_WORKERS_PER_NODE,
+                    max_workers_per_node=max_workers_per_node,
                     # Assign a balanced number of cores to each worker
                     cores_per_worker=cores_per_worker,
                     # Use the configurable CPU affinity for Parsl workers
-                    cpu_affinity=self.WORKER_CPU_AFFINITY,
+                    #cpu_affinity=self.WORKER_CPU_AFFINITY,
                     prefetch_capacity=0,  # Recommended for GPU workloads
                     provider=LocalProvider(
                         init_blocks=1,

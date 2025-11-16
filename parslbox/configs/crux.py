@@ -77,6 +77,8 @@ class CruxConfig(SystemConfig):
         # For CPU-only workloads, we can use multiple workers per node
         # Since there are 8 NUMA domains - Although PBX resource_manager does not implement NUMA domains
         cores_per_worker = self.CORES_PER_NODE // self.MAX_WORKERS_PER_NODE  # 32 cores per worker
+        max_workers_per_node=self.MAX_WORKERS_PER_NODE*nodes    # Because LocalProvider does not launch workers on compute nodes.
+                                                                # It only launches workers on the first node where the Parsl manager is running.
 
         return Config(
             executors=[
@@ -88,11 +90,11 @@ class CruxConfig(SystemConfig):
                     # No GPUs available on Crux
                     available_accelerators=0,
                     # Use configurable max workers per node
-                    max_workers_per_node=self.MAX_WORKERS_PER_NODE,
+                    max_workers_per_node=max_workers_per_node,
                     # 32 cores per worker (one NUMA domain worth)
                     cores_per_worker=cores_per_worker,
                     # Use configurable CPU affinity for Parsl workers
-                    cpu_affinity=self.WORKER_CPU_AFFINITY,
+                    #cpu_affinity=self.WORKER_CPU_AFFINITY,
                     prefetch_capacity=1,  # Good for CPU workloads
                     provider=LocalProvider(
                         init_blocks=1,

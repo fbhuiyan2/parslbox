@@ -88,6 +88,8 @@ class SophiaConfig(SystemConfig):
         
         detected_gpus_per_node = total_gpus // nodes
         cores_per_worker = self.CORES_PER_NODE // self.MAX_WORKERS_PER_NODE
+        max_workers_per_node=self.MAX_WORKERS_PER_NODE*nodes    # Because LocalProvider does not launch workers on compute nodes.
+                                                                # It only launches workers on the first node where the Parsl manager is running.
 
         return Config(
             executors=[
@@ -97,9 +99,9 @@ class SophiaConfig(SystemConfig):
                     heartbeat_threshold=120,
                     worker_debug=True,
                     available_accelerators=total_gpus,
-                    max_workers_per_node=self.MAX_WORKERS_PER_NODE,
+                    max_workers_per_node=max_workers_per_node,
                     cores_per_worker=cores_per_worker,
-                    cpu_affinity=self.WORKER_CPU_AFFINITY,
+                    #cpu_affinity=self.WORKER_CPU_AFFINITY,
                     prefetch_capacity=0,
                     provider=LocalProvider(
                         init_blocks=1,
