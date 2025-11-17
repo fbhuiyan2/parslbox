@@ -6,10 +6,43 @@ for intelligent CPU core assignment based on system-specific affinity groups.
 """
 
 import logging
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 import re
 
 logger = logging.getLogger(__name__)
+
+
+def parse_worker_cpu_affinity_to_gpu_map(affinity_string: Optional[str]) -> Dict[int, str]:
+    """
+    Parse WORKER_CPU_AFFINITY string into GPU-to-CPU mapping.
+    
+    Args:
+        affinity_string: String like "list:24-31,56-63:16-23,48-55:8-15,40-47:0-7,32-39"
+        
+    Returns:
+        Dict mapping GPU ID to CPU core range string: {0: "24-31,56-63", 1: "16-23,48-55", ...}
+    """
+    if not affinity_string:
+        return {}
+    
+    try:
+        # Remove "list:" prefix if present
+        if affinity_string.startswith("list:"):
+            affinity_string = affinity_string[5:]
+        
+        # Split into groups by ":"
+        group_strings = affinity_string.split(":")
+        gpu_cpu_map = {}
+        
+        for gpu_id, group_str in enumerate(group_strings):
+            if group_str.strip():
+                gpu_cpu_map[gpu_id] = group_str.strip()
+        
+        return gpu_cpu_map
+        
+    except Exception as e:
+        logger.warning(f"Failed to parse GPU-CPU affinity mapping '{affinity_string}': {e}")
+        return {}
 
 
 class CPUAffinityManager:
@@ -158,6 +191,30 @@ class CPUAffinityManager:
         
         # Return what we could assign (may be fewer than requested if not enough available)
         return preferred_cores
+    
+    def get_cores_for_gpu(self, gpu_id: int, available_cores: List[int]) -> List[int]:
+        """
+        Get CPU cores that have affinity with a specific GPU.
+        
+        Args:
+            gpu_id: GPU ID to get affinity cores for
+            available_cores: List of currently available core IDs
+            
+        Returns:
+            List of core IDs that have affinity with the GPU (may be empty if none available)
+        """
+        if not self.has_affinity or gpu_id >= len(self.affinity_groups):
+            # No affinity configured or GPU ID out of range
+            return []
+        
+        # Get the affinity group for this GPU
+        gpu_affinity_cores = self.affinity_groups[gpu_id]
+        available_set = set(available_cores)
+        
+        # Find cores from this GPU's affinity group that are available
+        affinity_available = [core for core in gpu_affinity_cores if core in available_set]
+        
+        return affinity_available
     
     def get_cores_for_occupancy(self, occupancy: float, available_cores: List[int]) -> List[int]:
         """

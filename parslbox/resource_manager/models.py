@@ -61,16 +61,21 @@ class NodeResource:
         if not self.available_core_ids and self.total_cores > 0:
             self.available_core_ids = list(range(self.total_cores))
     
-    def can_fit_gpu_job(self, num_gpus: int) -> bool:
-        """Check if this node can accommodate a GPU job."""
-        return len(self.available_gpu_ids) >= num_gpus
+    def can_fit_gpu_job(self, num_gpus: int, cores_per_gpu: int = None) -> bool:
+        """Check if this node can accommodate a GPU job with optional CPU requirements."""
+        gpu_available = len(self.available_gpu_ids) >= num_gpus
+        if cores_per_gpu is not None:
+            total_cores_needed = num_gpus * cores_per_gpu
+            cpu_available = len(self.available_core_ids) >= total_cores_needed
+            return gpu_available and cpu_available
+        return gpu_available
     
     def can_fit_cpu_cores(self, num_cores: int) -> bool:
         """Check if this node can accommodate a job requiring specific CPU cores."""
         return len(self.available_core_ids) >= num_cores
     
-    def can_fit_multinode_job(self) -> bool:
-        """Check if this node is completely free for multi-node job."""
+    def is_completely_free(self) -> bool:
+        """Check if this node is completely free for full-node job."""
         return len(self.assigned_jobs) == 0 and self.cpu_occupancy == 0.0
     
     def _update_cpu_occupancy(self) -> None:
@@ -88,40 +93,97 @@ class NodeResource:
             used_cores = self.total_cores - len(self.available_core_ids)
             self.cpu_occupancy = used_cores / self.total_cores
     
-    def assign_gpu_job(self, job_id: int, num_gpus: int) -> List[int]:
+    def assign_gpu_job(self, job_id: int, num_gpus: int, cores_per_gpu: int = None, affinity_manager: 'CPUAffinityManager' = None):
         """
-        Assign GPUs to a job and return the assigned GPU IDs.
+        Assign GPUs and CPU cores to a job with affinity preference.
+        
+        Key assumptions:
+        - Each GPU rank gets exactly cores_per_gpu CPU cores
+        - Affinity is preferred but not required (falls back to any available cores)
+        - GPU-CPU affinity groups are non-overlapping in well-designed HPC systems
+        - cores_per_gpu = CORES_PER_NODE // GPUS_PER_NODE for balanced allocation
+        - Sequential assignment: GPU 0 gets affinity cores first, then GPU 1, etc.
         
         Args:
             job_id: The job ID to assign resources to
             num_gpus: Number of GPUs to assign
+            cores_per_gpu: Number of CPU cores per GPU (if None, only assigns GPUs)
+            affinity_manager: CPU affinity manager for intelligent core selection
             
         Returns:
-            List of assigned GPU IDs
+            If cores_per_gpu is None: List of assigned GPU IDs
+            If cores_per_gpu is provided: Tuple of (assigned_gpu_ids, assigned_cpu_cores_per_rank)
             
         Raises:
-            ValueError: If not enough GPUs are available
+            ValueError: If not enough GPUs or CPU cores are available
         """
-        if not self.can_fit_gpu_job(num_gpus):
-            raise ValueError(f"Cannot assign {num_gpus} GPUs to node {self.node_id}")
+        # Check if we can fit the job (including CPU requirements if specified)
+        if not self.can_fit_gpu_job(num_gpus, cores_per_gpu):
+            gpu_msg = f"Cannot assign {num_gpus} GPUs"
+            if cores_per_gpu is not None:
+                cpu_msg = f" and {num_gpus * cores_per_gpu} CPU cores"
+                raise ValueError(f"{gpu_msg}{cpu_msg} to node {self.node_id}")
+            else:
+                raise ValueError(f"{gpu_msg} to node {self.node_id}")
         
         # Assign the first N available GPUs
         assigned_gpus = self.available_gpu_ids[:num_gpus]
         self.available_gpu_ids = self.available_gpu_ids[num_gpus:]
         
-        # Track the assignment for this job
+        # Track GPU assignment for this job
         self.job_gpu_assignments[job_id] = assigned_gpus
         
         if job_id not in self.assigned_jobs:
             self.assigned_jobs.append(job_id)
         
         logger.debug(f"Assigned GPUs {assigned_gpus} to job {job_id} on node {self.node_id}")
-        return assigned_gpus
+        
+        # If no CPU assignment needed, return just GPU IDs
+        if cores_per_gpu is None:
+            return assigned_gpus
+        
+        # Assign CPU cores for each GPU with affinity preference
+        cpu_assignments = []
+        for gpu_id in assigned_gpus:
+            # Try affinity cores first if affinity manager is provided
+            if affinity_manager and affinity_manager.has_affinity:
+                affinity_cores = affinity_manager.get_cores_for_gpu(gpu_id, self.available_core_ids)
+                
+                if len(affinity_cores) >= cores_per_gpu:
+                    # Use affinity cores
+                    rank_cores = affinity_cores[:cores_per_gpu]
+                    logger.debug(f"Assigned GPU {gpu_id} affinity cores {rank_cores} to job {job_id}")
+                else:
+                    # Fall back to any available cores
+                    rank_cores = self.available_core_ids[:cores_per_gpu]
+                    logger.debug(f"No sufficient affinity cores for GPU {gpu_id}, using fallback cores {rank_cores}")
+            else:
+                # No affinity manager or no affinity configured - use any available cores
+                rank_cores = self.available_core_ids[:cores_per_gpu]
+                logger.debug(f"Assigned cores {rank_cores} to GPU {gpu_id} (no affinity)")
+            
+            # Remove assigned cores from available pool
+            for core in rank_cores:
+                if core in self.available_core_ids:
+                    self.available_core_ids.remove(core)
+            
+            cpu_assignments.append(rank_cores)
+        
+        # Update CPU tracking for this job
+        all_assigned_cores = [core for rank_cores in cpu_assignments for core in rank_cores]
+        self.job_cpu_assignments[job_id] = all_assigned_cores
+        self._update_cpu_occupancy()
+        
+        logger.debug(f"Assigned {len(all_assigned_cores)} total CPU cores to job {job_id} on node {self.node_id}")
+        
+        return assigned_gpus, cpu_assignments
     
     
-    def assign_cpu_cores(self, job_id: int, num_cores: int) -> List[int]:
+    def assign_cpu_job(self, job_id: int, num_cores: int) -> List[int]:
         """
-        Assign specific CPU cores to a job and return the assigned core IDs.
+        Assign CPU cores for a CPU-only job and return the assigned core IDs.
+        
+        Note: This method is specifically for CPU-only jobs. GPU jobs should use assign_gpu_job().
         
         Args:
             job_id: The job ID to assign resources to
@@ -166,7 +228,7 @@ class NodeResource:
         """
         if not affinity_manager.has_affinity:
             # No affinity configured - use standard assignment
-            return self.assign_cpu_cores(job_id, num_cores)
+            return self.assign_cpu_job(job_id, num_cores)
         
         # Get preferred cores based on affinity groups
         preferred_cores = affinity_manager.get_preferred_cores(
@@ -195,11 +257,11 @@ class NodeResource:
         else:
             # Fallback to standard assignment if affinity assignment fails
             logger.debug(f"Affinity assignment failed for job {job_id}, falling back to standard assignment")
-            return self.assign_cpu_cores(job_id, num_cores)
+            return self.assign_cpu_job(job_id, num_cores)
     
-    def assign_multinode_job(self, job_id: int) -> None:
+    def assign_fullnode_job(self, job_id: int) -> None:
         """
-        Assign entire node to a multi-node job.
+        Assign entire node to a full-node job.
         
         Args:
             job_id: The job ID to assign the entire node to
@@ -207,13 +269,13 @@ class NodeResource:
         Raises:
             ValueError: If node is not completely free
         """
-        if not self.can_fit_multinode_job():
-            raise ValueError(f"Node {self.node_id} is not free for multi-node job")
+        if not self.is_completely_free():
+            raise ValueError(f"Node {self.node_id} is not free for full-node job")
         
         self.cpu_occupancy = 1.0
         self.assigned_jobs.append(job_id)
         
-        logger.debug(f"Assigned entire node {self.node_id} to multi-node job {job_id}")
+        logger.debug(f"Assigned entire node {self.node_id} to full-node job {job_id}")
     
     def free_job(self, job_id: int) -> None:
         """
@@ -329,17 +391,20 @@ class JobResourceSpec:
 
 
 @dataclass
-class NodeAssignment:
+class ResourceAssignment:
     """
     Result of resource assignment for a job.
     
-    Contains the specific nodes, hostnames, GPU assignments, and CPU core assignments for a job.
+    Contains the specific nodes, hostnames, and per-rank GPU/CPU assignments for a job.
+    The new structure supports per-rank allocation:
+    - gpu_assignments[node_idx][rank] = [gpu_ids] 
+    - cpu_assignments[node_idx][rank] = [cpu_core_ids]
     """
     job_id: int
     node_ids: List[str]
     hostnames: List[str]
-    gpu_assignments: List[List[int]] = field(default_factory=list)  # GPU IDs per node
-    cpu_assignments: List[List[int]] = field(default_factory=list)  # CPU core IDs per node
+    gpu_assignments: List[Dict[int, List[int]]] = field(default_factory=list)  # [node][rank] -> GPU IDs
+    cpu_assignments: List[Dict[int, List[int]]] = field(default_factory=list)  # [node][rank] -> CPU core IDs
     node_occupancy: float = 1.0  # Node occupancy for CPU-only jobs
     
     def __post_init__(self):
@@ -349,21 +414,25 @@ class NodeAssignment:
         
         # Initialize empty GPU assignments if not provided
         if not self.gpu_assignments:
-            self.gpu_assignments = [[] for _ in self.node_ids]
+            self.gpu_assignments = [{} for _ in self.node_ids]
         
         if len(self.gpu_assignments) != len(self.node_ids):
             raise ValueError("gpu_assignments must have same length as node_ids")
         
         # Initialize empty CPU assignments if not provided
         if not self.cpu_assignments:
-            self.cpu_assignments = [[] for _ in self.node_ids]
+            self.cpu_assignments = [{} for _ in self.node_ids]
         
         if len(self.cpu_assignments) != len(self.node_ids):
             raise ValueError("cpu_assignments must have same length as node_ids")
     
     def get_total_gpus(self) -> int:
         """Get total number of GPUs assigned."""
-        return sum(len(gpu_list) for gpu_list in self.gpu_assignments)
+        total = 0
+        for node_assignments in self.gpu_assignments:
+            for rank, gpu_list in node_assignments.items():
+                total += len(gpu_list)
+        return total
     
     def is_single_node(self) -> bool:
         """Check if this is a single-node assignment."""
@@ -380,10 +449,16 @@ class NodeAssignment:
         
         # For single-node jobs with GPUs, set CUDA_VISIBLE_DEVICES
         if self.is_single_node() and self.gpu_assignments[0]:
-            gpu_ids = ",".join(map(str, self.gpu_assignments[0]))
-            env_vars["CUDA_VISIBLE_DEVICES"] = gpu_ids
-            # For Intel GPUs (future support)
-            env_vars["ZE_AFFINITY_MASK"] = gpu_ids
+            # Collect all GPU IDs from all ranks on the first node
+            all_gpu_ids = []
+            for rank, gpu_list in self.gpu_assignments[0].items():
+                all_gpu_ids.extend(gpu_list)
+            
+            if all_gpu_ids:
+                gpu_ids_str = ",".join(map(str, sorted(set(all_gpu_ids))))
+                env_vars["CUDA_VISIBLE_DEVICES"] = gpu_ids_str
+                # For Intel GPUs
+                env_vars["ZE_AFFINITY_MASK"] = gpu_ids_str
         
         return env_vars
     
@@ -395,7 +470,11 @@ class NodeAssignment:
         """Get a human-readable summary of the assignment."""
         if self.is_single_node():
             if self.gpu_assignments[0]:
-                gpu_str = f" (GPUs: {self.gpu_assignments[0]})"
+                # Collect all GPU IDs from all ranks on the first node
+                all_gpu_ids = []
+                for rank, gpu_list in self.gpu_assignments[0].items():
+                    all_gpu_ids.extend(gpu_list)
+                gpu_str = f" (GPUs: {sorted(set(all_gpu_ids))})"
             else:
                 gpu_str = " (CPU-only)"
             return f"Node: {self.hostnames[0]}{gpu_str}"
@@ -403,3 +482,100 @@ class NodeAssignment:
             total_gpus = self.get_total_gpus()
             gpu_str = f" ({total_gpus} total GPUs)" if total_gpus > 0 else ""
             return f"Nodes: {len(self.node_ids)} nodes{gpu_str}"
+    
+    def get_gpu_assignments_for_rank(self, rank: int) -> List[int]:
+        """
+        Get GPU assignments for a specific rank across all nodes.
+        
+        Args:
+            rank: The MPI rank to get GPU assignments for
+            
+        Returns:
+            List of GPU IDs assigned to the rank
+        """
+        gpu_ids = []
+        for node_assignments in self.gpu_assignments:
+            if rank in node_assignments:
+                gpu_ids.extend(node_assignments[rank])
+        return gpu_ids
+    
+    def get_cpu_assignments_for_rank(self, rank: int) -> List[int]:
+        """
+        Get CPU core assignments for a specific rank across all nodes.
+        
+        Args:
+            rank: The MPI rank to get CPU assignments for
+            
+        Returns:
+            List of CPU core IDs assigned to the rank
+        """
+        cpu_ids = []
+        for node_assignments in self.cpu_assignments:
+            if rank in node_assignments:
+                cpu_ids.extend(node_assignments[rank])
+        return cpu_ids
+    
+    def get_all_ranks(self) -> List[int]:
+        """
+        Get all MPI ranks that have resource assignments.
+        
+        Returns:
+            Sorted list of all rank numbers
+        """
+        all_ranks = set()
+        for node_assignments in self.gpu_assignments:
+            all_ranks.update(node_assignments.keys())
+        for node_assignments in self.cpu_assignments:
+            all_ranks.update(node_assignments.keys())
+        return sorted(all_ranks)
+    
+    def get_ranks_for_node(self, node_idx: int) -> List[int]:
+        """
+        Get all ranks assigned to a specific node.
+        
+        Args:
+            node_idx: Index of the node (0-based)
+            
+        Returns:
+            Sorted list of rank numbers for the node
+        """
+        if node_idx >= len(self.node_ids):
+            return []
+        
+        ranks = set()
+        if node_idx < len(self.gpu_assignments):
+            ranks.update(self.gpu_assignments[node_idx].keys())
+        if node_idx < len(self.cpu_assignments):
+            ranks.update(self.cpu_assignments[node_idx].keys())
+        return sorted(ranks)
+    
+    def assign_resources_to_rank(self, rank: int, node_idx: int, gpu_ids: List[int] = None, cpu_ids: List[int] = None) -> None:
+        """
+        Assign resources to a specific rank on a specific node.
+        
+        Args:
+            rank: The MPI rank to assign resources to
+            node_idx: Index of the node (0-based)
+            gpu_ids: List of GPU IDs to assign (optional)
+            cpu_ids: List of CPU core IDs to assign (optional)
+        """
+        if node_idx >= len(self.node_ids):
+            raise ValueError(f"Node index {node_idx} out of range")
+        
+        # Ensure we have enough assignment dictionaries
+        while len(self.gpu_assignments) <= node_idx:
+            self.gpu_assignments.append({})
+        while len(self.cpu_assignments) <= node_idx:
+            self.cpu_assignments.append({})
+        
+        # Assign GPU resources
+        if gpu_ids is not None:
+            self.gpu_assignments[node_idx][rank] = gpu_ids
+        
+        # Assign CPU resources
+        if cpu_ids is not None:
+            self.cpu_assignments[node_idx][rank] = cpu_ids
+
+
+# Backward compatibility alias
+NodeAssignment = ResourceAssignment

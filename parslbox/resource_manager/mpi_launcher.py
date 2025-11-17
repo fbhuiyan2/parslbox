@@ -6,10 +6,14 @@ launcher system, but adapted for ParslBox's resource management system.
 """
 
 import logging
+import os
+import tempfile
 from typing import Dict, Tuple, TYPE_CHECKING
 
+from .cpu_affinity import parse_worker_cpu_affinity_to_gpu_map
+
 if TYPE_CHECKING:
-    from parslbox.resource_manager.models import NodeAssignment, JobResourceSpec
+    from parslbox.resource_manager.models import ResourceAssignment, JobResourceSpec
     from parslbox.configs.base import SystemConfig
 
 logger = logging.getLogger(__name__)
@@ -17,78 +21,296 @@ logger = logging.getLogger(__name__)
 VALID_LAUNCHERS = ('mpirun', 'mpiexec', 'srun')
 
 
-def compose_mpirun_launch_cmd(assignment: 'NodeAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec') -> Tuple[str, str]:
+def _detect_job_type(assignment: 'ResourceAssignment', job_spec: 'JobResourceSpec', system_config: 'SystemConfig') -> str:
     """
-    Compose mpirun launch command prefix.
+    Detect job type for appropriate MPI command generation.
     
     Args:
-        assignment: Node assignment for the job
-        system_config: System configuration
+        assignment: Resource assignment for the job
         job_spec: Job resource specification
+        system_config: System configuration
         
     Returns:
-        Tuple of (env_var_name, command_prefix)
+        Job type string:
+        - "subnode_cpu": Sub-node CPU job (per-rank core assignment)
+        - "subnode_gpu": Sub-node GPU job (per-rank GPU + core assignment)  
+        - "fullnode_cpu": Full-node CPU job (MPI handles core distribution)
+        - "fullnode_gpu": Full-node GPU job (per-rank GPU + core assignment)
+    """
+    # Check if this is a GPU job
+    if job_spec.is_gpu_job() or job_spec.is_multinode_job() and job_spec.ngpus > 0:
+        # GPU jobs: check if sub-node or full-node
+        if job_spec.num_nodes == 1 and job_spec.ngpus < system_config.GPUS_PER_NODE:
+            return "subnode_gpu"
+        else:
+            return "fullnode_gpu"
+    else:
+        # CPU-only jobs: check if sub-node or full-node
+        if job_spec.num_nodes == 1 and job_spec.node_occupancy < 1.0:
+            return "subnode_cpu"
+        else:
+            return "fullnode_cpu"
+
+
+
+def generate_openmpi_rankfile(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec') -> str:
+    """
+    Generate OpenMPI rankfile for CPU binding (GPU binding handled by wrapper).
+    
+    Format: rank <global_rank>=<hostname> slot=<cpu_cores>
+    """
+    rankfile_content = ""
+    global_rank = 0
+    
+    for node_idx, hostname in enumerate(assignment.hostnames):
+        node_ranks = assignment.get_ranks_for_node(node_idx)
+        
+        for local_rank in node_ranks:
+            # Get actual CPU cores assigned to this rank by resource manager
+            cpu_cores = assignment.get_cpu_assignments_for_rank(global_rank)
+            
+            if cpu_cores:
+                cpu_cores_str = ",".join(map(str, cpu_cores))
+                rankfile_content += f"rank {global_rank}={hostname} slot={cpu_cores_str}\n"
+            else:
+                logger.warning(f"No CPU assignment found for rank {global_rank} on node {hostname}")
+                # Skip binding for this rank rather than using hardcoded fallback
+            
+            global_rank += 1
+    
+    # Write rankfile to temporary location
+    fd, rankfile_path = tempfile.mkstemp(prefix=f"parslbox_openmpi_rankfile_{assignment.job_id}_", suffix=".txt")
+    try:
+        with os.fdopen(fd, 'w') as f:
+            f.write(rankfile_content)
+    except:
+        os.close(fd)
+        raise
+    
+    logger.debug(f"Generated OpenMPI rankfile: {rankfile_path}")
+    return rankfile_path
+
+
+def generate_mpiexec_rankfile(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec') -> str:
+    """
+    Generate MPICH/PALS rankfile for CPU and GPU binding.
+    
+    Format: <rank> <host_index> <cpu_cores> [<gpu_ids>]
+    """
+    rankfile_content = ""
+    global_rank = 0
+    
+    for node_idx, hostname in enumerate(assignment.hostnames):
+        node_ranks = assignment.get_ranks_for_node(node_idx)
+        
+        for local_rank in node_ranks:
+            # Get actual CPU cores assigned to this rank by resource manager
+            cpu_cores = assignment.get_cpu_assignments_for_rank(global_rank)
+            gpu_ids = assignment.get_gpu_assignments_for_rank(global_rank)
+            
+            if cpu_cores:
+                cpu_cores_str = ",".join(map(str, cpu_cores))
+                line = f"{global_rank} {node_idx} {cpu_cores_str}"
+                
+                # Add GPU assignment if this is a GPU job
+                if job_spec.is_gpu_job() and gpu_ids:
+                    gpu_ids_str = ",".join(map(str, gpu_ids))
+                    line += f" {gpu_ids_str}"
+                
+                rankfile_content += line + "\n"
+            else:
+                logger.warning(f"No CPU assignment found for rank {global_rank} on node {hostname}")
+                # Skip this rank rather than using hardcoded fallback
+            
+            global_rank += 1
+    
+    # Write rankfile to temporary location
+    fd, rankfile_path = tempfile.mkstemp(prefix=f"parslbox_mpiexec_rankfile_{assignment.job_id}_", suffix=".txt")
+    try:
+        with os.fdopen(fd, 'w') as f:
+            f.write(rankfile_content)
+    except:
+        os.close(fd)
+        raise
+    
+    logger.debug(f"Generated MPICH/PALS rankfile: {rankfile_path}")
+    return rankfile_path
+
+
+def generate_openmpi_gpu_wrapper(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec') -> str:
+    """
+    Generate GPU assignment wrapper script for OpenMPI (CPU binding handled by rankfile).
+    
+    Handles all cases:
+    - Single node sub-node jobs (e.g., 2 GPUs out of 4): LOCAL_RANK 0,1 → GPU IDs as assigned
+    - Single node full node jobs (e.g., all 4 GPUs): LOCAL_RANK 0,1,2,3 → GPU IDs as assigned  
+    - Multi-node jobs: LOCAL_RANK on each node maps to assigned GPU IDs for that node
+    """
+    # Build comprehensive GPU mapping: global_rank → (local_rank_on_node, gpu_id)
+    # We need to map LOCAL_RANK (per-node) to the correct GPU ID
+    
+    wrapper_content = f"""#!/bin/bash
+# GPU assignment wrapper for OpenMPI job {assignment.job_id}
+# Generated by ParslBox Resource Manager
+
+LOCAL_RANK=${{OMPI_COMM_WORLD_LOCAL_RANK:-${{PMI_LOCAL_RANK:-${{SLURM_LOCALID:-0}}}}}}
+GLOBAL_RANK=${{OMPI_COMM_WORLD_RANK:-${{PMI_RANK:-${{SLURM_PROCID:-0}}}}}}
+
+# GPU assignments from resource manager (per global rank):
+"""
+    
+    # Build mapping for all ranks across all nodes
+    for node_idx in range(len(assignment.hostnames)):
+        node_ranks = assignment.get_ranks_for_node(node_idx)
+        
+        # For each global rank on this node, determine its local rank and GPU assignment
+        for local_rank_idx, global_rank in enumerate(node_ranks):
+            gpu_ids = assignment.get_gpu_assignments_for_rank(global_rank)
+            if gpu_ids:
+                gpu_id = gpu_ids[0]  # Single GPU per rank
+                
+                # Add condition for this specific global rank
+                wrapper_content += f"""if [ "$GLOBAL_RANK" -eq {global_rank} ]; then
+    export CUDA_VISIBLE_DEVICES={gpu_id}
+    export ZE_ENABLE_PCI_ID_DEVICE_ORDER=1
+    export ZE_AFFINITY_MASK="{gpu_id}.0"
+fi
+"""
+    
+    wrapper_content += """
+# Execute the application (CPU binding handled by OpenMPI rankfile)
+exec "$@"
+"""
+    
+    # Write wrapper to temporary location
+    fd, wrapper_path = tempfile.mkstemp(prefix=f"parslbox_gpu_wrapper_{assignment.job_id}_", suffix=".sh")
+    try:
+        with os.fdopen(fd, 'w') as f:
+            f.write(wrapper_content)
+        os.chmod(wrapper_path, 0o755)
+    except:
+        os.close(fd)
+        raise
+    
+    logger.debug(f"Generated OpenMPI GPU wrapper: {wrapper_path}")
+    return wrapper_path
+
+
+def compose_mpirun_launch_cmd(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec') -> Tuple[str, str]:
+    """
+    Compose mpirun launch command prefix using appropriate binding strategy based on job type.
+    
+    - Sub-node jobs: Use rankfile for precise per-rank binding
+    - Full-node CPU jobs: Use --map-by core:PE=N --bind-to core for MPI-managed distribution
+    - Full-node GPU jobs: Use rankfile + wrapper for per-rank GPU assignment
     """
     total_ranks = job_spec.get_total_ranks()
+    hostlist = ",".join(assignment.hostnames)
     
-    if assignment.is_single_node():
-        hostname = assignment.hostnames[0]
+    # Detect job type to determine binding strategy
+    job_type = _detect_job_type(assignment, job_spec, system_config)
+    
+    if job_type == "fullnode_cpu":
+        # Full-node CPU job: Use MPI's built-in core distribution
+        cores_per_rank = system_config.CORES_PER_NODE // job_spec.ranks_per_node
+        prefix = f"mpirun -H {hostlist} -np {total_ranks} --map-by core:PE={cores_per_rank} --bind-to core"
+        logger.debug(f"Generated OpenMPI full-node CPU command: PE={cores_per_rank} cores per rank")
         
-        # Add CPU binding for single-node jobs if CPU assignments are available
-        cpu_binding = ""
-        if assignment.cpu_assignments and assignment.cpu_assignments[0]:
-            cpu_cores = assignment.cpu_assignments[0]
-            cpu_list = ",".join(map(str, cpu_cores))
-            cpu_binding = f"--cpu-list {cpu_list}"
-        
-        prefix = f"mpirun -H {hostname} -np {total_ranks} {cpu_binding}"
     else:
-        hostlist = ",".join(assignment.hostnames)
-        ranks_per_node = job_spec.ranks_per_node if not job_spec.is_gpu_job() else job_spec.ngpus
-        prefix = f"mpirun -H {hostlist} --map-by node -np {total_ranks}"    # -npernode {ranks_per_node} --> openmp mpirun manual says this is deprecated
+        # Sub-node jobs and GPU jobs: Use rankfile for precise binding
+        rankfile_path = generate_openmpi_rankfile(assignment, system_config, job_spec)
+        base_cmd = f"mpirun -H {hostlist} -np {total_ranks} --map-by rankfile:file={rankfile_path}"
+        
+        if job_spec.is_gpu_job():
+            # GPU job: add wrapper for GPU assignment
+            wrapper_path = generate_openmpi_gpu_wrapper(assignment, system_config, job_spec)
+            prefix = f"{base_cmd} {wrapper_path}"
+        else:
+            # Sub-node CPU job: rankfile only
+            prefix = base_cmd
     
     return "PBX_MPIRUN_PREFIX", prefix
 
 
-def compose_mpiexec_launch_cmd(assignment: 'NodeAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec') -> Tuple[str, str]:
+def compose_mpiexec_launch_cmd(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec') -> Tuple[str, str]:
     """
-    Compose mpiexec launch command prefix.
+    Compose mpiexec launch command prefix using appropriate binding strategy based on job type.
     
-    Args:
-        assignment: Node assignment for the job
-        system_config: System configuration
-        job_spec: Job resource specification
-        
-    Returns:
-        Tuple of (env_var_name, command_prefix)
+    - Sub-node jobs: Use --cpu-bind list and --gpu-bind list for per-rank binding
+    - Full-node CPU jobs: Use --ppn and --depth with --cpu-bind depth for MPI-managed distribution
+    - Full-node GPU jobs: Use rankfile for per-rank GPU assignment
     """
     total_ranks = job_spec.get_total_ranks()
+    
+    # Detect job type to determine binding strategy
+    job_type = _detect_job_type(assignment, job_spec, system_config)
     
     if assignment.is_single_node():
         hostname = assignment.hostnames[0]
         
-        # Add CPU binding for single-node jobs if CPU assignments are available
-        cpu_binding = ""
-        if assignment.cpu_assignments and assignment.cpu_assignments[0]:
-            cpu_cores = assignment.cpu_assignments[0]
-            cpu_list = ",".join(map(str, cpu_cores))
-            cpu_binding = f"--cpu-bind list:{cpu_list}"
-        
-        prefix = f"mpiexec -n {total_ranks} -host {hostname} {cpu_binding}"
+        if job_type == "fullnode_cpu":
+            # Full-node CPU job: Use MPICH's built-in core distribution
+            ranks_per_node = job_spec.ranks_per_node
+            cores_per_rank = system_config.CORES_PER_NODE // ranks_per_node
+            prefix = f"mpiexec -n {total_ranks} -host {hostname} --ppn {ranks_per_node} --depth {cores_per_rank} --cpu-bind depth"
+            logger.debug(f"Generated MPICH full-node CPU command: ppn={ranks_per_node}, depth={cores_per_rank}")
+            
+        else:
+            # Sub-node jobs: Use --cpu-bind list and --gpu-bind list
+            cpu_bind_list = []
+            gpu_bind_list = []
+            
+            node_ranks = assignment.get_ranks_for_node(0)
+            for rank in node_ranks:
+                # Get actual CPU cores assigned by resource manager
+                cpu_cores = assignment.get_cpu_assignments_for_rank(rank)
+                if cpu_cores:
+                    cpu_cores_str = ",".join(map(str, cpu_cores))
+                    cpu_bind_list.append(cpu_cores_str)
+                else:
+                    logger.warning(f"No CPU assignment for rank {rank}, skipping CPU binding")
+                    cpu_bind_list.append("0")  # Minimal fallback
+                
+                # Get GPU assignments if GPU job
+                if job_spec.is_gpu_job():
+                    gpu_ids = assignment.get_gpu_assignments_for_rank(rank)
+                    if gpu_ids:
+                        gpu_bind_list.append(str(gpu_ids[0]))  # Single GPU per rank
+                    else:
+                        logger.warning(f"No GPU assignment for rank {rank}")
+                        gpu_bind_list.append("0")  # Minimal fallback
+            
+            # Build command with binding options
+            cpu_bind_arg = f"--cpu-bind list:{':'.join(cpu_bind_list)}" if cpu_bind_list else ""
+            gpu_bind_arg = f"--gpu-bind list:{':'.join(gpu_bind_list)}" if gpu_bind_list and job_spec.is_gpu_job() else ""
+            
+            prefix = f"mpiexec -n {total_ranks} -host {hostname} {cpu_bind_arg} {gpu_bind_arg}".strip()
     else:
-        hostlist = ",".join(assignment.hostnames)
-        ranks_per_node = job_spec.ranks_per_node if not job_spec.is_gpu_job() else job_spec.ngpus
-        prefix = f"mpiexec -n {total_ranks} -ppn {ranks_per_node} -hosts {hostlist}"
+        # Multi-node: use rankfile (cleaner than long lists)
+        if job_type == "fullnode_cpu":
+            # Multi-node full-node CPU job: Use ppn and depth
+            ranks_per_node = job_spec.ranks_per_node
+            cores_per_rank = system_config.CORES_PER_NODE // ranks_per_node
+            hostlist = ",".join(assignment.hostnames)
+            prefix = f"mpiexec -n {total_ranks} -ppn {ranks_per_node} -hosts {hostlist} --depth {cores_per_rank} --cpu-bind depth"
+            logger.debug(f"Generated MPICH multi-node full-node CPU command: ppn={ranks_per_node}, depth={cores_per_rank}")
+            
+        else:
+            # Multi-node sub-node or GPU jobs: Use rankfile
+            rankfile_path = generate_mpiexec_rankfile(assignment, system_config, job_spec)
+            ranks_per_node = total_ranks // len(assignment.hostnames)
+            hostlist = ",".join(assignment.hostnames)
+            prefix = f"mpiexec -n {total_ranks} -ppn {ranks_per_node} -hosts {hostlist} --rankfile {rankfile_path}"
     
     return "PBX_MPIEXEC_PREFIX", prefix
 
 
-def compose_srun_launch_cmd(assignment: 'NodeAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec') -> Tuple[str, str]:
+def compose_srun_launch_cmd(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec') -> Tuple[str, str]:
     """
     Compose srun launch command prefix.
     
     Args:
-        assignment: Node assignment for the job
+        assignment: Resource assignment for the job
         system_config: System configuration
         job_spec: Job resource specification
         
@@ -109,12 +331,12 @@ def compose_srun_launch_cmd(assignment: 'NodeAssignment', system_config: 'System
     return "PBX_SRUN_PREFIX", prefix
 
 
-def compose_all_mpi_commands(assignment: 'NodeAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec') -> Dict[str, str]:
+def compose_all_mpi_commands(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec') -> Dict[str, str]:
     """
     Generate all MPI command prefixes and set the default based on system config.
     
     Args:
-        assignment: Node assignment for the job
+        assignment: Resource assignment for the job
         system_config: System configuration
         job_spec: Job resource specification
         

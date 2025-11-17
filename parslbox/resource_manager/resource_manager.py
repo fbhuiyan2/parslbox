@@ -8,7 +8,7 @@ and scheduling for jobs across HPC systems.
 import logging
 from typing import List, Dict, Optional, TYPE_CHECKING
 
-from .models import NodeResource, JobResourceSpec, NodeAssignment, create_job_resource_spec
+from .models import NodeResource, JobResourceSpec, ResourceAssignment, create_job_resource_spec
 from .exceptions import InsufficientResources, JobNotFound, InvalidResourceSpec
 from .cpu_affinity import CPUAffinityManager
 
@@ -40,7 +40,7 @@ class ResourceManager:
         """
         self.system_config = system_config
         self.nodes: List[NodeResource] = []
-        self.job_assignments: Dict[int, NodeAssignment] = {}
+        self.job_assignments: Dict[int, ResourceAssignment] = {}
         self._backlogged_jobs_set: set = set()  # Track job IDs in backlog
         
         # Initialize CPU affinity manager
@@ -132,7 +132,7 @@ class ResourceManager:
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"Failed to get SLURM hostnames: {e}")
     
-    def assign_resources(self, job: dict) -> NodeAssignment:
+    def assign_resources(self, job: dict) -> ResourceAssignment:
         """
         Assign resources to a job based on its metadata.
         
@@ -140,7 +140,7 @@ class ResourceManager:
             job: Job dictionary containing metadata and resource requirements
             
         Returns:
-            NodeAssignment with allocated resources
+            ResourceAssignment with allocated resources
             
         Raises:
             InsufficientResources: If resources cannot be allocated
@@ -157,13 +157,17 @@ class ResourceManager:
             if resource_spec.job_id in self.job_assignments:
                 raise ValueError(f"Job {resource_spec.job_id} already has resources assigned")
             
-            # Try to assign resources
-            if resource_spec.is_multinode_job():
-                assignment = self._assign_multinode_job(resource_spec)
-            elif resource_spec.is_gpu_job():
-                assignment = self._assign_single_node_gpu_job(resource_spec)
+            # Classify job type and assign resources accordingly
+            if self._is_subnode_job(resource_spec):
+                if resource_spec.is_gpu_job():
+                    assignment = self._assign_subnode_gpu_job(resource_spec)
+                else:
+                    assignment = self._assign_subnode_cpu_job(resource_spec)
             else:
-                assignment = self._assign_single_node_cpu_job(resource_spec)
+                if resource_spec.is_gpu_job() or resource_spec.is_multinode_job():
+                    assignment = self._assign_fullnode_gpu_job(resource_spec)
+                else:
+                    assignment = self._assign_fullnode_cpu_job(resource_spec)
             
             # Store the assignment
             self.job_assignments[resource_spec.job_id] = assignment
@@ -191,16 +195,147 @@ class ResourceManager:
                 f"but only {len(self.nodes)} nodes available"
             )
     
-    def _assign_multinode_job(self, spec: JobResourceSpec) -> NodeAssignment:
-        """Assign resources for a multi-node job."""
-        # Find enough free nodes
-        free_nodes = [node for node in self.nodes if node.can_fit_multinode_job()]
+    def _is_subnode_job(self, spec: JobResourceSpec) -> bool:
+        """
+        Determine if this is a sub-node job requiring per-rank resource assignment.
+        
+        Sub-node jobs:
+        - Single-node with partial occupancy (< 1.0)
+        - Single-node GPU job with fewer GPUs than available per node
+        
+        Full-node jobs:
+        - Single-node with full occupancy (= 1.0)
+        - Single-node GPU job using all GPUs per node
+        - All multi-node jobs
+        
+        Args:
+            spec: Job resource specification
+            
+        Returns:
+            True if this is a sub-node job, False if full-node job
+        """
+        if spec.num_nodes > 1:
+            return False  # Multi-node = always full-node
+        
+        # Single-node job classification
+        if spec.is_gpu_job():
+            return spec.ngpus < self.system_config.GPUS_PER_NODE
+        else:
+            return spec.node_occupancy < 1.0
+    
+
+    def _assign_subnode_cpu_job(self, spec: JobResourceSpec) -> ResourceAssignment:
+        """Assign resources for a sub-node CPU-only job with per-rank allocation."""
+        # Calculate number of CPU cores needed based on occupancy
+        num_cores_needed = max(1, int(spec.node_occupancy * self.system_config.CORES_PER_NODE))
+        
+        # Find a node with enough CPU cores
+        for node in self.nodes:
+            if node.can_fit_cpu_cores(num_cores_needed):
+                # Use simple core assignment (no GPU affinity for CPU-only jobs)
+                assigned_cores = node.assign_cpu_job(spec.job_id, num_cores_needed)
+                
+                # Create ResourceAssignment with per-rank allocation
+                assignment = ResourceAssignment(
+                    job_id=spec.job_id,
+                    node_ids=[node.node_id],
+                    hostnames=[node.hostname],
+                    node_occupancy=spec.node_occupancy
+                )
+                
+                # Distribute CPU cores evenly across ranks
+                cores_per_rank = max(1, num_cores_needed // spec.ranks_per_node)
+                remaining_cores = num_cores_needed % spec.ranks_per_node
+                
+                core_idx = 0
+                for rank in range(spec.ranks_per_node):
+                    # Give some ranks one extra core if cores don't divide evenly
+                    rank_core_count = cores_per_rank + (1 if rank < remaining_cores else 0)
+                    rank_cores = assigned_cores[core_idx:core_idx + rank_core_count]
+                    core_idx += rank_core_count
+                    
+                    assignment.assign_resources_to_rank(
+                        rank=rank,
+                        node_idx=0,
+                        gpu_ids=[],  # No GPUs for CPU-only jobs
+                        cpu_ids=rank_cores
+                    )
+                
+                logger.info(f"Assigned CPU-only job {spec.job_id}: {num_cores_needed} cores across {spec.ranks_per_node} ranks")
+                return assignment
+        
+        # No suitable node found
+        max_available_cores = max(len(node.available_core_ids) for node in self.nodes)
+        raise InsufficientResources(
+            f"Not enough CPU cores available for sub-node CPU job",
+            requested={'cores': num_cores_needed},
+            available={'cores': max_available_cores}
+        )
+    
+    def _assign_subnode_gpu_job(self, spec: JobResourceSpec) -> ResourceAssignment:
+        """Assign resources for a sub-node GPU job with per-rank allocation and GPU-CPU affinity awareness."""
+        # Calculate cores per GPU for balanced allocation
+        cores_per_gpu = self.system_config.CORES_PER_NODE // self.system_config.GPUS_PER_NODE
+        
+        # Find a node with enough GPUs and CPU cores
+        for node in self.nodes:
+            if node.can_fit_gpu_job(spec.ngpus, cores_per_gpu):
+                # Use the new combined assignment method
+                assigned_gpus, cpu_assignments = node.assign_gpu_job(
+                    spec.job_id, spec.ngpus, cores_per_gpu, self.cpu_affinity_manager
+                )
+                
+                # Create ResourceAssignment with per-rank allocation
+                assignment = ResourceAssignment(
+                    job_id=spec.job_id,
+                    node_ids=[node.node_id],
+                    hostnames=[node.hostname],
+                    node_occupancy=spec.node_occupancy
+                )
+                
+                # Assign resources per rank (1 rank per GPU for GPU jobs)
+                for rank in range(spec.ngpus):
+                    gpu_id = assigned_gpus[rank]
+                    rank_cores = cpu_assignments[rank]
+                    
+                    assignment.assign_resources_to_rank(
+                        rank=rank,
+                        node_idx=0,
+                        gpu_ids=[gpu_id],
+                        cpu_ids=rank_cores
+                    )
+                
+                total_cores = sum(len(cores) for cores in cpu_assignments)
+                logger.info(f"Assigned GPU job {spec.job_id}: GPUs {assigned_gpus}, {total_cores} total CPU cores ({cores_per_gpu} per GPU)")
+                return assignment
+        
+        # No suitable node found
+        max_available_gpus = max(len(node.available_gpu_ids) for node in self.nodes)
+        max_available_cores = max(len(node.available_core_ids) for node in self.nodes)
+        raise InsufficientResources(
+            f"Not enough resources for sub-node GPU job",
+            requested={'gpus': spec.ngpus, 'cores': spec.ngpus * cores_per_gpu},
+            available={'gpus': max_available_gpus, 'cores': max_available_cores}
+        )
+    
+    
+    def _assign_fullnode_cpu_job(self, spec: JobResourceSpec) -> ResourceAssignment:
+        """
+        Assign resources for full-node CPU jobs (single-node full or multi-node).
+        
+        Key assumptions:
+        - Jobs get exclusive access to entire nodes
+        - No per-rank resource assignment (MPI handles core distribution)
+        - Each node gets all cores, MPI distributes among ranks
+        """
+        # Find enough completely free nodes
+        free_nodes = [node for node in self.nodes if node.is_completely_free()]
         
         if len(free_nodes) < spec.num_nodes:
             available = len(free_nodes)
             requested = spec.num_nodes
             raise InsufficientResources(
-                f"Not enough free nodes for multi-node job",
+                f"Not enough free nodes for full-node CPU job",
                 requested={'nodes': requested},
                 available={'nodes': available}
             )
@@ -211,75 +346,130 @@ class ResourceManager:
         hostnames = []
         
         for node in assigned_nodes:
-            node.assign_multinode_job(spec.job_id)
+            node.assign_fullnode_job(spec.job_id)
             node_ids.append(node.node_id)
             hostnames.append(node.hostname)
         
-        return NodeAssignment(
+        # Create ResourceAssignment with empty per-rank allocations
+        # (MPI will handle core distribution)
+        assignment = ResourceAssignment(
             job_id=spec.job_id,
             node_ids=node_ids,
             hostnames=hostnames,
-            gpu_assignments=[[] for _ in range(spec.num_nodes)],  # No specific GPU assignments for multi-node
             node_occupancy=spec.node_occupancy
         )
+        
+        # For full-node CPU jobs, assign ranks across nodes with empty resource lists
+        # MPI will handle the actual core binding
+        current_rank = 0
+        for node_idx in range(spec.num_nodes):
+            for local_rank in range(spec.ranks_per_node):
+                assignment.assign_resources_to_rank(
+                    rank=current_rank,
+                    node_idx=node_idx,
+                    gpu_ids=[],  # No per-rank GPU assignment
+                    cpu_ids=[]   # No per-rank CPU assignment (MPI handles distribution)
+                )
+                current_rank += 1
+        
+        logger.info(f"Assigned full-node CPU job {spec.job_id}: {spec.num_nodes} nodes, {spec.get_total_ranks()} total ranks")
+        return assignment
     
-    def _assign_single_node_gpu_job(self, spec: JobResourceSpec) -> NodeAssignment:
-        """Assign resources for a single-node GPU job."""
-        # For GPU jobs, we typically assign cores equal to the number of GPUs
-        # or based on the system's cores per GPU ratio
+    def _assign_fullnode_gpu_job(self, spec: JobResourceSpec) -> ResourceAssignment:
+        """
+        Assign resources for full-node GPU jobs (single-node full or multi-node).
+        
+        Key assumptions:
+        - Jobs get exclusive access to entire nodes
+        - GPU jobs still use per-rank assignment (1 GPU + affinity cores per rank)
+        - For multi-node GPU jobs: each node gets all its GPUs with affinity
+        - For single-node full GPU jobs: use all GPUs on the node
+        """
+        # Find enough completely free nodes
+        free_nodes = [node for node in self.nodes if node.is_completely_free()]
+        
+        if len(free_nodes) < spec.num_nodes:
+            available = len(free_nodes)
+            requested = spec.num_nodes
+            raise InsufficientResources(
+                f"Not enough free nodes for full-node GPU job",
+                requested={'nodes': requested},
+                available={'nodes': available}
+            )
+        
+        # Assign the first N free nodes
+        assigned_nodes = free_nodes[:spec.num_nodes]
+        node_ids = []
+        hostnames = []
+        
+        # Calculate cores per GPU for balanced allocation
         cores_per_gpu = self.system_config.CORES_PER_NODE // self.system_config.GPUS_PER_NODE
-        num_cores_needed = spec.ngpus * cores_per_gpu
         
-        # Find a node with enough GPUs and CPU cores
-        for node in self.nodes:
-            if node.can_fit_gpu_job(spec.ngpus) and node.can_fit_cpu_cores(num_cores_needed):
-                assigned_gpus = node.assign_gpu_job(spec.job_id, spec.ngpus)
-                assigned_cores = node.assign_cpu_cores_with_affinity(spec.job_id, num_cores_needed, self.cpu_affinity_manager)
-                
-                return NodeAssignment(
-                    job_id=spec.job_id,
-                    node_ids=[node.node_id],
-                    hostnames=[node.hostname],
-                    gpu_assignments=[assigned_gpus],
-                    cpu_assignments=[assigned_cores],
-                    node_occupancy=spec.node_occupancy
-                )
+        # For each node, assign all GPUs with affinity
+        for node in assigned_nodes:
+            if spec.is_multinode_job():
+                # Multi-node GPU job: each node gets all its GPUs
+                gpus_to_assign = self.system_config.GPUS_PER_NODE
+            else:
+                # Single-node full GPU job: use the requested number of GPUs
+                gpus_to_assign = spec.ngpus
+            
+            node.assign_gpu_job(spec.job_id, gpus_to_assign, cores_per_gpu, self.cpu_affinity_manager)
+            node_ids.append(node.node_id)
+            hostnames.append(node.hostname)
         
-        # No suitable node found
-        available_gpus = max(len(node.available_gpu_ids) for node in self.nodes)
-        available_cores = max(len(node.available_core_ids) for node in self.nodes)
-        raise InsufficientResources(
-            f"Not enough GPUs or CPU cores available for single-node job",
-            requested={'gpus': spec.ngpus, 'cores': num_cores_needed},
-            available={'gpus': available_gpus, 'cores': available_cores}
+        # Create ResourceAssignment with per-rank allocation for GPU jobs
+        assignment = ResourceAssignment(
+            job_id=spec.job_id,
+            node_ids=node_ids,
+            hostnames=hostnames,
+            node_occupancy=spec.node_occupancy
         )
+        
+        # Assign resources per rank (1 rank per GPU for GPU jobs)
+        current_rank = 0
+        for node_idx, node in enumerate(assigned_nodes):
+            if spec.is_multinode_job():
+                gpus_on_node = self.system_config.GPUS_PER_NODE
+            else:
+                gpus_on_node = spec.ngpus
+            
+            # Get the GPU and CPU assignments from the node
+            assigned_gpus = node.job_gpu_assignments[spec.job_id]
+            assigned_cores = node.job_cpu_assignments[spec.job_id]
+            
+            # Validate that we have the expected number of GPUs
+            if len(assigned_gpus) != gpus_on_node:
+                raise RuntimeError(f"GPU assignment mismatch: expected {gpus_on_node}, got {len(assigned_gpus)}")
+            
+            # Distribute cores among GPUs (assuming equal distribution)
+            cores_per_gpu_actual = len(assigned_cores) // len(assigned_gpus)
+            
+            for local_rank in range(gpus_on_node):                 
+                gpu_id = assigned_gpus[local_rank]
+                
+                # Assign cores for this GPU rank
+                # assigned_cores is a flat list. but the method below still maintains affinity because 
+                # each gpu gets the same number of cores (equal distribution assumption) and are being looped through linearly
+                # in the same order as in assign_gpu_job()
+                start_core_idx = local_rank * cores_per_gpu_actual
+                end_core_idx = min(start_core_idx + cores_per_gpu_actual, len(assigned_cores))
+                rank_cores = assigned_cores[start_core_idx:end_core_idx]
+                
+                
+                assignment.assign_resources_to_rank(
+                    rank=current_rank,
+                    node_idx=node_idx,
+                    gpu_ids=[gpu_id],
+                    cpu_ids=rank_cores
+                )
+                current_rank += 1
+        
+        total_gpus = sum(len(node.job_gpu_assignments[spec.job_id]) for node in assigned_nodes)
+        total_cores = sum(len(node.job_cpu_assignments[spec.job_id]) for node in assigned_nodes)
+        logger.info(f"Assigned full-node GPU job {spec.job_id}: {spec.num_nodes} nodes, {total_gpus} GPUs, {total_cores} CPU cores")
+        return assignment
     
-    def _assign_single_node_cpu_job(self, spec: JobResourceSpec) -> NodeAssignment:
-        """Assign resources for a single-node CPU-only job."""
-        # Calculate number of CPU cores needed based on occupancy
-        num_cores_needed = max(1, int(spec.node_occupancy * self.system_config.CORES_PER_NODE))
-        
-        # Find a node with enough CPU cores
-        for node in self.nodes:
-            if node.can_fit_cpu_cores(num_cores_needed):
-                assigned_cores = node.assign_cpu_cores_with_affinity(spec.job_id, num_cores_needed, self.cpu_affinity_manager)
-                
-                return NodeAssignment(
-                    job_id=spec.job_id,
-                    node_ids=[node.node_id],
-                    hostnames=[node.hostname],
-                    gpu_assignments=[[]],  # No GPUs
-                    cpu_assignments=[assigned_cores],  # Assigned CPU cores
-                    node_occupancy=spec.node_occupancy
-                )
-        
-        # No suitable node found
-        max_available_cores = max(len(node.available_core_ids) for node in self.nodes)
-        raise InsufficientResources(
-            f"Not enough CPU cores available for single-node job",
-            requested={'cores': num_cores_needed},
-            available={'cores': max_available_cores}
-        )
     
     def add_to_backlog(self, job_id: int) -> None:
         """
@@ -406,7 +596,7 @@ class ResourceManager:
             'nodes': [node.get_status() for node in self.nodes]
         }
     
-    def get_job_assignment(self, job_id: int) -> Optional[NodeAssignment]:
+    def get_job_assignment(self, job_id: int) -> Optional[ResourceAssignment]:
         """
         Get resource assignment for a specific job.
         
@@ -414,7 +604,7 @@ class ResourceManager:
             job_id: The job ID to get assignment for
             
         Returns:
-            NodeAssignment if job has resources assigned, None otherwise
+            ResourceAssignment if job has resources assigned, None otherwise
         """
         return self.job_assignments.get(job_id)
     
