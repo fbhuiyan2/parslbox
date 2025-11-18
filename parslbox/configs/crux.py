@@ -27,6 +27,10 @@ class CruxConfig(SystemConfig):
     MAX_WORKERS_PER_NODE = 8
     WORKER_CPU_AFFINITY = "list:0-15,128-143:16-31,144-159:32-47,160-175:48-63,176-191:64-79,192-207:80-95,208-223:96-111,224-239:112-127,240-255"
     
+    def __init__(self):
+        """Initialize Crux configuration with validation."""
+        super().__init__()
+    
     def detect_resources(self) -> tuple[int, int]:
         """
         Detects the number of nodes and total GPUs allocated for a PBS job on Crux.

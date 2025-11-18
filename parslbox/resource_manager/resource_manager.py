@@ -136,6 +136,15 @@ class ResourceManager:
         """
         Assign resources to a job based on its metadata.
         
+        Sub-node jobs:
+        - Single-node with partial occupancy (< 1.0)
+        - Single-node GPU job with fewer GPUs than available per node
+        
+        Full-node jobs:
+        - Single-node with full occupancy (= 1.0)
+        - Single-node GPU job using all GPUs per node
+        - All multi-node jobs
+
         Args:
             job: Job dictionary containing metadata and resource requirements
             
@@ -164,7 +173,8 @@ class ResourceManager:
                 else:
                     assignment = self._assign_subnode_cpu_job(resource_spec)
             else:
-                if resource_spec.is_gpu_job() or resource_spec.is_multinode_job():
+                # Full-node jobs
+                if resource_spec.is_gpu_job():
                     assignment = self._assign_fullnode_gpu_job(resource_spec)
                 else:
                     assignment = self._assign_fullnode_cpu_job(resource_spec)
@@ -203,11 +213,6 @@ class ResourceManager:
         - Single-node with partial occupancy (< 1.0)
         - Single-node GPU job with fewer GPUs than available per node
         
-        Full-node jobs:
-        - Single-node with full occupancy (= 1.0)
-        - Single-node GPU job using all GPUs per node
-        - All multi-node jobs
-        
         Args:
             spec: Job resource specification
             
@@ -219,6 +224,7 @@ class ResourceManager:
         
         # Single-node job classification
         if spec.is_gpu_job():
+            # node occupancy is designed to be ignored for gpu jobs, so just check ngpus
             return spec.ngpus < self.system_config.GPUS_PER_NODE
         else:
             return spec.node_occupancy < 1.0
@@ -273,7 +279,12 @@ class ResourceManager:
         )
     
     def _assign_subnode_gpu_job(self, spec: JobResourceSpec) -> ResourceAssignment:
-        """Assign resources for a sub-node GPU job with per-rank allocation and GPU-CPU affinity awareness."""
+        """
+        Assign resources for a sub-node GPU job with per-rank allocation and GPU-CPU affinity awareness.
+        Affinity is a priority but not a strict requirement. If affinity CPUs are available for a GPU, then those CPUs will be assigned.
+        If affinity CPUs are not available but other CPUs are, then GPUs will get those CPUs
+
+        """
         # Calculate cores per GPU for balanced allocation
         cores_per_gpu = self.system_config.CORES_PER_NODE // self.system_config.GPUS_PER_NODE
         
@@ -325,8 +336,9 @@ class ResourceManager:
         
         Key assumptions:
         - Jobs get exclusive access to entire nodes
-        - No per-rank resource assignment (MPI handles core distribution)
-        - Each node gets all cores, MPI distributes among ranks
+        - No per-rank resource assignment for CPU-only jobs (MPI handles core distribution)
+        - Full-node CPU-only jobs blocks all CPUs as well as GPUs
+        
         """
         # Find enough completely free nodes
         free_nodes = [node for node in self.nodes if node.is_completely_free()]
@@ -346,7 +358,7 @@ class ResourceManager:
         hostnames = []
         
         for node in assigned_nodes:
-            node.assign_fullnode_job(spec.job_id)
+            node.assign_fullnode_cpu_job(spec.job_id)
             node_ids.append(node.node_id)
             hostnames.append(node.hostname)
         
@@ -384,6 +396,7 @@ class ResourceManager:
         - GPU jobs still use per-rank assignment (1 GPU + affinity cores per rank)
         - For multi-node GPU jobs: each node gets all its GPUs with affinity
         - For single-node full GPU jobs: use all GPUs on the node
+        - Since all CPUs and GPUs are being used here, affinity CPU assignment is (at least should be) guarnteed
         """
         # Find enough completely free nodes
         free_nodes = [node for node in self.nodes if node.is_completely_free()]

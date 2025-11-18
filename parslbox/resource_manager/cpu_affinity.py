@@ -6,43 +6,10 @@ for intelligent CPU core assignment based on system-specific affinity groups.
 """
 
 import logging
-from typing import List, Optional, Tuple, Dict
-import re
+from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-
-def parse_worker_cpu_affinity_to_gpu_map(affinity_string: Optional[str]) -> Dict[int, str]:
-    """
-    Parse WORKER_CPU_AFFINITY string into GPU-to-CPU mapping.
-    
-    Args:
-        affinity_string: String like "list:24-31,56-63:16-23,48-55:8-15,40-47:0-7,32-39"
-        
-    Returns:
-        Dict mapping GPU ID to CPU core range string: {0: "24-31,56-63", 1: "16-23,48-55", ...}
-    """
-    if not affinity_string:
-        return {}
-    
-    try:
-        # Remove "list:" prefix if present
-        if affinity_string.startswith("list:"):
-            affinity_string = affinity_string[5:]
-        
-        # Split into groups by ":"
-        group_strings = affinity_string.split(":")
-        gpu_cpu_map = {}
-        
-        for gpu_id, group_str in enumerate(group_strings):
-            if group_str.strip():
-                gpu_cpu_map[gpu_id] = group_str.strip()
-        
-        return gpu_cpu_map
-        
-    except Exception as e:
-        logger.warning(f"Failed to parse GPU-CPU affinity mapping '{affinity_string}': {e}")
-        return {}
 
 
 class CPUAffinityManager:
@@ -141,56 +108,6 @@ class CPUAffinityManager:
         
         return sorted(cores)
     
-    def get_preferred_cores(self, num_cores: int, available_cores: List[int]) -> List[int]:
-        """
-        Get preferred core assignment based on affinity groups.
-        
-        Tries to assign cores from complete affinity groups first, then falls back
-        to partial groups if needed.
-        
-        Args:
-            num_cores: Number of cores needed
-            available_cores: List of currently available core IDs
-            
-        Returns:
-            List of preferred core IDs (may be fewer than requested if not available)
-        """
-        if not self.has_affinity or not available_cores:
-            return available_cores[:num_cores]
-        
-        available_set = set(available_cores)
-        preferred_cores = []
-        
-        # First pass: try to assign from complete affinity groups
-        for group in self.affinity_groups:
-            if len(preferred_cores) >= num_cores:
-                break
-            
-            # Find cores from this group that are available
-            group_available = [core for core in group if core in available_set]
-            
-            if not group_available:
-                continue
-            
-            # Take cores from this group
-            cores_needed = min(len(group_available), num_cores - len(preferred_cores))
-            selected_cores = group_available[:cores_needed]
-            preferred_cores.extend(selected_cores)
-            
-            # Remove selected cores from available set
-            for core in selected_cores:
-                available_set.discard(core)
-        
-        # Second pass: if we still need more cores, take any remaining available cores
-        if len(preferred_cores) < num_cores:
-            remaining_available = [core for core in available_cores if core in available_set]
-            cores_needed = num_cores - len(preferred_cores)
-            # Take as many as available, even if fewer than needed
-            additional_cores = remaining_available[:cores_needed]
-            preferred_cores.extend(additional_cores)
-        
-        # Return what we could assign (may be fewer than requested if not enough available)
-        return preferred_cores
     
     def get_cores_for_gpu(self, gpu_id: int, available_cores: List[int]) -> List[int]:
         """
@@ -215,85 +132,3 @@ class CPUAffinityManager:
         affinity_available = [core for core in gpu_affinity_cores if core in available_set]
         
         return affinity_available
-    
-    def get_cores_for_occupancy(self, occupancy: float, available_cores: List[int]) -> List[int]:
-        """
-        Get core assignment for a given node occupancy.
-        
-        Tries to assign complete affinity groups when possible.
-        
-        Args:
-            occupancy: Node occupancy (0.0 to 1.0)
-            available_cores: List of currently available core IDs
-            
-        Returns:
-            List of assigned core IDs
-        """
-        num_cores = max(1, int(occupancy * self.total_cores))
-        return self.get_preferred_cores(num_cores, available_cores)
-    
-    def get_affinity_group_for_cores(self, core_ids: List[int]) -> Optional[int]:
-        """
-        Determine which affinity group the given cores belong to.
-        
-        Args:
-            core_ids: List of core IDs to check
-            
-        Returns:
-            Affinity group index, or None if cores span multiple groups
-        """
-        if not self.has_affinity or not core_ids:
-            return None
-        
-        core_set = set(core_ids)
-        
-        for i, group in enumerate(self.affinity_groups):
-            group_set = set(group)
-            if core_set.issubset(group_set):
-                return i
-        
-        return None
-    
-    def get_group_info(self) -> List[Tuple[int, List[int]]]:
-        """
-        Get information about all affinity groups.
-        
-        Returns:
-            List of (group_index, core_list) tuples
-        """
-        return [(i, group.copy()) for i, group in enumerate(self.affinity_groups)]
-    
-    def validate_affinity_string(self, affinity_str: str) -> Tuple[bool, str]:
-        """
-        Validate an affinity string format.
-        
-        Args:
-            affinity_str: Affinity string to validate
-            
-        Returns:
-            Tuple of (is_valid, error_message)
-        """
-        try:
-            groups = self._parse_affinity_string(affinity_str)
-            
-            if not groups:
-                return False, "No valid affinity groups found"
-            
-            # Check for overlapping cores
-            all_cores = set()
-            for group in groups:
-                group_set = set(group)
-                overlap = all_cores.intersection(group_set)
-                if overlap:
-                    return False, f"Overlapping cores found: {sorted(overlap)}"
-                all_cores.update(group_set)
-            
-            # Check for cores outside valid range
-            invalid_cores = [core for core in all_cores if core < 0 or core >= self.total_cores]
-            if invalid_cores:
-                return False, f"Invalid core IDs (outside 0-{self.total_cores-1}): {sorted(invalid_cores)}"
-            
-            return True, "Valid affinity string"
-            
-        except Exception as e:
-            return False, f"Parse error: {e}"

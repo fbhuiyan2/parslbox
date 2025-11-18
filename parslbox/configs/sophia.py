@@ -24,7 +24,11 @@ class SophiaConfig(SystemConfig):
     SCHEDULER = "PBS"
     MPI_CMD_TO_USE = "mpirun"
     MAX_WORKERS_PER_NODE = 8
-    WORKER_CPU_AFFINITY = None  
+    WORKER_CPU_AFFINITY = None
+    
+    def __init__(self):
+        """Initialize Sophia configuration with validation."""
+        super().__init__()
     
     def detect_resources(self) -> tuple[int, int]:
         """

@@ -71,8 +71,8 @@ class NodeResource:
         return gpu_available
     
     def can_fit_cpu_cores(self, num_cores: int) -> bool:
-        """Check if this node can accommodate a job requiring specific CPU cores."""
-        return len(self.available_core_ids) >= num_cores
+        """Check if this node can accommodate a sub-node job requiring specific CPU cores."""
+        return len(self.available_core_ids) >= num_cores and self.cpu_occupancy < 1.0
     
     def is_completely_free(self) -> bool:
         """Check if this node is completely free for full-node job."""
@@ -93,6 +93,43 @@ class NodeResource:
             used_cores = self.total_cores - len(self.available_core_ids)
             self.cpu_occupancy = used_cores / self.total_cores
     
+
+    def assign_cpu_job(self, job_id: int, num_cores: int) -> List[int]:
+        """
+        Assign CPU cores for a CPU-only job and return the assigned core IDs.
+        
+        Note: This method is specifically for CPU-only jobs. GPU jobs should use assign_gpu_job().
+        
+        Args:
+            job_id: The job ID to assign resources to
+            num_cores: Number of CPU cores to assign
+            
+        Returns:
+            List of assigned CPU core IDs
+            
+        Raises:
+            ValueError: If not enough CPU cores are available
+        """
+        if not self.can_fit_cpu_cores(num_cores):
+            raise ValueError(f"Cannot assign {num_cores} CPU cores to node {self.node_id}")
+        
+        # Assign the first N available cores
+        assigned_cores = self.available_core_ids[:num_cores]
+        self.available_core_ids = self.available_core_ids[num_cores:]
+        
+        # Track the assignment for this job
+        self.job_cpu_assignments[job_id] = assigned_cores
+        
+        if job_id not in self.assigned_jobs:
+            self.assigned_jobs.append(job_id)
+        
+        # Update CPU occupancy based on actual core usage (for tracking purposes)
+        self._update_cpu_occupancy()
+        
+        logger.debug(f"Assigned CPU cores {assigned_cores} to job {job_id} on node {self.node_id}")
+        return assigned_cores
+    
+
     def assign_gpu_job(self, job_id: int, num_gpus: int, cores_per_gpu: int = None, affinity_manager: 'CPUAffinityManager' = None):
         """
         Assign GPUs and CPU cores to a job with affinity preference.
@@ -179,89 +216,12 @@ class NodeResource:
         return assigned_gpus, cpu_assignments
     
     
-    def assign_cpu_job(self, job_id: int, num_cores: int) -> List[int]:
-        """
-        Assign CPU cores for a CPU-only job and return the assigned core IDs.
-        
-        Note: This method is specifically for CPU-only jobs. GPU jobs should use assign_gpu_job().
-        
-        Args:
-            job_id: The job ID to assign resources to
-            num_cores: Number of CPU cores to assign
-            
-        Returns:
-            List of assigned CPU core IDs
-            
-        Raises:
-            ValueError: If not enough CPU cores are available
-        """
-        if not self.can_fit_cpu_cores(num_cores):
-            raise ValueError(f"Cannot assign {num_cores} CPU cores to node {self.node_id}")
-        
-        # Assign the first N available cores
-        assigned_cores = self.available_core_ids[:num_cores]
-        self.available_core_ids = self.available_core_ids[num_cores:]
-        
-        # Track the assignment for this job
-        self.job_cpu_assignments[job_id] = assigned_cores
-        
-        if job_id not in self.assigned_jobs:
-            self.assigned_jobs.append(job_id)
-        
-        # Update CPU occupancy based on actual core usage (for tracking purposes)
-        self._update_cpu_occupancy()
-        
-        logger.debug(f"Assigned CPU cores {assigned_cores} to job {job_id} on node {self.node_id}")
-        return assigned_cores
     
-    def assign_cpu_cores_with_affinity(self, job_id: int, num_cores: int, affinity_manager: 'CPUAffinityManager') -> List[int]:
+    def assign_fullnode_cpu_job(self, job_id: int) -> None:
         """
-        Assign CPU cores to a job using affinity-aware allocation.
+        Assign entire node to a full-node CPU-only job.
         
-        Args:
-            job_id: The job ID to assign resources to
-            num_cores: Number of cores needed
-            affinity_manager: CPU affinity manager for intelligent core selection
-            
-        Returns:
-            List of assigned core IDs
-        """
-        if not affinity_manager.has_affinity:
-            # No affinity configured - use standard assignment
-            return self.assign_cpu_job(job_id, num_cores)
-        
-        # Get preferred cores based on affinity groups
-        preferred_cores = affinity_manager.get_preferred_cores(
-            num_cores, self.available_core_ids
-        )
-        
-        if len(preferred_cores) >= num_cores:
-            # We can assign the preferred cores
-            cores_to_assign = preferred_cores[:num_cores]
-            
-            # Manually assign these specific cores
-            for core in cores_to_assign:
-                if core in self.available_core_ids:
-                    self.available_core_ids.remove(core)
-            
-            # Track the assignment
-            self.job_cpu_assignments[job_id] = cores_to_assign
-            if job_id not in self.assigned_jobs:
-                self.assigned_jobs.append(job_id)
-            
-            # Update CPU occupancy based on actual core usage (for tracking purposes)
-            self._update_cpu_occupancy()
-            
-            logger.debug(f"Assigned affinity-aware cores {cores_to_assign} to job {job_id} on node {self.node_id}")
-            return cores_to_assign
-        else:
-            # Fallback to standard assignment if affinity assignment fails
-            logger.debug(f"Affinity assignment failed for job {job_id}, falling back to standard assignment")
-            return self.assign_cpu_job(job_id, num_cores)
-    
-    def assign_fullnode_job(self, job_id: int) -> None:
-        """
-        Assign entire node to a full-node job.
+        For CPU-only jobs that take the entire node, mark node resources as fully used.
         
         Args:
             job_id: The job ID to assign the entire node to
@@ -270,12 +230,15 @@ class NodeResource:
             ValueError: If node is not completely free
         """
         if not self.is_completely_free():
-            raise ValueError(f"Node {self.node_id} is not free for full-node job")
+            raise ValueError(f"Node {self.node_id} is not free for full-node CPU job")
         
+        # For full-node CPU jobs, mark node resources as fully used
         self.cpu_occupancy = 1.0
+        self.available_core_ids = []  # No cores available for other jobs
+        self.available_gpu_ids = []   # No GPUs available for other jobs
         self.assigned_jobs.append(job_id)
         
-        logger.debug(f"Assigned entire node {self.node_id} to full-node job {job_id}")
+        logger.debug(f"Assigned entire node {self.node_id} to full-node CPU job {job_id}")
     
     def free_job(self, job_id: int) -> None:
         """
@@ -364,8 +327,8 @@ class JobResourceSpec:
             self.node_occupancy = 1.0
     
     def is_gpu_job(self) -> bool:
-        """Check if this job requires GPUs (only meaningful for single-node jobs)."""
-        return self.num_nodes == 1 and self.ngpus > 0
+        """Check if this job requires GPUs"""
+        return self.ngpus > 0
     
     def is_multinode_job(self) -> bool:
         """Check if this is a multi-node job."""
@@ -375,16 +338,44 @@ class JobResourceSpec:
         """Calculate total number of MPI ranks for this job."""
         if self.is_gpu_job():
             # GPU jobs: 1 rank per GPU
-            return self.num_nodes * self.ngpus
+            return self.ngpus
         else:
             # CPU jobs: use ranks_per_node
             return self.num_nodes * self.ranks_per_node
     
+    def detect_job_type(self, system_config) -> str:
+        """
+        Detect job type for appropriate MPI command generation.
+        
+        Args:
+            system_config: System configuration object
+            
+        Returns:
+            Job type string:
+            - "subnode_cpu": Sub-node CPU job (per-rank core assignment)
+            - "subnode_gpu": Sub-node GPU job (per-rank GPU + core assignment)  
+            - "fullnode_cpu": Full-node CPU job (MPI handles core distribution)
+            - "fullnode_gpu": Full-node GPU job (per-rank GPU + core assignment)
+        """
+        # Check if this is a GPU job
+        if self.is_gpu_job():
+            # GPU jobs: check if sub-node or full-node
+            if self.num_nodes == 1 and self.ngpus < system_config.GPUS_PER_NODE:
+                return "subnode_gpu"
+            else:
+                return "fullnode_gpu"
+        else:
+            # CPU-only jobs: check if sub-node or full-node
+            if self.num_nodes == 1 and self.node_occupancy < 1.0:
+                return "subnode_cpu"
+            else:
+                return "fullnode_cpu"
+    
     def get_summary(self) -> str:
         """Get a human-readable summary of the resource spec."""
         if self.is_multinode_job():
-            return f"Multi-node job: {self.num_nodes} nodes"
-        elif self.is_gpu_job():
+            return f"Multi-node job: {self.num_nodes} nodes and {self.ngpus} GPUs"
+        elif self.num_nodes == 1 and self.is_gpu_job():
             return f"Single-node GPU job: {self.ngpus} GPUs"
         else:
             return f"Single-node CPU job: {self.node_occupancy:.2f} occupancy"

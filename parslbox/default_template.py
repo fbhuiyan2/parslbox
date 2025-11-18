@@ -77,6 +77,7 @@ lammps:
     # Full, absolute path to the LAMMPS executable on the system.
     executable_path: "/path/to/your/lammps/executable/on/polaris"
     
+    
     # Additional mpi tags
     mpi_extra: 
 

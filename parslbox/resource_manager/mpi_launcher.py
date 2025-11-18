@@ -10,7 +10,6 @@ import os
 import tempfile
 from typing import Dict, Tuple, TYPE_CHECKING
 
-from .cpu_affinity import parse_worker_cpu_affinity_to_gpu_map
 
 if TYPE_CHECKING:
     from parslbox.resource_manager.models import ResourceAssignment, JobResourceSpec
@@ -19,37 +18,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 VALID_LAUNCHERS = ('mpirun', 'mpiexec', 'srun')
-
-
-def _detect_job_type(assignment: 'ResourceAssignment', job_spec: 'JobResourceSpec', system_config: 'SystemConfig') -> str:
-    """
-    Detect job type for appropriate MPI command generation.
-    
-    Args:
-        assignment: Resource assignment for the job
-        job_spec: Job resource specification
-        system_config: System configuration
-        
-    Returns:
-        Job type string:
-        - "subnode_cpu": Sub-node CPU job (per-rank core assignment)
-        - "subnode_gpu": Sub-node GPU job (per-rank GPU + core assignment)  
-        - "fullnode_cpu": Full-node CPU job (MPI handles core distribution)
-        - "fullnode_gpu": Full-node GPU job (per-rank GPU + core assignment)
-    """
-    # Check if this is a GPU job
-    if job_spec.is_gpu_job() or job_spec.is_multinode_job() and job_spec.ngpus > 0:
-        # GPU jobs: check if sub-node or full-node
-        if job_spec.num_nodes == 1 and job_spec.ngpus < system_config.GPUS_PER_NODE:
-            return "subnode_gpu"
-        else:
-            return "fullnode_gpu"
-    else:
-        # CPU-only jobs: check if sub-node or full-node
-        if job_spec.num_nodes == 1 and job_spec.node_occupancy < 1.0:
-            return "subnode_cpu"
-        else:
-            return "fullnode_cpu"
 
 
 
@@ -208,7 +176,7 @@ def compose_mpirun_launch_cmd(assignment: 'ResourceAssignment', system_config: '
     hostlist = ",".join(assignment.hostnames)
     
     # Detect job type to determine binding strategy
-    job_type = _detect_job_type(assignment, job_spec, system_config)
+    job_type = job_spec.detect_job_type(system_config)
     
     if job_type == "fullnode_cpu":
         # Full-node CPU job: Use MPI's built-in core distribution
@@ -243,7 +211,7 @@ def compose_mpiexec_launch_cmd(assignment: 'ResourceAssignment', system_config: 
     total_ranks = job_spec.get_total_ranks()
     
     # Detect job type to determine binding strategy
-    job_type = _detect_job_type(assignment, job_spec, system_config)
+    job_type = job_spec.detect_job_type(system_config)
     
     if assignment.is_single_node():
         hostname = assignment.hostnames[0]

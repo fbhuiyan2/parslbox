@@ -25,6 +25,10 @@ class PolarisConfig(SystemConfig):
     MAX_WORKERS_PER_NODE = 4
     WORKER_CPU_AFFINITY = "list:24-31,56-63:16-23,48-55:8-15,40-47:0-7,32-39"
     
+    def __init__(self):
+        """Initialize Polaris configuration with validation."""
+        super().__init__()
+    
     def detect_resources(self) -> tuple[int, int]:
         """
         Detects the number of nodes and total GPUs allocated for a PBS job on Polaris.
