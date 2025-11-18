@@ -211,7 +211,12 @@ def add(
     
     # Display resource specification for user
     if final_num_nodes > 1:
-        display_str = f"n:{final_num_nodes}-r:{total_ranks}-g:auto-nocc:NA"
+        if final_ngpus > 0:
+            # Multi-node GPU job
+            display_str = f"n:{final_num_nodes}-r:{final_ngpus}-g:{final_ngpus}-nocc:NA"
+        else:
+            # Multi-node CPU job
+            display_str = f"n:{final_num_nodes}-r:{total_ranks}-g:0-nocc:NA"
     elif final_ngpus > 0:
         display_str = f"n:1-r:{total_ranks}-g:{final_ngpus}-nocc:NA"
     else:

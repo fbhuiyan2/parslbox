@@ -74,6 +74,9 @@ Inspect, filter, update, remove:
 # List jobs (rich table)
 pbx ls
 pbx ls --status Running --app lammps --tag production
+pbx ls --all
+pbx ls -n 15
+pbx ls -n -20
 
 # Show fields per job
 pbx info 1 2 --path --ngpus --envfile --parents
@@ -104,31 +107,71 @@ Note on usage:
 - pbx add
   - Arguments: paths (one or more directories, or 'all')
   - Required: --app/-a, --config/-c
-  - Common options: --tag/-t, --input/-i, --ngpus/-g, --nnodes/-n, --nocc/-o, --mpiopts, --envfile/-e
+  - Common options: --tag/-t, --input/-i, --ngpus/-g, --nnodes/-n, --nocc/-o, --ranks-per-node/-rpn, --mpiopts, --envfile/-e
   - Dependencies: --parents/-P "1 2 3", --parent-tag
   - Initial status: --status/-s (default Ready)
+  - Input handling:
+    - If the app requires input and no file is provided, pbx prompts for a filename.
+    - If the app defines a default input, that default is used unless overridden via --input.
+  - Single-node vs multi-node resources:
+    - For --nnodes > 1, pbx ignores --ngpus and --nocc and displays actual GPU count, nocc:NA.
+  - Ranks per node:
+    - GPU jobs: --ranks-per-node is ignored; pbx uses 1 rank per GPU.
+    - CPU jobs: If not specified, pbx uses ranks_per_node = cores_per_node * node_occupancy (minimum 1).
+  - Python environment file:
+    - For --app python without --envfile/-e, pbx warns and asks for confirmation to proceed without an env file.
 
 - pbx qsub
   - Required: --config/-c, --job-name/-N, --queue/-q, --select, --walltime/-T, --project/-A
   - Optional: --filesystems, --run-dir, --apps/-a, --tags/-t, --retries
   - Behavior: creates run dir, generates submit.sh from config template, runs qsub submit.sh
+  - Details:
+    - If --filesystems is omitted, the filesystems line is removed from the generated script.
+    - --apps and --tags are passed to pbx run inside submit.sh to select which jobs to execute.
 
 - pbx ls
   - Filters: --status/-s, --app/-a, --tag/-t
-  - Displays resources as n:{nodes}-g:{gpus|auto}-nocc:{fraction|NA}
+  - Pagination:
+    - --all shows all jobs.
+    - -n N shows first N jobs; -n -N shows last N jobs; -n 0 shows all.
+    - If > 25 jobs and no flags are used, ls shows first 10 and last 10 with "..." separator.
+  - Display formatting:
+    - ID column shows parent dependencies as "ID (p1,p2,...,pn)" (truncated beyond 4).
+    - Scheduler job IDs are truncated for readability.
+    - Paths are truncated to show leading and trailing segments.
+  - Resource string:
+    - Displays as n:{nodes}-r:{total_ranks}-g:{gpu_count}-nocc:{fraction|NA}
+    - For multi-node GPU jobs: total_ranks = total_gpus (1 rank per GPU)
+    - For multi-node CPU jobs: total_ranks = num_nodes * ranks_per_node
+    - For single-node jobs: total_ranks = ngpus (GPU) or ranks_per_node (CPU)
 
 - pbx info
   - Field selectors: --path/-p, --ngpus/-n, --app/-a, --status/-s, --tag/-t,
     --input/-i, --sched-job-id/-j, --timestamp/-ts, --envfile/-e, --parents/-P
+  - When any field selector is used, the ID column is always included.
+  - --parents/-P shows a dedicated Parents column with full parent lists; without it, the ID column includes a truncated parent view.
+  - If some job IDs are not found, info reports them and continues for found jobs.
 
 - pbx filter
   - Filters: --status/-s, --app/-a, --tag/-t, --path/-p, --in-file/-i
   - Outputs space‑separated job IDs for command composition
+  - If no jobs match, outputs nothing (silent)
 
 - pbx update
   - Fields: --status, --app, --tag, --input/-i, --ngpus/-g, --envfile/-e,
-    --nnodes/-n, --nocc/-o
+    --nnodes/-n, --nocc/-o, --ranks-per-node/-rpn
   - Dependencies: --add_deps/--padd, --rm_deps/--parm
+  - Validation:
+    - --nnodes must be ≥ 1; --nocc in (0.0, 1.0]; --ranks-per-node ≥ 1.
+  - CPU vs GPU updates:
+    - Setting --nocc for jobs with ngpus > 0 prompts confirmation to convert to CPU-only (ngpus=0).
+  - Dependency updates:
+    - Validates parent IDs and prevents circular dependencies (a job cannot be its own parent).
+    - Shows warnings when removing non-existent parents and reports a per-job summary.
+  - Examples:
+    - pbx update 14 --ranks-per-node 8
+    - pbx update 12 --add_deps "8 9" --rm_deps "7"
+    - pbx update 11 --nocc 0.5
 
 - pbx rm
   - Remove by explicit IDs, or pbx rm all (with confirmation)
@@ -136,6 +179,11 @@ Note on usage:
 - pbx run (internal)
   - Engine used by qsub; not intended for direct user invocation.
   - Options (for completeness): --config/-c, --apps/-a, --tags/-t, --retries, --run-dir
+  - Behavior:
+    - Discovers jobs with status Ready or Restart, applies --apps/--tags filters,
+      enforces parent dependencies (parents must be Done), assigns resources,
+      submits apps, and dynamically schedules backlog as resources free up.
+    - Writes logs to the run directory (log.pbx).
 
 ## Configuration
 
