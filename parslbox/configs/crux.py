@@ -99,7 +99,7 @@ class CruxConfig(SystemConfig):
                     cores_per_worker=cores_per_worker,
                     # Use configurable CPU affinity for Parsl workers
                     #cpu_affinity=self.WORKER_CPU_AFFINITY,
-                    prefetch_capacity=1,  # Good for CPU workloads
+                    prefetch_capacity=0,  # Good for CPU workloads
                     provider=LocalProvider(
                         init_blocks=1,
                         max_blocks=1,
