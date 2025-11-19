@@ -24,7 +24,7 @@ class CruxConfig(SystemConfig):
     GPUS_PER_NODE = 0  # CPU-only system
     SCHEDULER = "PBS"
     MPI_CMD_TO_USE = "mpiexec"
-    MAX_WORKERS_PER_NODE = 8
+    MAX_WORKERS_PER_NODE = 8    # Since there are 8 NUMA domains - Although PBX resource_manager does not implement NUMA domains
     WORKER_CPU_AFFINITY = "list:0-15,128-143:16-31,144-159:32-47,160-175:48-63,176-191:64-79,192-207:80-95,208-223:96-111,224-239:112-127,240-255"
     
     def __init__(self):
@@ -79,11 +79,12 @@ class CruxConfig(SystemConfig):
         nodes, total_gpus = self.detect_resources()
         
         # For CPU-only workloads, we can use multiple workers per node
-        # Since there are 8 NUMA domains - Although PBX resource_manager does not implement NUMA domains
-        cores_per_worker = self.CORES_PER_NODE // self.MAX_WORKERS_PER_NODE  # 32 cores per worker
+
         max_workers_per_node=self.MAX_WORKERS_PER_NODE*nodes    # Because LocalProvider does not launch workers on compute nodes.
                                                                 # It only launches workers on the first node where the Parsl manager is running.
-
+        
+        cores_per_worker = self.CORES_PER_NODE // max_workers_per_node      # cores to be assigned to each worker. Oversubscription is possible
+                                                                            # by setting cores_per_worker < 1.0.
         return Config(
             executors=[
                 HighThroughputExecutor(
