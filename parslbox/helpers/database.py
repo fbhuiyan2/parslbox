@@ -1,6 +1,7 @@
 import sqlite3
 import typer
 import re
+import time
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from .database_migrate import needs_migration, migrate_database
@@ -41,6 +42,39 @@ END;
 """
 
 
+def configure_connection(conn: sqlite3.Connection) -> None:
+    """
+    Configure SQLite connection for better concurrency and performance.
+    
+    Args:
+        conn: SQLite connection to configure
+    """
+    # Enable WAL mode for better concurrency and reduced locking
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")  # Faster than FULL, still safe
+    conn.execute("PRAGMA cache_size=10000;")    # 10MB cache for better performance
+    conn.execute("PRAGMA temp_store=memory;")   # Use RAM for temporary tables
+    conn.execute("PRAGMA busy_timeout=5000;")  # Wait 5 seconds for locks before failing
+
+
+def get_configured_connection(db_path: Path) -> sqlite3.Connection:
+    """
+    Get a SQLite connection with WAL mode and performance optimizations.
+    
+    Args:
+        db_path: Path to the SQLite database file
+        
+    Returns:
+        Configured SQLite connection
+    """
+    conn = sqlite3.connect(db_path)
+    configure_connection(conn)
+    return conn
+
+
+
+
+
 def save_current_db_schema(schema_file_path: Path, create_table_sql: str, create_trigger_sql: str):
     """Save current schema to YAML file"""
     schema_data = {
@@ -78,7 +112,7 @@ def initialize_database(db_path: Path):
             migrate_database(db_path, CREATE_TABLE_SQL, CREATE_TRIGGER_SQL)
         
         # Create/update database
-        with sqlite3.connect(db_path) as con:
+        with get_configured_connection(db_path) as con:
             cur = con.cursor()
             cur.execute(CREATE_TABLE_SQL)
             cur.execute(CREATE_TRIGGER_SQL)
@@ -103,7 +137,7 @@ def add_job(db_path: Path, path: str, app: str, num_nodes: int, ngpus: int, node
         import json
         parents_str = json.dumps([str(p) for p in parents])
     
-    with sqlite3.connect(db_path) as con:
+    with get_configured_connection(db_path) as con:
         cur = con.cursor()
         cur.execute(
             "INSERT INTO jobs (path, app, tag, in_file, mpi_opts, env_file, parents, status, num_nodes, ngpus, node_occupancy, ranks_per_node) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -117,7 +151,7 @@ def get_jobs(db_path: Path, status: Optional[str] = None, app: Optional[str] = N
     Retrieves jobs from the database, allowing for filtering by status, app, tag, path, and in_file.
     Filters are combined with AND logic. Path and in_file use pattern matching (LIKE).
     """
-    with sqlite3.connect(db_path) as con:
+    with get_configured_connection(db_path) as con:
         con.row_factory = sqlite3.Row  # Access columns by name
         cur = con.cursor()
         
@@ -162,14 +196,14 @@ def get_jobs(db_path: Path, status: Optional[str] = None, app: Optional[str] = N
 
 def remove_jobs_by_id(db_path: Path, job_ids: List[int]) -> int:
     """Removes jobs by their IDs and returns the number of rows deleted."""
-    with sqlite3.connect(db_path) as con:
+    with get_configured_connection(db_path) as con:
         cur = con.cursor()
         cur.execute(f"DELETE FROM jobs WHERE job_id IN ({','.join('?' for _ in job_ids)})", job_ids)
         return cur.rowcount
 
 def remove_all_jobs(db_path: Path) -> int:
     """Removes all jobs from the database."""
-    with sqlite3.connect(db_path) as con:
+    with get_configured_connection(db_path) as con:
         cur = con.cursor()
         cur.execute("DELETE FROM jobs")
         return cur.rowcount
@@ -182,7 +216,7 @@ def get_jobs_by_ids(db_path: Path, job_ids: List[int]) -> List[Dict[str, Any]]:
     if not job_ids:
         return []
     
-    with sqlite3.connect(db_path) as con:
+    with get_configured_connection(db_path) as con:
         con.row_factory = sqlite3.Row
         cur = con.cursor()
         
@@ -370,7 +404,7 @@ def update_jobs(
         WHERE job_id IN ({','.join('?' for _ in job_ids)})
     """
 
-    with sqlite3.connect(db_path) as con:
+    with get_configured_connection(db_path) as con:
         cur = con.cursor()
         cur.execute(query, final_params)
         return cur.rowcount

@@ -368,6 +368,9 @@ def run(
             # Future created successfully - no additional tracking needed
             # Dependencies are now checked via database
             
+            # Add throttling to prevent database write storms
+            time.sleep(0.1)
+            
         except InsufficientResources as e:
             # This is NOT an error - just temporary resource unavailability
             logger.info(f"Job {job_id}: Resources temporarily unavailable, added to backlog: {e}")
