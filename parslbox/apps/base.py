@@ -199,7 +199,6 @@ class AppBase(ABC):
         
         # Construct the full bash script
         return f"""
-set +x  # Disable command echoing to keep output clean
 cd {job_path}
 
 # Environment Setup (from config.yaml + env_file if provided)
