@@ -37,10 +37,19 @@ class LammpsApp(AppBase):
         total_gpus = kwargs['total_gpus']
         app_config = kwargs['app_config']
         
+        # Check if wrapper script is being used for GPU assignment
+        # If wrapper script is used, each rank sees only 1 GPU via CUDA_VISIBLE_DEVICES
+        if total_gpus > 0 and '.sh' in mpi_prefix and 'wrapper' in mpi_prefix:
+            # Wrapper script is being used - each rank sees 1 GPU
+            lammps_gpu_count = 1
+        else:
+            # No wrapper script - use total GPU count
+            lammps_gpu_count = total_gpus
+        
         # LAMMPS-specific: GPU vs CPU arguments
         if total_gpus > 0:
             # GPU-enabled LAMMPS command with Kokkos
-            lammps_args = f"-k on g {total_gpus} -sf kk -pk kokkos newton on neigh half -in {in_file}"
+            lammps_args = f"-k on g {lammps_gpu_count} -sf kk -pk kokkos newton on neigh half -in {in_file}"
         else:
             # CPU-only LAMMPS command
             lammps_args = f"-in {in_file}"

@@ -10,7 +10,7 @@ from unittest.mock import patch
 from parslbox.apps.lammps import LammpsApp
 from parslbox.resource_manager.models import NodeResource, JobResourceSpec, NodeAssignment
 from parslbox.resource_manager.resource_manager import ResourceManager
-from parslbox.resource_manager.mpi_launcher import compose_all_mpi_commands
+from parslbox.resource_manager.mpi_launcher import compose_mpi_command
 from parslbox.configs.polaris import PolarisConfig
 
 def test_lammps_mpi_commands():
@@ -35,7 +35,7 @@ def test_lammps_mpi_commands():
     print(f"CPU cores assigned: {cpu_assignment.cpu_assignments[0]}")
     
     # Generate MPI commands
-    cpu_mpi_commands = compose_all_mpi_commands(cpu_assignment, system_config, 0.25)
+    cpu_mpi_commands = compose_mpi_command(cpu_assignment, resource_manager.system_config, spec) compose_all_mpi_commands(cpu_assignment, system_config, 0.25)
     print(f"MPI commands for CPU job:")
     for key, cmd in cpu_mpi_commands.items():
         if key.startswith('PBX_'):
@@ -60,7 +60,7 @@ def test_lammps_mpi_commands():
     print(f"CPU cores assigned: {gpu_assignment.cpu_assignments[0]}")
     
     # Generate MPI commands
-    gpu_mpi_commands = compose_all_mpi_commands(gpu_assignment, system_config, 1.0)
+    gpu_mpi_commands = compose_mpi_command(gpu_assignment, resource_manager.system_config, spec)
     print(f"MPI commands for GPU job:")
     for key, cmd in gpu_mpi_commands.items():
         if key.startswith('PBX_'):
@@ -160,8 +160,8 @@ def test_lammps_mpi_commands():
     print(f"✅ No CPU core overlap between concurrent jobs")
     
     # Generate MPI commands for both jobs
-    mpi3 = compose_all_mpi_commands(assignment3, system_config, 0.125)
-    mpi4 = compose_all_mpi_commands(assignment4, system_config, 0.125)
+    mpi3 = compose_mpi_command(assignment, resource_manager.system_config, spec)
+    mpi4 = compose_mpi_command(assignment, resource_manager.system_config, spec)
     
     print(f"Job 3 MPI: {mpi3['PBX_MPI_PREFIX']}")
     print(f"Job 4 MPI: {mpi4['PBX_MPI_PREFIX']}")

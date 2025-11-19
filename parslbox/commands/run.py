@@ -14,7 +14,7 @@ from parslbox.configs.loader import load_config, get_system_config
 from parslbox.helpers.logging_utils import setup_logging
 from parslbox.helpers.config_utils import load_app_config, is_app_configured
 from parslbox.helpers import database, path_utils
-from parslbox.resource_manager.mpi_launcher import compose_all_mpi_commands
+from parslbox.resource_manager.mpi_launcher import compose_mpi_command
 from parslbox.resource_manager.exceptions import InsufficientResources
 from parslbox.resource_manager.models import create_job_resource_spec
 
@@ -145,7 +145,7 @@ def create_parsl_future(job, app_instance, app_config, config_name, db_path, sch
         job_spec = create_job_resource_spec(job)
         
         # Generate MPI commands
-        mpi_commands = compose_all_mpi_commands(assignment, system_config, job_spec)
+        mpi_commands = compose_mpi_command(assignment, system_config, job_spec, job_path)
         logger.info(f"Job {job_id}: Generated MPI command - {mpi_commands.get('PBX_MPI_PREFIX', 'None')}")
         
         # Run preprocessing

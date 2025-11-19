@@ -20,8 +20,41 @@ logger = logging.getLogger(__name__)
 VALID_LAUNCHERS = ('mpirun', 'mpiexec', 'srun')
 
 
+def write_gpu_wrapper(wrapper_content: str, assignment: 'ResourceAssignment', wrapper_type: str, job_path: str = None) -> str:
+    """
+    Write GPU wrapper script to job directory or temp location.
+    
+    Args:
+        wrapper_content: The bash script content to write
+        assignment: Resource assignment for the job
+        wrapper_type: Type of wrapper ('openmpi' or 'mpiexec')
+        job_path: Optional job directory path
+        
+    Returns:
+        Path to the written wrapper script
+    """
+    if job_path:
+        # Write to job directory
+        wrapper_path = os.path.join(job_path, f"parslbox_{wrapper_type}_gpu_wrapper_{assignment.job_id}.sh")
+        with open(wrapper_path, 'w') as f:
+            f.write(wrapper_content)
+        os.chmod(wrapper_path, 0o755)
+    else:
+        # Fallback to temp location
+        fd, wrapper_path = tempfile.mkstemp(prefix=f"parslbox_{wrapper_type}_gpu_wrapper_{assignment.job_id}_", suffix=".sh")
+        try:
+            with os.fdopen(fd, 'w') as f:
+                f.write(wrapper_content)
+            os.chmod(wrapper_path, 0o755)
+        except:
+            os.close(fd)
+            raise
+    
+    logger.debug(f"Generated {wrapper_type} GPU wrapper: {wrapper_path}")
+    return wrapper_path
 
-def generate_openmpi_rankfile(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec') -> str:
+
+def generate_openmpi_rankfile(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec', job_path: str = None) -> str:
     """
     Generate OpenMPI rankfile for CPU binding (GPU binding handled by wrapper).
     
@@ -46,24 +79,33 @@ def generate_openmpi_rankfile(assignment: 'ResourceAssignment', system_config: '
             
             global_rank += 1
     
-    # Write rankfile to temporary location
-    fd, rankfile_path = tempfile.mkstemp(prefix=f"parslbox_openmpi_rankfile_{assignment.job_id}_", suffix=".txt")
-    try:
-        with os.fdopen(fd, 'w') as f:
+    # Write rankfile to job directory or temp location
+    if job_path:
+        rankfile_path = os.path.join(job_path, f"parslbox_openmpi_rankfile_{assignment.job_id}.txt")
+        with open(rankfile_path, 'w') as f:
             f.write(rankfile_content)
-    except:
-        os.close(fd)
-        raise
+    else:
+        # Fallback to temp location
+        fd, rankfile_path = tempfile.mkstemp(prefix=f"parslbox_openmpi_rankfile_{assignment.job_id}_", suffix=".txt")
+        try:
+            with os.fdopen(fd, 'w') as f:
+                f.write(rankfile_content)
+        except:
+            os.close(fd)
+            raise
     
     logger.debug(f"Generated OpenMPI rankfile: {rankfile_path}")
     return rankfile_path
 
 
-def generate_mpiexec_rankfile(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec') -> str:
+def generate_mpiexec_rankfile(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec', job_path: str = None) -> str:
     """
-    Generate MPICH/PALS rankfile for CPU and GPU binding.
+    Generate MPICH/PALS rankfile for CPU binding only.
     
-    Format: <rank> <host_index> <cpu_cores> [<gpu_ids>]
+    Format: <rank> <host_index> <cpu_cores> <optional gpus>
+    
+    Note: GPU binding via rankfile has issues with mpiexec, so GPUs are assigned 
+    via wrapper scripts instead.
     """
     rankfile_content = ""
     global_rank = 0
@@ -74,17 +116,11 @@ def generate_mpiexec_rankfile(assignment: 'ResourceAssignment', system_config: '
         for local_rank in node_ranks:
             # Get actual CPU cores assigned to this rank by resource manager
             cpu_cores = assignment.get_cpu_assignments_for_rank(global_rank)
-            gpu_ids = assignment.get_gpu_assignments_for_rank(global_rank)
             
             if cpu_cores:
                 cpu_cores_str = ",".join(map(str, cpu_cores))
+                # Only include CPU binding - GPU assignment handled by wrapper script
                 line = f"{global_rank} {node_idx} {cpu_cores_str}"
-                
-                # Add GPU assignment if this is a GPU job
-                if job_spec.is_gpu_job() and gpu_ids:
-                    gpu_ids_str = ",".join(map(str, gpu_ids))
-                    line += f" {gpu_ids_str}"
-                
                 rankfile_content += line + "\n"
             else:
                 logger.warning(f"No CPU assignment found for rank {global_rank} on node {hostname}")
@@ -92,20 +128,26 @@ def generate_mpiexec_rankfile(assignment: 'ResourceAssignment', system_config: '
             
             global_rank += 1
     
-    # Write rankfile to temporary location
-    fd, rankfile_path = tempfile.mkstemp(prefix=f"parslbox_mpiexec_rankfile_{assignment.job_id}_", suffix=".txt")
-    try:
-        with os.fdopen(fd, 'w') as f:
+    # Write rankfile to job directory or temp location
+    if job_path:
+        rankfile_path = os.path.join(job_path, f"parslbox_mpiexec_rankfile_{assignment.job_id}.txt")
+        with open(rankfile_path, 'w') as f:
             f.write(rankfile_content)
-    except:
-        os.close(fd)
-        raise
+    else:
+        # Fallback to temp location
+        fd, rankfile_path = tempfile.mkstemp(prefix=f"parslbox_mpiexec_rankfile_{assignment.job_id}_", suffix=".txt")
+        try:
+            with os.fdopen(fd, 'w') as f:
+                f.write(rankfile_content)
+        except:
+            os.close(fd)
+            raise
     
-    logger.debug(f"Generated MPICH/PALS rankfile: {rankfile_path}")
+    logger.debug(f"Generated MPICH/PALS rankfile (CPU binding only): {rankfile_path}")
     return rankfile_path
 
 
-def generate_openmpi_gpu_wrapper(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec') -> str:
+def generate_openmpi_gpu_wrapper(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec', job_path: str = None) -> str:
     """
     Generate GPU assignment wrapper script for OpenMPI (CPU binding handled by rankfile).
     
@@ -150,21 +192,10 @@ fi
 exec "$@"
 """
     
-    # Write wrapper to temporary location
-    fd, wrapper_path = tempfile.mkstemp(prefix=f"parslbox_gpu_wrapper_{assignment.job_id}_", suffix=".sh")
-    try:
-        with os.fdopen(fd, 'w') as f:
-            f.write(wrapper_content)
-        os.chmod(wrapper_path, 0o755)
-    except:
-        os.close(fd)
-        raise
-    
-    logger.debug(f"Generated OpenMPI GPU wrapper: {wrapper_path}")
-    return wrapper_path
+    return write_gpu_wrapper(wrapper_content, assignment, "openmpi", job_path)
 
 
-def generate_mpiexec_gpu_wrapper(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec') -> str:
+def generate_mpiexec_gpu_wrapper(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec', job_path: str = None) -> str:
     """
     Generate GPU assignment wrapper script for MPICH/PALS (CPU binding handled by --cpu-bind).
     
@@ -205,21 +236,10 @@ fi
 exec "$@"
 """
     
-    # Write wrapper to temporary location
-    fd, wrapper_path = tempfile.mkstemp(prefix=f"parslbox_mpiexec_gpu_wrapper_{assignment.job_id}_", suffix=".sh")
-    try:
-        with os.fdopen(fd, 'w') as f:
-            f.write(wrapper_content)
-        os.chmod(wrapper_path, 0o755)
-    except:
-        os.close(fd)
-        raise
-    
-    logger.debug(f"Generated MPICH/PALS GPU wrapper: {wrapper_path}")
-    return wrapper_path
+    return write_gpu_wrapper(wrapper_content, assignment, "mpiexec", job_path)
 
 
-def compose_mpirun_launch_cmd(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec') -> Tuple[str, str]:
+def compose_mpirun_launch_cmd(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec', job_path: str = None) -> Tuple[str, str]:
     """
     Compose mpirun launch command prefix using appropriate binding strategy based on job type.
     
@@ -241,12 +261,12 @@ def compose_mpirun_launch_cmd(assignment: 'ResourceAssignment', system_config: '
         
     else:
         # Sub-node jobs and GPU jobs: Use rankfile for precise binding
-        rankfile_path = generate_openmpi_rankfile(assignment, system_config, job_spec)
+        rankfile_path = generate_openmpi_rankfile(assignment, system_config, job_spec, job_path)
         base_cmd = f"mpirun -H {hostlist} -np {total_ranks} --map-by rankfile:file={rankfile_path}"
         
         if job_spec.is_gpu_job():
             # GPU job: add wrapper for GPU assignment
-            wrapper_path = generate_openmpi_gpu_wrapper(assignment, system_config, job_spec)
+            wrapper_path = generate_openmpi_gpu_wrapper(assignment, system_config, job_spec, job_path)
             prefix = f"{base_cmd} {wrapper_path}"
         else:
             # Sub-node CPU job: rankfile only
@@ -255,7 +275,7 @@ def compose_mpirun_launch_cmd(assignment: 'ResourceAssignment', system_config: '
     return "PBX_MPIRUN_PREFIX", prefix
 
 
-def compose_mpiexec_launch_cmd(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec') -> Tuple[str, str]:
+def compose_mpiexec_launch_cmd(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec', job_path: str = None) -> Tuple[str, str]:
     """
     Compose mpiexec launch command prefix using appropriate binding strategy based on job type.
     
@@ -299,7 +319,7 @@ def compose_mpiexec_launch_cmd(assignment: 'ResourceAssignment', system_config: 
             
             if job_spec.is_gpu_job():
                 # Sub-node GPU job: Use wrapper script instead of --gpu-bind
-                wrapper_path = generate_mpiexec_gpu_wrapper(assignment, system_config, job_spec)
+                wrapper_path = generate_mpiexec_gpu_wrapper(assignment, system_config, job_spec, job_path)
                 prefix = f"mpiexec -n {total_ranks} -host {hostname} {cpu_bind_arg} {wrapper_path}".strip()
             else:
                 # Sub-node CPU job: CPU binding only
@@ -315,11 +335,20 @@ def compose_mpiexec_launch_cmd(assignment: 'ResourceAssignment', system_config: 
             logger.debug(f"Generated MPICH multi-node full-node CPU command: ppn={ranks_per_node}, depth={cores_per_rank}")
             
         else:
-            # Multi-node sub-node or GPU jobs: Use rankfile
-            rankfile_path = generate_mpiexec_rankfile(assignment, system_config, job_spec)
-            ranks_per_node = total_ranks // len(assignment.hostnames)
+            # Multi-node sub-node or GPU jobs: Use rankfile for CPU binding
+            rankfile_path = generate_mpiexec_rankfile(assignment, system_config, job_spec, job_path)
+            ranks_per_node = len(assignment.get_ranks_for_node(0)) if assignment.hostnames else total_ranks // len(assignment.hostnames)
             hostlist = ",".join(assignment.hostnames)
-            prefix = f"mpiexec -n {total_ranks} -ppn {ranks_per_node} -hosts {hostlist} --rankfile {rankfile_path}"
+            
+            if job_spec.is_gpu_job():
+                # Multi-node GPU job: Use rankfile for CPU binding + wrapper for GPU assignment
+                wrapper_path = generate_mpiexec_gpu_wrapper(assignment, system_config, job_spec, job_path)
+                prefix = f"mpiexec -n {total_ranks} -ppn {ranks_per_node} -hosts {hostlist} --rankfile {rankfile_path} {wrapper_path}"
+                logger.debug(f"Generated MPICH multi-node GPU command: rankfile + wrapper")
+            else:
+                # Multi-node CPU job: Use rankfile for CPU binding only
+                prefix = f"mpiexec -n {total_ranks} -ppn {ranks_per_node} -hosts {hostlist} --rankfile {rankfile_path}"
+                logger.debug(f"Generated MPICH multi-node CPU command: rankfile only")
     
     return "PBX_MPIEXEC_PREFIX", prefix
 
@@ -350,43 +379,37 @@ def compose_srun_launch_cmd(assignment: 'ResourceAssignment', system_config: 'Sy
     return "PBX_SRUN_PREFIX", prefix
 
 
-def compose_all_mpi_commands(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec') -> Dict[str, str]:
+def compose_mpi_command(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec', job_path: str = None) -> Dict[str, str]:
     """
-    Generate all MPI command prefixes and set the default based on system config.
+    Generate the required MPI command prefix based on system configuration.
     
     Args:
         assignment: Resource assignment for the job
         system_config: System configuration
         job_spec: Job resource specification
+        job_path: Optional job directory path for wrapper scripts and rankfiles
         
     Returns:
-        Dictionary of environment variable names to command prefixes
+        Dictionary with the generated MPI command prefix
     """
-    all_prefixes = {}
-    
-    # Generate all available prefixes
-    composers = [
-        compose_mpirun_launch_cmd,
-        compose_mpiexec_launch_cmd,
-        compose_srun_launch_cmd,
-    ]
-    
-    for composer in composers:
-        try:
-            key, prefix = composer(assignment, system_config, job_spec)
-            all_prefixes[key] = prefix
-        except Exception:
-            logger.exception(f"Failed to compose launch prefix with {composer}")
-    
-    # Set the default based on system configuration
+    # Generate only the required command based on system config
     if system_config.MPI_CMD_TO_USE == "mpirun":
-        all_prefixes["PBX_MPI_PREFIX"] = all_prefixes.get("PBX_MPIRUN_PREFIX", "")
+        key, prefix = compose_mpirun_launch_cmd(assignment, system_config, job_spec, job_path)
     elif system_config.MPI_CMD_TO_USE == "mpiexec":
-        all_prefixes["PBX_MPI_PREFIX"] = all_prefixes.get("PBX_MPIEXEC_PREFIX", "")
+        key, prefix = compose_mpiexec_launch_cmd(assignment, system_config, job_spec, job_path)
     elif system_config.MPI_CMD_TO_USE == "srun":
-        all_prefixes["PBX_MPI_PREFIX"] = all_prefixes.get("PBX_SRUN_PREFIX", "")
+        key, prefix = compose_srun_launch_cmd(assignment, system_config, job_spec)
     else:
-        raise RuntimeError(f"Unknown MPI_CMD_TO_USE: {system_config.MPI_CMD_TO_USE}")
+        raise ValueError(f"Unknown MPI_CMD_TO_USE: {system_config.MPI_CMD_TO_USE}")
     
-    logger.debug(f"Generated MPI commands for job {assignment.job_id}: {all_prefixes}")
-    return all_prefixes
+    # Return both the specific command and set it as the default
+    result = {
+        key: prefix,
+        "PBX_MPI_PREFIX": prefix
+    }
+    
+    logger.debug(f"Generated MPI command for job {assignment.job_id}: {system_config.MPI_CMD_TO_USE} -> {prefix}")
+    return result
+
+
+
