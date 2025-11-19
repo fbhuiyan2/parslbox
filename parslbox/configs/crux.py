@@ -24,7 +24,9 @@ class CruxConfig(SystemConfig):
     GPUS_PER_NODE = 0  # CPU-only system
     SCHEDULER = "PBS"
     MPI_CMD_TO_USE = "mpiexec"
-    MAX_WORKERS_PER_NODE = 8    # Since there are 8 NUMA domains - Although PBX resource_manager does not implement NUMA domains
+    MAX_WORKERS_PER_NODE = 4    # There are 8 NUMA domains so 8 can be assigned - Although PBX resource_manager does not implement NUMA domains
+                                # But that is an overkill and spwans too many workers when using 100s of nodes, so, 2 or 4 is better
+                                # 4 will allow node_occupancy down to 0.25
     WORKER_CPU_AFFINITY = "list:0-15,128-143:16-31,144-159:32-47,160-175:48-63,176-191:64-79,192-207:80-95,208-223:96-111,224-239:112-127,240-255"
     
     def __init__(self):

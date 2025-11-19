@@ -71,10 +71,12 @@ class PolarisConfig(SystemConfig):
         """
         nodes, total_gpus = self.detect_resources()
         
-        # Calculate how many physical cores each worker (mapped to a GPU) gets
-        cores_per_worker = self.CORES_PER_NODE // self.MAX_WORKERS_PER_NODE
         max_workers_per_node=self.MAX_WORKERS_PER_NODE*nodes    # Because LocalProvider does not launch workers on compute nodes.
                                                                 # It only launches workers on the first node where the Parsl manager is running.
+
+        # Calculate how many physical cores each worker (mapped to a GPU) gets
+        cores_per_worker = self.CORES_PER_NODE / max_workers_per_node      # cores to be assigned to each worker. Oversubscription is possible
+                                                                            # by setting cores_per_worker < 1.0.
 
         return Config(
             executors=[
