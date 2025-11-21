@@ -199,8 +199,8 @@ def create_parsl_future(job, app_instance, app_config, config_name, db_path, sch
         
     except Exception as e:
         logger.error(f"Job {job_id}: Failed to submit Parsl app: {e}")
-        # Free resources if job submission failed
-        resource_manager.free_resources(job_id)
+        # Free resources if job submission failed (with health tracking)
+        resource_manager.free_resources_with_health_check(job_id, job_succeeded=False, error_message=str(e))
         database.update_jobs(db_path, job_ids=[job_id], status="Failed")
         return False
 
@@ -402,9 +402,21 @@ def run(
     fut_to_item = {item['future']: item for item in futures}
     
     logger.info(f"Starting to process {len(fut_to_item)} initial jobs...")
+    
+    # Track last recovery attempt time for periodic node recovery
+    last_recovery_attempt = time.time()
+    recovery_interval = 60  # Attempt recovery every 60 seconds
 
     while fut_to_item:
         try:
+            # Periodically attempt to recover quarantined nodes
+            current_time = time.time()
+            if current_time - last_recovery_attempt >= recovery_interval:
+                recovered_nodes = resource_manager.attempt_node_recovery()
+                if recovered_nodes:
+                    logger.info(f"Recovered {len(recovered_nodes)} nodes from quarantine: {recovered_nodes}")
+                last_recovery_attempt = current_time
+            
             # Wait for any future to complete
             for fut in as_completed(list(fut_to_item.keys()), timeout=10):
                 # Check if future still exists (might have been processed already)
@@ -461,9 +473,14 @@ def run(
                 database.update_jobs(db_path, job_ids=[job_id], status=job_status)
                 logger.info(f"Job {job_id}: Final status set to '{job_status}'.")
                 
-                # Always free resources after job completion (success or failure)
+                # Free resources with health tracking based on job outcome
                 try:
-                    resource_manager.free_resources(job_id)
+                    job_succeeded = (job_status == "Done")
+                    resource_manager.free_resources_with_health_check(
+                        job_id=job_id, 
+                        job_succeeded=job_succeeded, 
+                        error_message=error_message if not job_succeeded else None
+                    )
                     logger.info(f"Job {job_id}: Finished running. Freed allocated resources.")
                     
                     # Filter backlog by dependency satisfaction, then schedule
@@ -519,6 +536,26 @@ def run(
             continue
 
     logger.info("All jobs completed, including rescheduled ones")
+    
+    # Log final node health summary
+    try:
+        health_summary = resource_manager.get_node_health_summary()
+        system_health = health_summary['system_health']
+        
+        logger.info(f"Final System Health Summary:")
+        logger.info(f"  Total nodes tracked: {system_health['total_tracked_nodes']}")
+        logger.info(f"  Healthy nodes: {system_health['healthy_nodes']}")
+        logger.info(f"  Suspected nodes: {system_health['suspected_nodes']}")
+        logger.info(f"  Quarantined nodes: {system_health['quarantined_nodes']}")
+        
+        if health_summary['quarantined_nodes']:
+            logger.warning(f"Quarantined nodes at end of run:")
+            for quarantined in health_summary['quarantined_nodes']:
+                logger.warning(f"  - {quarantined['node_id']} ({quarantined['hostname']}): "
+                              f"{quarantined['consecutive_failures']} failures, "
+                              f"last error: {quarantined['last_failure_error']}")
+    except Exception as e:
+        logger.error(f"Failed to generate final health summary: {e}")
 
     # 7. Cleanup
     parsl.dfk().cleanup()

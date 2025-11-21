@@ -6,11 +6,13 @@ and scheduling for jobs across HPC systems.
 """
 
 import logging
+import time
 from typing import List, Dict, Optional, TYPE_CHECKING
 
 from .models import NodeResource, JobResourceSpec, ResourceAssignment, create_job_resource_spec
 from .exceptions import InsufficientResources, JobNotFound, InvalidResourceSpec
 from .cpu_affinity import CPUAffinityManager
+from .node_failure_tracker import NodeFailureTracker
 
 if TYPE_CHECKING:
     from parslbox.configs.base import SystemConfig
@@ -49,10 +51,16 @@ class ResourceManager:
             system_config.CORES_PER_NODE
         )
         
+        # Initialize node failure tracker for fault tolerance
+        max_failures = getattr(system_config, 'MAX_CONSECUTIVE_FAILURES', 3)
+        quarantine_duration = getattr(system_config, 'QUARANTINE_DURATION', 600)  # 10 minutes
+        self.failure_tracker = NodeFailureTracker(max_failures, quarantine_duration)
+        
         # Initialize nodes from system configuration
         self._initialize_nodes()
         
         logger.info(f"Initialized resource manager with {len(self.nodes)} nodes")
+        logger.info(f"Fault tolerance: max_failures={max_failures}, quarantine_duration={quarantine_duration}s")
     
     def _initialize_nodes(self) -> None:
         """Initialize node resources from system configuration."""
@@ -235,9 +243,9 @@ class ResourceManager:
         # Calculate number of CPU cores needed based on occupancy
         num_cores_needed = max(1, int(spec.node_occupancy * self.system_config.CORES_PER_NODE))
         
-        # Find a node with enough CPU cores
+        # Find a healthy node with enough CPU cores
         for node in self.nodes:
-            if node.can_fit_cpu_cores(num_cores_needed):
+            if node.can_fit_cpu_cores(num_cores_needed) and node.health_tracker.can_accept_jobs():
                 # Use simple core assignment (no GPU affinity for CPU-only jobs)
                 assigned_cores = node.assign_cpu_job(spec.job_id, num_cores_needed)
                 
@@ -288,9 +296,9 @@ class ResourceManager:
         # Calculate cores per GPU for balanced allocation
         cores_per_gpu = self.system_config.CORES_PER_NODE // self.system_config.GPUS_PER_NODE
         
-        # Find a node with enough GPUs and CPU cores
+        # Find a healthy node with enough GPUs and CPU cores
         for node in self.nodes:
-            if node.can_fit_gpu_job(spec.ngpus, cores_per_gpu):
+            if node.can_fit_gpu_job(spec.ngpus, cores_per_gpu) and node.health_tracker.can_accept_jobs():
                 # Use the new combined assignment method
                 assigned_gpus, cpu_assignments = node.assign_gpu_job(
                     spec.job_id, spec.ngpus, cores_per_gpu, self.cpu_affinity_manager
@@ -340,8 +348,8 @@ class ResourceManager:
         - Full-node CPU-only jobs blocks all CPUs as well as GPUs
         
         """
-        # Find enough completely free nodes
-        free_nodes = [node for node in self.nodes if node.is_completely_free()]
+        # Find enough completely free and healthy nodes
+        free_nodes = [node for node in self.nodes if node.is_completely_free() and node.health_tracker.can_accept_jobs()]
         
         if len(free_nodes) < spec.num_nodes:
             available = len(free_nodes)
@@ -398,8 +406,8 @@ class ResourceManager:
         - For single-node full GPU jobs: use all GPUs on the node
         - Since all CPUs and GPUs are being used here, affinity CPU assignment is (at least should be) guarnteed
         """
-        # Find enough completely free nodes
-        free_nodes = [node for node in self.nodes if node.is_completely_free()]
+        # Find enough completely free and healthy nodes
+        free_nodes = [node for node in self.nodes if node.is_completely_free() and node.health_tracker.can_accept_jobs()]
         
         if len(free_nodes) < spec.num_nodes:
             available = len(free_nodes)
@@ -499,6 +507,11 @@ class ResourceManager:
     def free_resources(self, job_id: int) -> None:
         """
         Free up resources assigned to a job.
+        
+        .. deprecated:: 
+            Use :func:`free_resources_with_health_check` instead for proper fault tolerance.
+            This method does not update node health tracking and should only be used
+            for internal operations where health tracking is handled separately.
         
         Args:
             job_id: The job ID to free resources for
@@ -632,3 +645,191 @@ class ResourceManager:
     def get_backlog_jobids(self) -> List[int]:
         """Get job ids of jobs in the backlog."""
         return list(self._backlogged_jobs_set)
+    
+    # Fault tolerance methods
+    
+    def record_job_failure(self, job_id: int, error_message: str = None) -> None:
+        """
+        Record a job failure and handle node health tracking.
+        
+        Args:
+            job_id: The job ID that failed
+            error_message: Error message from the failure
+        """
+        if job_id not in self.job_assignments:
+            logger.warning(f"Cannot record failure for job {job_id}: no resource assignment found")
+            return
+        
+        assignment = self.job_assignments[job_id]
+        
+        # Record failure for each node used by the job
+        for node_id in assignment.node_ids:
+            node = self._get_node_by_id(node_id)
+            if node:
+                # Record failure in node's health tracker
+                should_quarantine = node.health_tracker.record_failure(error_message)
+                
+                if should_quarantine:
+                    logger.error(f"Node {node_id} ({node.hostname}) quarantined after job {job_id} failure")
+                    
+                    # Also record in the centralized failure tracker
+                    self.failure_tracker.record_job_failure(node_id, job_id, error_message)
+    
+    def record_job_success(self, job_id: int) -> None:
+        """
+        Record a successful job completion and update node health.
+        
+        Args:
+            job_id: The job ID that succeeded
+        """
+        if job_id not in self.job_assignments:
+            logger.warning(f"Cannot record success for job {job_id}: no resource assignment found")
+            return
+        
+        assignment = self.job_assignments[job_id]
+        
+        # Record success for each node used by the job
+        for node_id in assignment.node_ids:
+            node = self._get_node_by_id(node_id)
+            if node:
+                # Record success in node's health tracker
+                old_status = node.health_tracker.health_status
+                node.health_tracker.record_success()
+                
+                if old_status != node.health_tracker.health_status:
+                    logger.info(f"Node {node_id} ({node.hostname}) health improved from {old_status.value} "
+                               f"to {node.health_tracker.health_status.value} after job {job_id} success")
+                
+                # Also record in the centralized failure tracker
+                self.failure_tracker.record_job_success(node_id, job_id)
+    
+    def free_resources_with_health_check(self, job_id: int, job_succeeded: bool = True, error_message: str = None) -> None:
+        """
+        Free resources and update node health based on job outcome.
+        
+        This is the recommended method to use instead of free_resources() directly
+        when you know the job outcome.
+        
+        Args:
+            job_id: The job ID to free resources for
+            job_succeeded: Whether the job succeeded or failed
+            error_message: Error message if job failed
+        """
+        # Record job outcome for health tracking
+        if job_succeeded:
+            self.record_job_success(job_id)
+        else:
+            self.record_job_failure(job_id, error_message)
+        
+        # Free the resources
+        self.free_resources(job_id)
+    
+    def get_node_health_summary(self) -> Dict:
+        """
+        Get comprehensive node health information.
+        
+        Returns:
+            Dictionary with node health summary
+        """
+        health_summary = {
+            'system_health': self.failure_tracker.get_system_health_summary(),
+            'node_details': {},
+            'quarantined_nodes': []
+        }
+        
+        # Get detailed health for each node
+        for node in self.nodes:
+            node_health = node.health_tracker.get_status_summary()
+            health_summary['node_details'][node.node_id] = {
+                'hostname': node.hostname,
+                'health': node_health,
+                'resource_status': {
+                    'available_gpus': len(node.available_gpu_ids),
+                    'total_gpus': node.total_gpus,
+                    'cpu_occupancy': node.cpu_occupancy,
+                    'assigned_jobs': node.assigned_jobs.copy()
+                }
+            }
+            
+            # Track quarantined nodes
+            if not node_health['can_accept_jobs']:
+                health_summary['quarantined_nodes'].append({
+                    'node_id': node.node_id,
+                    'hostname': node.hostname,
+                    'health_status': node_health['health_status'],
+                    'consecutive_failures': node_health['consecutive_failures'],
+                    'last_failure_error': node_health['last_failure_error']
+                })
+        
+        return health_summary
+    
+    def force_quarantine_node(self, node_id: str, reason: str = "Manual quarantine") -> bool:
+        """
+        Manually quarantine a node.
+        
+        Args:
+            node_id: ID of the node to quarantine
+            reason: Reason for quarantine
+            
+        Returns:
+            True if node was quarantined, False if node not found
+        """
+        node = self._get_node_by_id(node_id)
+        if not node:
+            logger.error(f"Cannot quarantine node {node_id}: node not found")
+            return False
+        
+        node.health_tracker.health_status = node.health_tracker.health_status.QUARANTINED
+        node.health_tracker.quarantine_start_time = time.time()
+        node.health_tracker.last_failure_error = reason
+        
+        # Also record in centralized tracker
+        self.failure_tracker.force_quarantine_node(node_id, reason)
+        
+        logger.warning(f"Node {node_id} ({node.hostname}) manually quarantined: {reason}")
+        return True
+    
+    def force_recover_node(self, node_id: str) -> bool:
+        """
+        Manually recover a quarantined node.
+        
+        Args:
+            node_id: ID of the node to recover
+            
+        Returns:
+            True if node was recovered, False if node not found or not quarantined
+        """
+        node = self._get_node_by_id(node_id)
+        if not node:
+            logger.error(f"Cannot recover node {node_id}: node not found")
+            return False
+        
+        if node.health_tracker.health_status != node.health_tracker.health_status.QUARANTINED:
+            logger.warning(f"Node {node_id} is not quarantined (status: {node.health_tracker.health_status.value})")
+            return False
+        
+        node.health_tracker.health_status = node.health_tracker.health_status.HEALTHY
+        node.health_tracker.consecutive_failures = 0
+        node.health_tracker.quarantine_start_time = None
+        
+        # Also record in centralized tracker
+        self.failure_tracker.force_recover_node(node_id)
+        
+        logger.info(f"Node {node_id} ({node.hostname}) manually recovered from quarantine")
+        return True
+    
+    def attempt_node_recovery(self) -> List[str]:
+        """
+        Attempt to recover nodes whose quarantine period has expired.
+        
+        Returns:
+            List of node IDs that were recovered
+        """
+        recovered_nodes = []
+        
+        for node in self.nodes:
+            if node.health_tracker.attempt_recovery():
+                recovered_nodes.append(node.node_id)
+                logger.info(f"Node {node.node_id} ({node.hostname}) automatically recovered from quarantine")
+        
+        return recovered_nodes

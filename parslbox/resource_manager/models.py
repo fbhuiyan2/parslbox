@@ -12,6 +12,8 @@ import logging
 if TYPE_CHECKING:
     from .cpu_affinity import CPUAffinityManager
 
+from .node_failure_tracker import NodeHealthTracker
+
 logger = logging.getLogger(__name__)
 
 
@@ -41,6 +43,7 @@ class NodeResource:
     
     Tracks GPU assignments individually and CPU usage via occupancy.
     For single-node jobs, also tracks individual CPU core assignments.
+    Includes health tracking for fault tolerance.
     """
     node_id: str
     hostname: str
@@ -52,6 +55,7 @@ class NodeResource:
     assigned_jobs: List[int] = field(default_factory=list)
     job_cpu_assignments: Dict[int, List[int]] = field(default_factory=dict)  # job_id -> assigned core IDs
     job_gpu_assignments: Dict[int, List[int]] = field(default_factory=dict)  # job_id -> assigned GPU IDs
+    health_tracker: NodeHealthTracker = field(default_factory=NodeHealthTracker)  # Health tracking for fault tolerance
     
     def __post_init__(self):
         """Initialize available GPU and CPU core IDs if not provided."""
@@ -287,16 +291,22 @@ class NodeResource:
         logger.debug(f"Freed resources for job {job_id} on node {self.node_id}")
     
     def get_status(self) -> Dict:
-        """Get current status of the node."""
-        return {
+        """Get current status of the node including health information."""
+        status = {
             'node_id': self.node_id,
             'hostname': self.hostname,
             'total_gpus': self.total_gpus,
             'available_gpus': len(self.available_gpu_ids),
             'cpu_occupancy': self.cpu_occupancy,
             'assigned_jobs': self.assigned_jobs.copy(),
-            'is_free': len(self.assigned_jobs) == 0
+            'is_free': len(self.assigned_jobs) == 0,
+            'can_accept_jobs': self.health_tracker.can_accept_jobs()
         }
+        
+        # Add health information
+        status.update(self.health_tracker.get_status_summary())
+        
+        return status
 
 
 @dataclass

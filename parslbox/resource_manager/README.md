@@ -127,9 +127,58 @@ print(summary)
 ### Resource Cleanup
 
 ```python
-# When job completes
-resource_manager.free_resources(job_id=1)
-# Automatically tries to schedule backlogged jobs
+# When job completes (RECOMMENDED - with fault tolerance)
+resource_manager.free_resources_with_health_check(
+    job_id=1, 
+    job_succeeded=True,  # or False if job failed
+    error_message=None   # or error message if job failed
+)
+
+# Legacy method (DEPRECATED - use above method instead)
+# resource_manager.free_resources(job_id=1)
+```
+
+## Fault Tolerance
+
+The resource manager includes comprehensive fault tolerance features to prevent cascading failures:
+
+### Node Health Tracking
+
+Each node tracks its health status:
+- **HEALTHY** - Node is functioning normally
+- **SUSPECTED** - Node has some failures but still accepts jobs
+- **QUARANTINED** - Node is isolated due to persistent failures
+
+### Error Classification
+
+Errors are automatically classified:
+- **PERSISTENT** - Node-level issues (e.g., "unix exit code 127", missing executables)
+- **TRANSIENT** - Temporary issues (e.g., network timeouts)
+- **JOB_SPECIFIC** - Input/configuration issues
+
+### Quarantine Logic
+
+```python
+# Nodes are quarantined after 3 consecutive failures (configurable)
+# Quarantine duration: 10 minutes (configurable)
+
+# Manual node management
+resource_manager.force_quarantine_node("node-01", "Hardware issue")
+resource_manager.force_recover_node("node-01")
+
+# Get health summary
+health = resource_manager.get_node_health_summary()
+print(f"Quarantined nodes: {health['quarantined_nodes']}")
+```
+
+### Configuration
+
+Set fault tolerance parameters in your system config:
+
+```python
+class MySystemConfig(SystemConfig):
+    MAX_CONSECUTIVE_FAILURES = 3      # Failures before quarantine
+    QUARANTINE_DURATION = 600         # Quarantine time in seconds
 ```
 
 ## Resource Allocation Logic
