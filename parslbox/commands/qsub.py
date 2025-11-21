@@ -131,6 +131,16 @@ def qsub(
     
     run_options_str = " ".join(run_options)
     
+    # Capture environment variables for parslbox paths
+    import os
+    pbx_env_vars = ""
+    if os.getenv("PBX_DB_PATH"):
+        pbx_env_vars += f'export PBX_DB_PATH="{os.getenv("PBX_DB_PATH")}"\n'
+    if os.getenv("PBX_CONFIG_PATH"):
+        pbx_env_vars += f'export PBX_CONFIG_PATH="{os.getenv("PBX_CONFIG_PATH")}"\n'
+    
+
+    
     # Prepare template variables
     template_vars = {
         'job_name': job_name,
@@ -140,6 +150,7 @@ def qsub(
         'filesystems': filesystems or '',
         'project': project,
         'pbx_python_env_setup': pbx_python_env_setup,
+        'pbx_env_vars': pbx_env_vars,
         'config': config_name,
         'run_dir': './', #str(run_dir.resolve()),  # Use absolute path for the run directory
         'run_options': run_options_str

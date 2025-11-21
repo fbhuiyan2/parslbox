@@ -108,7 +108,20 @@ def info(
     
     # Create and populate table
     headers = [field[1] for field in selected_fields]
-    table = Table(*headers)
+    
+    # Check if path is being displayed to configure wrapping
+    path_in_fields = any(field[0] == 'path' for field in selected_fields)
+    
+    if path_in_fields:
+        # Configure table to allow wrapping for long paths
+        table = Table(*headers, expand=True)
+        # Find the path column index and configure it for wrapping
+        for i, (field_key, _) in enumerate(selected_fields):
+            if field_key == 'path':
+                table.columns[i].no_wrap = False
+                table.columns[i].overflow = "fold"
+    else:
+        table = Table(*headers)
     
     for job in jobs:
         row_data = []

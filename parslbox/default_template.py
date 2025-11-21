@@ -33,6 +33,9 @@ schedulers:
       
       {pbx_python_env_setup}
       
+      # Set ParslBox environment variables if provided
+      {pbx_env_vars}
+      
       pbx run --config {config} --run-dir {run_dir} {run_options}
 
   slurm:
@@ -53,6 +56,9 @@ schedulers:
       echo "Job Name: $SLURM_JOB_NAME"
       
       {pbx_python_env_setup}
+      
+      # Set ParslBox environment variables if provided
+      {pbx_env_vars}
       
       pbx run --config {config} --run-dir {run_dir} {run_options}
 

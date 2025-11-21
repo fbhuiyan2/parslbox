@@ -257,6 +257,18 @@ def run(
     
     logger.info("--- parslbox orchestrator starting ---")
     logger.info(f"Using Parsl run directory: {run_dir.resolve()}")
+    
+    # Log environment variable status for debugging
+    import os
+    if os.getenv("PBX_DB_PATH"):
+        logger.info(f"Using custom database path: {db_path}")
+    else:
+        logger.info(f"Using default database path: {db_path}")
+    
+    if os.getenv("PBX_CONFIG_PATH"):
+        logger.info(f"Using custom config path: {path_utils.PBX_CONFIG_FILE}")
+    else:
+        logger.info(f"Using default config path: {path_utils.PBX_CONFIG_FILE}")
 
     try:
         parsl_config, scheduler = load_config(name=config_name, run_dir=run_dir, retries=retries)
