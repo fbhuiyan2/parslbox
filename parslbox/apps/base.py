@@ -181,6 +181,7 @@ class AppBase(ABC):
             executable=executable,
             in_file=in_file,
             total_gpus=total_gpus,
+            config_name=config_name,
             app_config=app_config,
             mpi_commands=mpi_commands
         )
