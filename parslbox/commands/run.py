@@ -136,6 +136,21 @@ def create_parsl_future(job, app_instance, app_config, config_name, db_path, sch
     logger = logging.getLogger(__name__)
     
     try:
+        # Check job status and claim it immediately to prevent race conditions
+        current_jobs = database.get_jobs_by_ids(db_path, [job_id])
+        if not current_jobs:
+            logger.warning(f"Job {job_id}: Job no longer exists in database, skipping")
+            return False
+            
+        current_status = current_jobs[0]['status']
+        if current_status not in ['Ready', 'Restart']:
+            logger.info(f"Job {job_id}: Status is '{current_status}', skipping (already processed by another process)")
+            return False
+        
+        # Immediately claim the job by updating status to "Submitted"
+        database.update_jobs(db_path, job_ids=[job_id], status="Submitted")
+        logger.info(f"Job {job_id}: Successfully claimed job for processing")
+        
         # Get resource assignment (should already exist)
         assignment = resource_manager.get_job_assignment(job_id)
         if not assignment:
@@ -157,9 +172,6 @@ def create_parsl_future(job, app_instance, app_config, config_name, db_path, sch
             app_config=app_config, 
             config_name=config_name
         )
-        
-        # Update job status
-        database.update_jobs(db_path, job_ids=[job_id], status="Submitted")
         
         # Set scheduler job ID
         if scheduler == "PBS":
