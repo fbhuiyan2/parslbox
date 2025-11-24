@@ -42,6 +42,23 @@ class VaspApp(AppBase):
         if not executable:
             executable = 'vasp_gpu' if total_gpus > 0 else 'vasp_std'
         
+        # VASP on Sophia: Remove CPU binding/rankfile options due to compatibility issues
+        config_name = kwargs.get('config_name', '')
+        if 'sophia' in config_name.lower():
+            import re
+            original_prefix = mpi_prefix
+            # Remove both old and new rankfile syntax
+            mpi_prefix = re.sub(r'--rankfile\s+\S+', '', mpi_prefix)           # Old syntax
+            mpi_prefix = re.sub(r'--map-by\s+rankfile:file=\S+', '', mpi_prefix)  # New syntax
+            # Clean up extra spaces
+            mpi_prefix = ' '.join(mpi_prefix.split())
+            
+            if mpi_prefix != original_prefix:
+                logger = logging.getLogger(__name__)
+                logger.info(f"VASP on Sophia: Removed CPU binding options from MPI command")
+                logger.debug(f"Original: {original_prefix}")
+                logger.debug(f"Modified: {mpi_prefix}")
+        
         # Log the command being constructed
         logger = logging.getLogger(__name__)
         logger.info(f"VASP command: {mpi_prefix} {mpi_opts_str} {executable}")
