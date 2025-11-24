@@ -50,12 +50,14 @@ class VaspApp(AppBase):
             # Remove both old and new rankfile syntax
             mpi_prefix = re.sub(r'--rankfile\s+\S+', '', mpi_prefix)           # Old syntax
             mpi_prefix = re.sub(r'--map-by\s+rankfile:file=\S+', '', mpi_prefix)  # New syntax
+            # Remove hostname specification
+            mpi_prefix = re.sub(r'-H\s+\S+', '', mpi_prefix)                   # -H hostname
             # Clean up extra spaces
             mpi_prefix = ' '.join(mpi_prefix.split())
             
             if mpi_prefix != original_prefix:
                 logger = logging.getLogger(__name__)
-                logger.info(f"VASP on Sophia: Removed CPU binding options from MPI command")
+                logger.info(f"VASP on Sophia: Removed CPU binding and hostname options from MPI command")
                 logger.debug(f"Original: {original_prefix}")
                 logger.debug(f"Modified: {mpi_prefix}")
         
