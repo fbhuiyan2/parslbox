@@ -22,6 +22,8 @@ schedulers:
       #PBS -A {project}
       #PBS -o pbx_scheduler.out
       #PBS -j oe
+      #PBS -m b
+      #PBS -M your@email.com
       
       cd $PBS_O_WORKDIR
       > pbx_scheduler.out
@@ -119,4 +121,12 @@ lammps:
 #     executable_path: "/path/to/vasp_gpu"
 #     environment_setup: |
 #       # module load vasp_env
+#   sophia:
+#     executable_path: "/path/to/vasp_gpu"
+#     environment_setup: |
+#       # module load vasp_env
+#     # Example: VASP on Sophia has issues with rankfile and hostname flags
+#     mpi_overrides:
+#       disable: ["rankfile", "-H"]
+#       # add: ["--mca btl ^openib"]  # Optional: add custom MPI flags
 """

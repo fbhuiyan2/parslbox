@@ -1,256 +1,134 @@
-# ParslBox Resource Manager
+# ParslBox Resource Manager (Updated)
 
-A comprehensive resource management system for ParslBox that handles allocation and tracking of nodes, CPUs, and GPUs across different HPC systems.
+Concise reference to the Resource Manager architecture, key concepts, and MPI command generation strategy.
 
-## Overview
+## Scope and Goals
 
-The ParslBox Resource Manager provides intelligent resource allocation for jobs running on HPC systems like Polaris and Sophia. It supports:
+- Allocate and track nodes, CPUs, and GPUs across HPC systems.
+- Support sub-node sharing for single-node jobs, exclusive nodes for multi-node jobs.
+- Provide deterministic per-rank resource assignments for sub-node CPU/GPU jobs.
+- Generate MPI command lines consistently with modular overrides where needed.
 
-- **Single-node GPU jobs** with automatic GPU assignment and sharing
-- **Single-node CPU jobs** with fractional node occupancy
-- **Multi-node MPI jobs** with exclusive node allocation
-- **Resource backlog and queuing** when resources are unavailable
-- **Automatic resource cleanup** when jobs complete
+## Core Modules
 
-## Architecture
+- `models.py`
+  - `NodeResource`: tracks per-node GPUs, CPU cores, occupancy, and health.
+  - `JobResourceSpec`: job requirements; detects job type (`subnode_cpu`, `subnode_gpu`, `fullnode_cpu`, `fullnode_gpu`).
+  - `ResourceAssignment`: per-rank GPU/CPU assignments, hostnames, environment exports.
 
-### Core Components
+- `resource_manager.py`
+  - `ResourceManager`: initializes nodes, assigns resources based on job type, manages backlog and health.
+  - Design decisions:
+    - Single-node sub-node jobs can share nodes.
+    - Multi-node jobs get exclusive nodes (no sharing).
+    - Single-node CPU jobs use `node_occupancy` to determine core count.
+    - GPU jobs assign 1 rank per GPU; also assign CPU cores with optional affinity.
 
-- **`models.py`** - Data models for nodes, job specs, and assignments
-- **`manager.py`** - Main resource manager class
-- **`exceptions.py`** - Custom exceptions for resource management
-- **`utils.py`** - Utility functions for MPI commands and resource formatting
+- `cpu_affinity.py`
+  - `CPUAffinityManager`: optional affinity for CPU selection per GPU.
+  - Format: `"list:group1:group2:..."`, with groups defined by comma-separated ranges (e.g., `"0-15,128-143:16-31,144-159"`).
+  - If affinity is present, prefer cores in the GPU's affinity group; otherwise fall back to available cores.
 
-### Key Classes
+- `mpi_launcher.py`
+  - `MPICommandBuilder`: modular MPI flag construction for `mpirun`, `mpiexec`, `srun`.
+  - Rankfile generation:
+    - OpenMPI: `rank <global_rank>=<hostname> slot=<cpu_cores>`
+    - MPICH/PALS: `<rank> <host_index> <cpu_cores>`
+  - GPU wrappers export `CUDA_VISIBLE_DEVICES` and `ZE_AFFINITY_MASK` (and related env) per rank.
 
-#### `NodeResource`
-Represents a compute node with:
-- GPU tracking (individual GPU IDs)
-- CPU occupancy (fractional usage)
-- Job assignments
+## Key Assumptions
 
-#### `JobResourceSpec`
-Defines job resource requirements:
-- Number of nodes
-- GPUs per node
-- Node occupancy (for CPU-only jobs)
+- GPU jobs: one MPI rank per GPU.
+- Cores per GPU (balanced CPU distribution) = `CORES_PER_NODE // GPUS_PER_NODE`.
+- Sub-node CPU jobs: per-rank core sets assigned explicitly and bound via rankfile or `--cpu-bind list` (depending on launcher).
+- Full-node CPU jobs: core distribution handled by MPI (no per-rank core lists in assignment).
+- Multi-node jobs require completely free nodes.
 
-#### `NodeAssignment`
-Result of resource allocation:
-- Assigned nodes and hostnames
-- GPU assignments per node
-- Environment variables for job execution
+## Job Type Detection
 
-#### `ParslboxResourceManager`
-Main manager class that:
-- Initializes nodes from system configuration
-- Assigns resources based on job requirements
-- Handles resource cleanup and backlog scheduling
+`JobResourceSpec.detect_job_type(system_config)` returns one of:
+- `subnode_cpu`: single-node, `node_occupancy < 1.0`.
+- `subnode_gpu`: single-node, GPU count less than GPUs per node.
+- `fullnode_cpu`: single-node full occupancy or multi-node CPU-only.
+- `fullnode_gpu`: single-node all GPUs or multi-node GPU jobs.
 
-## Usage Examples
+This classification drives both resource allocation and MPI binding strategy.
 
-### Basic Resource Manager Setup
+## MPI Command Generation Strategy
 
-```python
-from parslbox.configs.polaris import PolarisConfig
-from parslbox.resource_manager import JobResourceSpec
+MPI flags are built modularly and then optionally filtered/extended by overrides.
 
-# Create system config and resource manager
-config = PolarisConfig()
-resource_manager = config.create_resource_manager()
+### mpirun (OpenMPI)
+- Common flags:
+  - Process count: `-np <total_ranks>`
+  - Hostlist: `-H <host1,host2,...>`
+- Full-node CPU jobs:
+  - `--map-by core:PE=<cores_per_rank> --bind-to core`
+  - MPI manages core distribution (no rankfile).
+- Sub-node CPU jobs and any GPU job:
+  - Use rankfile-based CPU binding: `--map-by rankfile:file=<openmpi_rankfile>`
+  - GPU jobs additionally use a wrapper script to set per-rank GPU env:
+    - `CUDA_VISIBLE_DEVICES=<gpu_id>`
+    - `ZE_AFFINITY_MASK="<gpu_id>.0"` and related Intel GPU env
+
+### mpiexec (MPICH/PALS)
+- Common flags:
+  - Process count: `-n <total_ranks>`
+- Single-node jobs:
+  - `-host <hostname>`
+  - Sub-node CPU: `--cpu-bind list:<core_sets_per_rank>`
+  - GPU jobs: same as above plus a GPU wrapper script; avoid `--gpu-bind`.
+- Multi-node full-node CPU jobs:
+  - `-ppn <ranks_per_node> -hosts <hostlist> --depth <cores_per_rank> --cpu-bind depth`
+- Multi-node sub-node or GPU jobs:
+  - Use rankfile for CPU binding: `--rankfile <mpiexec_rankfile>`
+  - GPU jobs add wrapper script for GPU env.
+
+### srun (SLURM)
+- Basic layout:
+  - `--ntasks <total_ranks> --ntasks-per-node <ranks_per_node_or_ngpus> --nodelist <hostlist> --nodes <num_nodes>`
+- Binding specifics are left to SLURM/MPI defaults for the target system.
+
+## Overrides (Minimal and Intuitive)
+
+Apps may provide simple overrides in `config.yaml` to disable or add flags. If no overrides are present, defaults apply.
+
+Example (YAML):
+```yaml
+vasp:
+  sophia:
+    executable_path: "/path/to/vasp_gpu"
+    environment_setup: |
+      module load vasp_env
+    mpi_overrides:
+      disable: ["rankfile", "-H"]   # remove rankfile-related flags and hostlist flag
+      # add: ["--bind-to cores"]    # optional: add exact flags
 ```
 
-### Single-Node GPU Job
+Rules:
+- `disable`: accepts substrings (e.g., `"rankfile"`) or exact flags (e.g., `"--rankfile"`, `"-H"`). If matched, the flag and its argument (if present) are removed.
+- `add`: list of full flag strings to append; each item is split on spaces to preserve flag-argument pairs.
+- Absent or empty `mpi_overrides` means no changes to defaults.
 
-```python
-# Job requiring 2 GPUs on 1 node
-spec = JobResourceSpec(job_id=1, num_nodes=1, gpus_per_node=2)
-assignment = resource_manager.assign_resources(spec)
+## Environment Exports for GPU Jobs
 
-print(f"Assigned to: {assignment.hostnames[0]}")
-print(f"GPUs: {assignment.gpu_assignments[0]}")
-print(f"Environment: {assignment.get_env_vars()}")
-# Output: {'CUDA_VISIBLE_DEVICES': '0,1', 'ZE_AFFINITY_MASK': '0,1'}
-```
+- Single-node GPU jobs: `ResourceAssignment.get_env_vars()` aggregates all GPU IDs on the node:
+  - `CUDA_VISIBLE_DEVICES="id1,id2,..."` and `ZE_AFFINITY_MASK="id1,id2,..."`.
+- Multi-node GPU jobs: per-rank GPU env is set via wrapper scripts during MPI execution.
 
-### Single-Node CPU Job
+## Fault Tolerance (Brief)
 
-```python
-# Job using 25% of a node's CPU capacity
-spec = JobResourceSpec(job_id=2, num_nodes=1, gpus_per_node=0, node_occupancy=0.25)
-assignment = resource_manager.assign_resources(spec)
-```
+Nodes track health and can be quarantined after consecutive failures. Resource freeing updates health state via:
+- `free_resources_with_health_check(job_id, job_succeeded, error_message)`
 
-### Multi-Node Job
+System-level summaries are available for recovery and scheduling decisions.
 
-```python
-# Job requiring 4 nodes
-spec = JobResourceSpec(job_id=3, num_nodes=4, gpus_per_node=0)
-assignment = resource_manager.assign_resources(spec)
+## Summary
 
-print(f"Hostlist: {assignment.get_mpi_hostlist()}")
-# Output: "node-01,node-02,node-03,node-04"
-```
-
-### MPI Command Generation
-
-```python
-from parslbox.resource_manager.utils import build_job_command
-
-# Generate complete job command
-command = build_job_command(
-    assignment=assignment,
-    app_config={"ranks_per_node": 2},
-    executable="lmp",
-    args="-k on g 2 -sf kk -in input.lammps",
-    mpi_opts="-x OMP_NUM_THREADS=1"
-)
-
-print(command)
-# Output: "export CUDA_VISIBLE_DEVICES=0,1 && mpirun -n 2 -host node-01 -x OMP_NUM_THREADS=1 lmp -k on g 2 -sf kk -in input.lammps"
-```
-
-### Resource Status Monitoring
-
-```python
-status = resource_manager.get_resource_status()
-print(f"Active jobs: {status['active_jobs']}")
-print(f"Available GPUs: {status['available_gpus']}")
-print(f"Free nodes: {status['free_nodes']}")
-
-# Get detailed summary
-from parslbox.resource_manager.utils import format_resource_summary
-summary = format_resource_summary(status)
-print(summary)
-```
-
-### Resource Cleanup
-
-```python
-# When job completes (RECOMMENDED - with fault tolerance)
-resource_manager.free_resources_with_health_check(
-    job_id=1, 
-    job_succeeded=True,  # or False if job failed
-    error_message=None   # or error message if job failed
-)
-
-# Legacy method (DEPRECATED - use above method instead)
-# resource_manager.free_resources(job_id=1)
-```
-
-## Fault Tolerance
-
-The resource manager includes comprehensive fault tolerance features to prevent cascading failures:
-
-### Node Health Tracking
-
-Each node tracks its health status:
-- **HEALTHY** - Node is functioning normally
-- **SUSPECTED** - Node has some failures but still accepts jobs
-- **QUARANTINED** - Node is isolated due to persistent failures
-
-### Error Classification
-
-Errors are automatically classified:
-- **PERSISTENT** - Node-level issues (e.g., "unix exit code 127", missing executables)
-- **TRANSIENT** - Temporary issues (e.g., network timeouts)
-- **JOB_SPECIFIC** - Input/configuration issues
-
-### Quarantine Logic
-
-```python
-# Nodes are quarantined after 3 consecutive failures (configurable)
-# Quarantine duration: 10 minutes (configurable)
-
-# Manual node management
-resource_manager.force_quarantine_node("node-01", "Hardware issue")
-resource_manager.force_recover_node("node-01")
-
-# Get health summary
-health = resource_manager.get_node_health_summary()
-print(f"Quarantined nodes: {health['quarantined_nodes']}")
-```
-
-### Configuration
-
-Set fault tolerance parameters in your system config:
-
-```python
-class MySystemConfig(SystemConfig):
-    MAX_CONSECUTIVE_FAILURES = 3      # Failures before quarantine
-    QUARANTINE_DURATION = 600         # Quarantine time in seconds
-```
-
-## Resource Allocation Logic
-
-### Single-Node Jobs
-
-**GPU Jobs:**
-- Find node with sufficient available GPUs
-- Assign specific GPU IDs (e.g., [0,1] for 2 GPUs)
-- Multiple jobs can share a node if GPU count allows
-- Set `CUDA_VISIBLE_DEVICES` for GPU isolation
-
-**CPU-Only Jobs:**
-- Use `node_occupancy` to specify fractional node usage
-- Multiple jobs can share a node until occupancy reaches 1.0
-- Example: 4 jobs with 0.25 occupancy each can share one node
-
-### Multi-Node Jobs
-
-- Require completely free nodes (no sharing)
-- Take exclusive control of assigned nodes
-- Generate hostlist for MPI execution
-
-### Resource Sharing Examples
-
-**Polaris Node (4 GPUs):**
-```
-Job 1: 2 GPUs → Gets GPUs [0,1]
-Job 2: 1 GPU  → Gets GPU [2]  
-Job 3: 1 GPU  → Gets GPU [3]
-Job 4: 1 GPU  → Waits (no GPUs available)
-```
-
-**CPU Sharing:**
-```
-Job 1: 0.5 occupancy → Node occupancy = 0.5
-Job 2: 0.3 occupancy → Node occupancy = 0.8
-Job 3: 0.2 occupancy → Node occupancy = 1.0 (full)
-Job 4: 0.1 occupancy → Waits (insufficient capacity)
-```
-
-## Integration with ParslBox
-
-The resource manager integrates seamlessly with ParslBox's existing components:
-
-1. **System Configs** - Each system config can create a resource manager
-2. **Job Database** - Resource specs can be stored alongside job metadata
-3. **App Execution** - Apps use resource assignments to generate proper commands
-4. **Scheduler Integration** - Automatically detects nodes from PBS/SLURM
-
-## Testing
-
-Run the test suite to verify functionality:
-
-```bash
-cd tests
-python3 test_resource_manager.py
-```
-
-The test suite covers:
-- Basic resource manager initialization
-- Single-node GPU job sharing
-- CPU-only job occupancy
-- Multi-node job allocation
-- MPI command generation
-- Resource cleanup and backlog scheduling
-- Error handling for insufficient resources
-
-## Future Enhancements
-
-- **Per-job resource tracking** - More sophisticated resource freeing
-- **Dynamic resource rebalancing** - Optimize resource utilization
-- **Resource usage monitoring** - Track actual vs. allocated resources
-- **Priority-based scheduling** - Advanced job prioritization
-- **Resource reservations** - Pre-allocate resources for future jobs
+- Deterministic per-rank assignments for sub-node CPU/GPU jobs.
+- Exclusive nodes for multi-node jobs.
+- MPI command lines built modularly; binding differs by job type:
+  - Full-node CPU (mpirun): `--map-by core:PE=N --bind-to core`
+  - Sub-node CPU/GPU (mpirun): rankfile + GPU wrapper (for GPU)
+  - mpiexec uses `--cpu-bind list` (single-node sub-node), `--rankfile` (multi-node sub-node/GPU), and a GPU wrapper (no `--gpu-bind`).
+- Simple, opt-in overrides (`disable`, `add`) per app/system to handle site-specific MPI constraints.

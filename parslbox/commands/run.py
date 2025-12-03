@@ -159,8 +159,9 @@ def create_parsl_future(job, app_instance, app_config, config_name, db_path, sch
         # Create JobResourceSpec from job data
         job_spec = create_job_resource_spec(job)
         
-        # Generate MPI commands
-        mpi_commands = compose_mpi_command(assignment, system_config, job_spec, job_path)
+        # Generate MPI commands with app-specific overrides
+        mpi_overrides = app_config.get('mpi_overrides')
+        mpi_commands = compose_mpi_command(assignment, system_config, job_spec, job_path, mpi_overrides)
         logger.info(f"Job {job_id}: Generated MPI command - {mpi_commands.get('PBX_MPI_PREFIX', 'None')}")
         
         # Run preprocessing
