@@ -50,6 +50,7 @@ class TestAddCommand:
         """Mock system configuration."""
         mock_config = MagicMock()
         mock_config.GPUS_PER_NODE = 4
+        mock_config.CORES_PER_NODE = 64
         return mock_config
     
     def test_single_node_gpu_job(self, temp_db, temp_job_dirs, mock_system_config):
@@ -67,13 +68,14 @@ class TestAddCommand:
             result = runner.invoke(add_app, [
                 str(temp_job_dirs["job1"]),
                 "--app", "lammps",
+                "--config", "polaris",
                 "--ngpus", "2",
                 "--tag", "test-gpu"
             ])
             
             assert result.exit_code == 0
             assert "✅ Added job" in result.stdout
-            assert "Resource specification: n:1-g:2-nocc:NA" in result.stdout
+            assert "Resource specification: n:1-r:2-g:2-nocc:NA" in result.stdout
             
             # Verify database entry
             jobs = database.get_jobs(temp_db)
@@ -95,11 +97,13 @@ class TestAddCommand:
              patch('parslbox.commands.add.get_app_config', return_value={
                  'INPUT_REQUIRED': False,
                  'DFLT_INPUT': None
-             }):
+             }), \
+             patch('typer.confirm', return_value=True):
             
             result = runner.invoke(add_app, [
                 str(temp_job_dirs["job1"]),
                 "--app", "python",
+                "--config", "polaris",
                 "--nocc", "0.5",
                 "--tag", "test-cpu"
             ])
@@ -133,6 +137,7 @@ class TestAddCommand:
             result = runner.invoke(add_app, [
                 str(temp_job_dirs["job1"]),
                 "--app", "lammps",
+                "--config", "polaris",
                 "--nnodes", "2",
                 "--ngpus", "4",  # Should be ignored
                 "--nocc", "0.5"  # Should be ignored
@@ -170,6 +175,7 @@ class TestAddCommand:
                 result = runner.invoke(add_app, [
                     str(temp_job_dirs["job1"]),
                     "--app", "python",
+                    "--config", "polaris",
                     "--ngpus", "2",
                     "--nocc", "0.5"
                 ])
@@ -194,6 +200,7 @@ class TestAddCommand:
             result = runner.invoke(add_app, [
                 str(temp_job_dirs["job1"]),
                 "--app", "lammps",
+                "--config", "polaris",
                 "--ngpus", "8"  # More than 4 GPUs per node
             ])
             
@@ -232,6 +239,7 @@ class TestAddCommand:
             result = runner.invoke(add_app, [
                 str(temp_job_dirs["job1"]),
                 "--app", "lammps",
+                "--config", "polaris",
                 "--nnodes", "0"  # Invalid node count
             ])
             
@@ -248,7 +256,8 @@ class TestAddCommand:
             
             result = runner.invoke(add_app, [
                 str(temp_job_dirs["job1"]),
-                "--app", "unknown_app"
+                "--app", "unknown_app",
+                "--config", "polaris"
             ])
             
             assert result.exit_code == 1
@@ -265,7 +274,8 @@ class TestAddCommand:
             
             result = runner.invoke(add_app, [
                 "/nonexistent/path",
-                "--app", "lammps"
+                "--app", "lammps",
+                "--config", "polaris",
             ])
             
             assert result.exit_code == 1
@@ -286,6 +296,7 @@ class TestAddCommand:
             # Add job first time
             result1 = runner.invoke(add_app, [
                 str(temp_job_dirs["job1"]),
+                "--config", "polaris",
                 "--app", "lammps"
             ])
             assert result1.exit_code == 0
@@ -293,6 +304,7 @@ class TestAddCommand:
             # Try to add same job again
             result2 = runner.invoke(add_app, [
                 str(temp_job_dirs["job1"]),
+                "--config", "polaris",
                 "--app", "lammps"
             ])
             assert result2.exit_code == 0
@@ -319,6 +331,7 @@ class TestAddCommand:
                 
                 result = runner.invoke(add_app, [
                     "all",
+                    "--config", "polaris",
                     "--app", "python"
                 ])
                 
@@ -349,6 +362,7 @@ class TestAddCommand:
             }):
                 result = runner.invoke(add_app, [
                     str(temp_job_dirs["job1"]),
+                    "--config", "polaris",
                     "--app", "lammps"
                 ])
                 
@@ -372,6 +386,7 @@ class TestAddCommand:
             
             result = runner.invoke(add_app, [
                 str(temp_job_dirs["job1"]),
+                "--config", "polaris",
                 "--app", "python"
             ])
             
