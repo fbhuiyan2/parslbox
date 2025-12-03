@@ -18,12 +18,14 @@ class PolarisConfig(SystemConfig):
     """
     
     # System specifications
+    SYSTEM_NAME = 'polaris'
     CORES_PER_NODE = 64 #32 --> 64 with hyperthreading
     GPUS_PER_NODE = 4
     SCHEDULER = "PBS"
     MPI_CMD_TO_USE = "mpiexec"
     MAX_WORKERS_PER_NODE = 4
     WORKER_CPU_AFFINITY = "list:24-31,56-63:16-23,48-55:8-15,40-47:0-7,32-39"
+    GPU_TYPE = 'cuda'
     
     def __init__(self):
         """Initialize Polaris configuration with validation."""

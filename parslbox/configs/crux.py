@@ -20,6 +20,7 @@ class CruxConfig(SystemConfig):
     """
     
     # System specifications
+    SYSTEM_NAME = 'crux'
     CORES_PER_NODE = 256    #128 --> 256 with hyperthreading
     GPUS_PER_NODE = 0  # CPU-only system
     SCHEDULER = "PBS"
@@ -28,6 +29,7 @@ class CruxConfig(SystemConfig):
                                 # But that is an overkill and spwans too many workers when using 100s of nodes, so, 2 or 4 is better
                                 # 4 will allow node_occupancy down to 0.25
     WORKER_CPU_AFFINITY = "list:0-15,128-143:16-31,144-159:32-47,160-175:48-63,176-191:64-79,192-207:80-95,208-223:96-111,224-239:112-127,240-255"
+    GPU_TYPE = None  # CPU-only system
     
     def __init__(self):
         """Initialize Crux configuration with validation."""

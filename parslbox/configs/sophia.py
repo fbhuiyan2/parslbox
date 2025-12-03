@@ -19,12 +19,14 @@ class SophiaConfig(SystemConfig):
     """
     
     # System specifications
+    SYSTEM_NAME = 'sophia'
     CORES_PER_NODE = 128
     GPUS_PER_NODE = 8
     SCHEDULER = "PBS"
     MPI_CMD_TO_USE = "mpirun"
     MAX_WORKERS_PER_NODE = 8
     WORKER_CPU_AFFINITY = None
+    GPU_TYPE = 'cuda'
     
     def __init__(self):
         """Initialize Sophia configuration with validation."""

@@ -19,6 +19,7 @@ class AuroraGpuConfig(SystemConfig):
     """
     
     # System specifications
+    SYSTEM_NAME = 'aurora-gpu'
     CORES_PER_NODE = 208  # 104 physical cores with hyperthreading
     GPUS_PER_NODE = 6     # 6 physical GPUs
     SCHEDULER = "PBS"
@@ -26,6 +27,7 @@ class AuroraGpuConfig(SystemConfig):
     MAX_WORKERS_PER_NODE = 6  # One worker per full GPU
     # Combined CPU affinity for full GPUs (combining pairs of tile groups)
     WORKER_CPU_AFFINITY = "list:1-16,105-120:17-32,121-136:33-48,137-152:53-68,157-172:69-84,173-188:85-100,189-204"
+    GPU_TYPE = 'intel'
     
     def __init__(self):
         """Initialize Aurora GPU configuration with validation."""

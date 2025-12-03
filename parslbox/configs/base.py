@@ -34,12 +34,14 @@ class SystemConfig(ABC):
     """
     
     # System specifications (must be defined in subclasses)
+    SYSTEM_NAME: str  # Human-readable system name
     CORES_PER_NODE: int
     GPUS_PER_NODE: int
     SCHEDULER: str
     MPI_CMD_TO_USE: str
     MAX_WORKERS_PER_NODE: int
     WORKER_CPU_AFFINITY: Optional[str] = None
+    GPU_TYPE: str     # GPU type: 'cuda', 'intel', None, etc.
     
     def __init__(self):
         """
