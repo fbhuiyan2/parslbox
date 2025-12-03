@@ -6,12 +6,16 @@ from parslbox.configs.base import SystemConfig
 from parslbox.configs.polaris import PolarisConfig
 from parslbox.configs.sophia import SophiaConfig
 from parslbox.configs.crux import CruxConfig
+from parslbox.configs.aurora_tile import AuroraTileConfig
+from parslbox.configs.aurora_gpu import AuroraGpuConfig
 
 # Create a dictionary that maps the config name to its configuration class
 CONFIG_FACTORIES = {
     "polaris": PolarisConfig,
     "sophia": SophiaConfig,
     "crux": CruxConfig,
+    "aurora-tile": AuroraTileConfig,
+    "aurora-gpu": AuroraGpuConfig,
     # To add a new system, create its module and add it here.
 }
 
