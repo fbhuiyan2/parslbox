@@ -10,107 +10,28 @@ from typing import Optional
 from typing_extensions import Annotated
 from concurrent.futures import as_completed
 
-from parslbox.configs.loader import load_config, get_system_config
+from parslbox.system_configs.loader import load_config, get_system_config
 from parslbox.helpers.logging_utils import setup_logging
-from parslbox.helpers.config_utils import load_app_config, is_app_configured
+from parslbox.helpers.pbx_config_utils import load_app_config, is_app_configured
 from parslbox.helpers import database, path_utils
 from parslbox.resource_manager.mpi_launcher import compose_mpi_command
 from parslbox.resource_manager.exceptions import InsufficientResources
 from parslbox.resource_manager.models import create_job_resource_spec
+
+# Import helper functions
+from parslbox.helpers.run_cmd_helpers import (
+    validate_and_normalize_status,
+    parse_parents,
+    are_parents_done,
+    get_dependency_ready_jobs,
+    get_default_run_dir
+)
 
 app = typer.Typer()
 
 # Valid job status values (stored in lowercase for comparison)
 VALID_JOB_STATUSES = ["ready", "done", "failed", "restart", "running", "submitted", "warning"]
 
-
-def validate_and_normalize_status(status: str, job_id: int = None) -> str:
-    """
-    Validate job status and return normalized (capitalized) version.
-    If invalid, return 'Warning' and log the issue.
-    
-    Args:
-        status: Status string to validate
-        job_id: Optional job ID for logging context
-        
-    Returns:
-        Normalized status string (capitalized)
-    """
-    logger = logging.getLogger(__name__)
-    
-    if not status or not isinstance(status, str):
-        if job_id:
-            logger.warning(f"Job {job_id}: Invalid status type '{type(status)}' with value '{status}'. Setting to 'Warning'.")
-        else:
-            logger.warning(f"Invalid status type '{type(status)}' with value '{status}'. Setting to 'Warning'.")
-        return "Warning"
-    
-    status_lower = status.lower().strip()
-    if status_lower in VALID_JOB_STATUSES:
-        return status_lower.capitalize()
-    else:
-        if job_id:
-            logger.warning(f"Job {job_id}: Invalid status '{status}' returned. Valid statuses are: {VALID_JOB_STATUSES}. Setting to 'Warning'.")
-        else:
-            logger.warning(f"Invalid status '{status}' provided. Valid statuses are: {VALID_JOB_STATUSES}. Setting to 'Warning'.")
-        return "Warning"
-
-
-
-
-
-def parse_parents(parents_str):
-    """Parse parents string into list of job IDs."""
-    if not parents_str:
-        return []
-    
-    import json
-    return [int(x) for x in json.loads(parents_str)]
-
-
-def are_parents_done(job, db_path):
-    """
-    Check if job's parent dependencies are satisfied.
-    
-    Args:
-        job: Job dictionary from database
-        db_path: Path to database file
-    
-    Returns:
-        bool: True if all parents are done, False otherwise
-    """
-    parents_str = job.get('parents')
-    if not parents_str:
-        return True
-    
-    parent_ids = parse_parents(parents_str)
-    
-    for parent_id in parent_ids:
-        parent_job = database.get_jobs_by_ids(db_path, [parent_id])
-        if not parent_job:
-            raise ValueError(f"Job {job['job_id']} has non-existent parent {parent_id}")
-        
-        if parent_job[0]['status'] != 'Done':
-            return False  # Can't submit yet
-    
-    return True
-
-
-def get_dependency_ready_jobs(backlog_jobs, db_path):
-    """Filter jobs whose parents are done."""
-    ready_jobs = []
-    logger = logging.getLogger(__name__)
-    
-    for job in backlog_jobs:
-        try:
-            parents_done = are_parents_done(job, db_path)
-            if parents_done:
-                ready_jobs.append(job)
-        except Exception as e:
-            logger.error(f"Error when checking dependencies for job {job['job_id']}: {e}")
-            # Don't add to ready_jobs, but don't fail either - job stays in backlog
-            continue
-    return ready_jobs
 
 
 def create_parsl_future(job, app_instance, app_config, config_name, db_path, scheduler, resource_manager, futures, system_config):
@@ -216,16 +137,6 @@ def create_parsl_future(job, app_instance, app_config, config_name, db_path, sch
         resource_manager.free_resources_with_health_check(job_id, job_succeeded=False, error_message=str(e))
         database.update_jobs(db_path, job_ids=[job_id], status="Failed")
         return False
-
-
-def get_default_run_dir() -> Path:
-    """Generate default run directory with current time and date in hhmmss_ddmmyy format."""
-    now = datetime.now()
-    time_str = now.strftime("%H%M%S")  # hhmmss format (hours + minutes + seconds)
-    date_str = now.strftime("%d%m%y")  # ddmmyy format
-    dir_name = f"{time_str}_{date_str}"
-    return Path.home() / ".parslbox" / "runs" / dir_name / "log.pbx"
-
 
 
 # Main command function

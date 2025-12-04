@@ -5,7 +5,7 @@ from typing import List, Optional
 from typing_extensions import Annotated
 from parslbox.helpers import database, path_utils
 from parslbox.apps.app_registry import get_app_config, is_app_registered
-from parslbox.configs.loader import get_system_config
+from parslbox.system_configs.loader import get_system_config
 
 app = typer.Typer()
 

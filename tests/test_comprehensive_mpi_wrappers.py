@@ -23,9 +23,9 @@ from parslbox.helpers.mpi_launcher_helpers import (
     openmpi_cuda_gpu_wrapper,
     openmpi_intel_gpu_wrapper
 )
-from parslbox.configs.aurora_tile import AuroraTileConfig
-from parslbox.configs.aurora_gpu import AuroraGpuConfig
-from parslbox.configs.polaris import PolarisConfig
+from parslbox.system_configs.aurora_tile import AuroraTileConfig
+from parslbox.system_configs.aurora_gpu import AuroraGpuConfig
+from parslbox.system_configs.polaris import PolarisConfig
 from parslbox.resource_manager.models import ResourceAssignment, JobResourceSpec
 
 

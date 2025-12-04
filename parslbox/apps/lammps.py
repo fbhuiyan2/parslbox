@@ -54,14 +54,16 @@ class LammpsApp(AppBase):
             # CPU-only LAMMPS command
             lammps_args = f"-in {in_file}"
         
+        ### Legace code, 'mpi_extra' in app config is removed from pbx_config
+        ### Instead, this is now handled by mpi_overrides: add: [] option in the pbx_config
         # LAMMPS-specific: mpi_extra_tags from app config
-        mpi_extra_tags = app_config.get('mpi_extra', '') or ''
+        # mpi_extra_tags = app_config.get('mpi_extra', '') or ''
         
         # Log the command being constructed
         logger = logging.getLogger(__name__)
-        logger.info(f"LAMMPS command: {mpi_prefix} {mpi_opts_str} {mpi_extra_tags} {executable} {lammps_args}")
+        logger.info(f"LAMMPS command: {mpi_prefix} {mpi_opts_str} {executable} {lammps_args}")
         
-        return f"{mpi_prefix} {mpi_opts_str} {mpi_extra_tags} {executable} {lammps_args}"
+        return f"{mpi_prefix} {mpi_opts_str} {executable} {lammps_args}"
     
     def check_success(self, job_id: int, job_path: Path, db_path: Path, error_message: str = None) -> str:
         """

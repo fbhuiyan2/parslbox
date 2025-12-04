@@ -18,7 +18,7 @@ from parslbox.helpers.mpi_launcher_helpers import (
 
 if TYPE_CHECKING:
     from parslbox.resource_manager.models import ResourceAssignment, JobResourceSpec
-    from parslbox.configs.base import SystemConfig
+    from parslbox.system_configs.base import SystemConfig
 
 logger = logging.getLogger(__name__)
 

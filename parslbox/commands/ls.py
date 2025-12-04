@@ -4,7 +4,7 @@ from rich.console import Console
 from rich.table import Table
 
 from parslbox.helpers import database, path_utils
-from parslbox.configs.loader import get_system_config
+from parslbox.system_configs.loader import get_system_config
 
 console = Console()
 
