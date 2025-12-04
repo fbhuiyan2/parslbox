@@ -1,0 +1,18 @@
+# This is a placeholder POTCAR file for testing purposes
+# In a real VASP calculation, this would contain the pseudopotential data
+# For testing, we just include a comment explaining what should be here
+
+# POTCAR files contain pseudopotential information and are typically:
+# - Large binary or formatted text files
+# - Specific to the elements in your calculation
+# - Licensed content that cannot be redistributed
+# - Must be obtained from VASP developers or your institution
+
+# For this test example, you would need to:
+# 1. Replace this file with actual POTCAR data for Si
+# 2. Ensure you have proper VASP licensing
+# 3. Use appropriate pseudopotentials for your calculation
+
+# Example structure (not actual data):
+# PAW_PBE Si 05Jan2001
+# [pseudopotential data would follow]
