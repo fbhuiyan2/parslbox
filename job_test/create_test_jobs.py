@@ -286,14 +286,19 @@ class TestJobCreator:
                     ngpus = self.system_config.GPUS_PER_NODE
                 return ["-g", str(ngpus)], f"Multi-GPU job, {ngpus} GPUs"
             elif config_type == 2:
-                # Multi-node GPU job (All GPUs per node)
-                nnodes = random.choice(self.multinode_options)
-                if nnodes > 1:
-                    return ["-n", str(nnodes)], f"Multi-node GPU, {nnodes} nodes"
-                else:
-                    # Full node GPU job (all GPUs on node)
-                    ngpus = self.system_config.GPUS_PER_NODE
-                    return ["-g", str(ngpus)], f"Full node GPU, {ngpus} GPUs"
+                try:
+                    # Multi-node GPU job (All GPUs per node)
+                    nnodes = random.choice(self.multinode_options)
+                    if nnodes > 1:
+                        return ["-n", str(nnodes)], f"Multi-node GPU, {nnodes} nodes"
+                    else:
+                        # Full node GPU job (all GPUs on node)
+                        ngpus = self.system_config.GPUS_PER_NODE
+                        return ["-g", str(ngpus)], f"Full node GPU, {ngpus} GPUs"
+                except:   # if the multinode_options is empty
+                    # Single GPU job
+                    ngpus = 1
+                    return ["-g", str(ngpus)], f"Single GPU job, {ngpus} GPU"
             else:
                 # Full node GPU job (all GPUs on node)
                 ngpus = self.system_config.GPUS_PER_NODE
