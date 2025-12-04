@@ -156,8 +156,7 @@ class ParslBox:
             final_input_file = None
 
             if input_required and default_input is None:
-                if input_file is None:
-                    raise ValidationError(f"Input filename is required for {app}")
+                # Allow None for programmatic use - validation can happen at runtime
                 final_input_file = input_file
             elif input_required and default_input is not None:
                 final_input_file = (
