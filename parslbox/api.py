@@ -242,7 +242,8 @@ class ParslBox:
         final_parents = []
 
         if parents:
-            final_parents = parents
+            # Create a copy to avoid modifying the caller's list
+            final_parents = list(parents)
 
         if parent_tag:
             tag_jobs = database.get_jobs(self.db_path, tag=parent_tag, status="Done")
@@ -640,6 +641,12 @@ class ParslBox:
                 config_data = yaml.safe_load(f)
         except FileNotFoundError:
             raise ValidationError(f"Configuration file not found: {self.config_path}")
+        except yaml.YAMLError as e:
+            raise ValidationError(f"Invalid YAML in configuration file: {e}")
+
+        # Validate that config_data is not None (empty file or None YAML)
+        if config_data is None:
+            raise ValidationError("Configuration file is empty or contains no data")
 
         # Validate scheduler template
         if "schedulers" not in config_data or "pbs" not in config_data["schedulers"]:
