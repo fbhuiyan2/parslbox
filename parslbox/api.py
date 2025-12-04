@@ -29,6 +29,9 @@ from parslbox.resource_manager.mpi_launcher import compose_mpi_command
 from parslbox.resource_manager.exceptions import InsufficientResources
 from parslbox.resource_manager.models import create_job_resource_spec
 from parslbox.helpers.logging_utils import setup_logging
+from parslbox.commands.add import add_jobs
+from parslbox.commands.update import update_jobs
+from parslbox.commands.qsub import submit_to_scheduler
 import parsl
 
 
@@ -96,9 +99,9 @@ class ParslBox:
 
     # ==================== Job Management Methods ====================
 
-    def add_job(
+    def add_jobs(
         self,
-        path: str,
+        paths: List[str],
         app: str,
         config: str,
         tag: Optional[str] = None,
@@ -112,16 +115,16 @@ class ParslBox:
         parents: Optional[List[int]] = None,
         parent_tag: Optional[str] = None,
         status: str = "Ready",
-    ) -> int:
+    ) -> Tuple[List[int], List[Tuple[str, str]]]:
         """
-        Add a new job to the database.
+        Add one or more jobs to the database.
 
         Args:
-            path: Path to the job directory
+            paths: List of paths to job directories (or single path as list)
             app: Application type (e.g., 'lammps', 'vasp', 'python')
             config: System configuration name (e.g., 'polaris', 'sophia')
-            tag: Optional tag to categorize the job
-            input_file: Input filename for the job
+            tag: Optional tag to categorize the job(s)
+            input_file: Input filename for the job(s)
             ngpus: Number of GPUs required (default: 0)
             nnodes: Number of nodes required (default: 1)
             node_occupancy: Node occupancy fraction for CPU-only jobs (0.0-1.0)
@@ -133,247 +136,92 @@ class ParslBox:
             status: Initial job status (default: 'Ready')
 
         Returns:
-            int: The job ID of the newly created job
+            Tuple of (successful_job_ids, failed_jobs) where:
+            - successful_job_ids: List of created job IDs
+            - failed_jobs: List of tuples (path, error_message) for failed jobs
+
+        Examples:
+            # Add multiple jobs with partial failure handling
+            job_ids, failures = pbx.add_jobs(["/path/job1", "/invalid/path"], app="lammps", config="polaris")
+            print(f"Successfully added {len(job_ids)} jobs")
+            if failures:
+                print(f"Failed to add {len(failures)} jobs:")
+                for path, error in failures:
+                    print(f"  {path}: {error}")
+        """
+        # Handle each path individually to allow partial failures
+        successful_job_ids = []
+        failed_jobs = []
+        
+        for path in paths:
+            try:
+                job_id = self.add_job(
+                    path=path,
+                    app=app,
+                    config=config,
+                    tag=tag,
+                    input_file=input_file,
+                    ngpus=ngpus,
+                    nnodes=nnodes,
+                    node_occupancy=node_occupancy,
+                    ranks_per_node=ranks_per_node,
+                    mpi_opts=mpi_opts,
+                    env_file=env_file,
+                    parents=parents,
+                    parent_tag=parent_tag,
+                    status=status,
+                )
+                successful_job_ids.append(job_id)
+            except Exception as e:
+                failed_jobs.append((path, str(e)))
+        
+        return successful_job_ids, failed_jobs
+
+    def add_job(
+        self,
+        path: str,
+        app: str,
+        config: str,
+        **kwargs
+    ) -> int:
+        """
+        Add a single job to the database (convenience method).
+
+        Args:
+            path: Path to the job directory
+            app: Application type (e.g., 'lammps', 'vasp', 'python')
+            config: System configuration name (e.g., 'polaris', 'sophia')
+            **kwargs: Additional arguments passed to add_jobs()
+
+        Returns:
+            The job ID of the newly created job
 
         Raises:
             ValidationError: If validation fails
             sqlite3.IntegrityError: If job already exists
         """
-        # Validate application
-        if not is_app_registered(app):
-            available_apps = ", ".join(get_registered_apps())
-            raise ValidationError(
-                f"Unknown application '{app}'. "
-                f"Available applications: {available_apps}"
-            )
-
-        # Handle input file logic
         try:
-            app_config = get_app_config(app)
-            input_required = app_config["INPUT_REQUIRED"]
-            default_input = app_config["DFLT_INPUT"]
-
-            final_input_file = None
-
-            if input_required and default_input is None:
-                # Allow None for programmatic use - validation can happen at runtime
-                final_input_file = input_file
-            elif input_required and default_input is not None:
-                final_input_file = (
-                    input_file if input_file is not None else default_input
-                )
-            else:
-                final_input_file = default_input
-
-        except ValueError as e:
-            raise ValidationError(str(e))
-
-        # Validate resource parameters
-        if node_occupancy is not None and not (0.0 < node_occupancy <= 1.0):
-            raise ValidationError("node_occupancy must be between 0.0 and 1.0")
-
-        if ranks_per_node is not None and ranks_per_node < 1:
-            raise ValidationError("ranks_per_node must be a positive integer")
-
-        if nnodes < 1:
-            raise ValidationError("nnodes must be at least 1")
-
-        # Get system configuration
-        try:
-            system_config = get_system_config(config)
-            gpus_per_node = system_config.GPUS_PER_NODE
-        except Exception as e:
-            raise ValidationError(f"Could not load system configuration: {e}")
-
-        # Determine final resource parameters
-        if nnodes > 1:
-            # Multi-node job
-            final_num_nodes = nnodes
-            final_ngpus = nnodes * gpus_per_node
-            final_node_occupancy = 1.0
-        else:
-            # Single-node job
-            if ngpus > 0:
-                if ngpus > gpus_per_node:
-                    raise ValidationError(
-                        f"Requested {ngpus} GPUs but only {gpus_per_node} available per node"
-                    )
-                final_num_nodes = 1
-                final_ngpus = ngpus
-                final_node_occupancy = 1.0
-            else:
-                final_num_nodes = 1
-                final_ngpus = 0
-                final_node_occupancy = (
-                    node_occupancy if node_occupancy is not None else 1.0
-                )
-
-        # Calculate ranks_per_node
-        if ranks_per_node is None:
-            if final_ngpus > 0:
-                final_ranks_per_node = 1
-            else:
-                calculated_ranks = int(
-                    system_config.CORES_PER_NODE * final_node_occupancy
-                )
-                final_ranks_per_node = max(1, calculated_ranks)
-        else:
-            if final_ngpus > 0:
-                final_ranks_per_node = 1
-            else:
-                final_ranks_per_node = ranks_per_node
-
-        # Handle environment file
-        final_env_file = None
-        if env_file:
-            env_file_path = Path(env_file)
-            if not env_file_path.is_absolute():
-                env_file_path = Path.cwd() / env_file_path
-
-            if not env_file_path.exists():
-                raise ValidationError(f"Environment file '{env_file}' does not exist")
-
-            if not env_file_path.is_file():
-                raise ValidationError(f"Environment file '{env_file}' is not a file")
-
-            final_env_file = str(env_file_path.resolve())
-
-        # Handle parent dependencies
-        final_parents = []
-
-        if parents:
-            # Create a copy to avoid modifying the caller's list
-            final_parents = list(parents)
-
-        if parent_tag:
-            tag_jobs = database.get_jobs(self.db_path, tag=parent_tag, status="Done")
-            tag_parent_ids = [job["job_id"] for job in tag_jobs]
-            final_parents.extend(tag_parent_ids)
-
-        # Validate parent job IDs
-        if final_parents:
-            existing_jobs = database.get_jobs_by_ids(self.db_path, final_parents)
-            existing_ids = {job["job_id"] for job in existing_jobs}
-            missing_ids = set(final_parents) - existing_ids
-
-            if missing_ids:
-                raise ValidationError(
-                    f"Parent job IDs do not exist: {sorted(missing_ids)}"
-                )
-
-        # Validate path
-        path_obj = Path(path)
-        if not path_obj.exists():
-            raise ValidationError(f"Path '{path}' does not exist")
-
-        if not path_obj.is_dir():
-            raise ValidationError(f"Path '{path}' is not a directory")
-
-        # Add job to database
-        try:
-            job_id = database.add_job(
-                db_path=self.db_path,
-                path=str(path_obj.resolve()),
+            # Use the core function directly to avoid circular dependency
+            job_ids = add_jobs(
+                paths=[path],
                 app=app,
-                num_nodes=final_num_nodes,
-                ngpus=final_ngpus,
-                node_occupancy=final_node_occupancy,
-                ranks_per_node=final_ranks_per_node,
-                tag=tag,
-                in_file=final_input_file,
-                mpi_opts=mpi_opts,
-                env_file=final_env_file,
-                parents=final_parents,
-                status=status,
+                config_name=config,
+                interactive_prompts=False,  # No interactive prompts for API
+                db_path=self.db_path,
+                **kwargs
             )
-            return job_id
-        except sqlite3.IntegrityError:
-            raise ValidationError(
-                f"Job with path '{path}' and input file '{final_input_file}' already exists"
-            )
+            return job_ids[0]
+        except Exception as e:
+            # Convert command ValidationError to API ValidationError if needed
+            if "ValidationError" in str(type(e)):
+                raise ValidationError(str(e))
+            else:
+                raise
 
-    def add_jobs(
-        self, paths: List[str], app: str, config: str, **kwargs
-    ) -> List[Tuple[int, Optional[Exception]]]:
-        """
-        Add multiple jobs to the database.
-
-        Args:
-            paths: List of paths to job directories
-            app: Application type
-            config: System configuration name
-            **kwargs: Additional arguments passed to add_job()
-
-        Returns:
-            List of tuples (job_id, error) where error is None if successful
-        """
-        results = []
-        for path in paths:
-            try:
-                job_id = self.add_job(path=path, app=app, config=config, **kwargs)
-                results.append((job_id, None))
-            except Exception as e:
-                results.append((None, e))
-        return results
-
-    def list_jobs(
-        self,
-        status: Optional[str] = None,
-        app: Optional[str] = None,
-        tag: Optional[str] = None,
-        path: Optional[str] = None,
-        in_file: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """
-        List jobs from the database with optional filtering.
-
-        Args:
-            status: Filter by status
-            app: Filter by application
-            tag: Filter by tag
-            path: Filter by path (partial match)
-            in_file: Filter by input file (partial match)
-
-        Returns:
-            List of job dictionaries
-        """
-        return database.get_jobs(
-            self.db_path, status=status, app=app, tag=tag, path=path, in_file=in_file
-        )
-
-    def get_job(self, job_id: int) -> Dict[str, Any]:
-        """
-        Get a single job by ID.
-
-        Args:
-            job_id: Job ID
-
-        Returns:
-            Job dictionary
-
-        Raises:
-            JobNotFoundError: If job is not found
-        """
-        jobs = database.get_jobs_by_ids(self.db_path, [job_id])
-        if not jobs:
-            raise JobNotFoundError(f"Job {job_id} not found")
-        return jobs[0]
-
-    def get_jobs_by_ids(self, job_ids: List[int]) -> List[Dict[str, Any]]:
-        """
-        Get multiple jobs by their IDs.
-
-        Args:
-            job_ids: List of job IDs
-
-        Returns:
-            List of job dictionaries
-        """
-        return database.get_jobs_by_ids(self.db_path, job_ids)
 
     def remove_job(self, job_id: int) -> bool:
         """
-        Remove a job from the database.
+        Remove a single job from the database.
 
         Args:
             job_id: Job ID to remove
@@ -405,9 +253,9 @@ class ParslBox:
         """
         return database.remove_all_jobs(self.db_path)
 
-    def update_job(
+    def update_jobs(
         self,
-        job_id: int,
+        job_ids: List[int],
         status: Optional[str] = None,
         app: Optional[str] = None,
         tag: Optional[str] = None,
@@ -419,12 +267,12 @@ class ParslBox:
         ranks_per_node: Optional[int] = None,
         add_deps: Optional[List[int]] = None,
         rm_deps: Optional[List[int]] = None,
-    ) -> bool:
+    ) -> List[int]:
         """
-        Update a job's fields.
+        Update one or more jobs' fields.
 
         Args:
-            job_id: Job ID to update
+            job_ids: List of job IDs to update
             status: New status
             app: New application
             tag: New tag
@@ -438,103 +286,91 @@ class ParslBox:
             rm_deps: Parent job IDs to remove
 
         Returns:
+            List of job IDs that were successfully updated
+
+        Raises:
+            ValidationError: If validation fails
+
+        Examples:
+            # Update a single job
+            updated_ids = pbx.update_jobs([123], status="Submitted")
+            
+            # Update multiple jobs
+            updated_ids = pbx.update_jobs([123, 124, 125], status="Failed")
+        """
+        try:
+            # Use the core function with API-specific settings
+            updated_job_ids = update_jobs(
+                job_ids=job_ids,
+                status=status,
+                app=app,
+                tag=tag,
+                input_file=input_file,
+                ngpus=ngpus,
+                env_file=env_file,
+                nnodes=nnodes,
+                node_occupancy=node_occupancy,
+                ranks_per_node=ranks_per_node,
+                add_deps=add_deps,
+                rm_deps=rm_deps,
+                interactive_prompts=False,  # No interactive prompts for API
+                db_path=self.db_path,
+            )
+            return updated_job_ids
+        except Exception as e:
+            # Convert command ValidationError to API ValidationError if needed
+            if "ValidationError" in str(type(e)):
+                raise ValidationError(str(e))
+            else:
+                raise
+
+    def update_job(
+        self,
+        job_id: int,
+        **kwargs
+    ) -> bool:
+        """
+        Update a single job's fields (convenience method).
+
+        Args:
+            job_id: Job ID to update
+            **kwargs: Additional arguments passed to update_jobs()
+
+        Returns:
             True if job was updated, False if not found
 
         Raises:
             ValidationError: If validation fails
         """
-        # Validate parameters
-        if nnodes is not None and nnodes < 1:
-            raise ValidationError("nnodes must be at least 1")
+        updated_job_ids = self.update_jobs(job_ids=[job_id], **kwargs)
+        return job_id in updated_job_ids
 
-        if node_occupancy is not None and not (0.0 < node_occupancy <= 1.0):
-            raise ValidationError("node_occupancy must be between 0.0 and 1.0")
 
-        if ranks_per_node is not None and ranks_per_node < 1:
-            raise ValidationError("ranks_per_node must be a positive integer")
+    def list_jobs(
+        self,
+        status: Optional[str] = None,
+        app: Optional[str] = None,
+        tag: Optional[str] = None,
+        path: Optional[str] = None,
+        in_file: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        List jobs from the database with optional filtering.
 
-        # Handle environment file
-        final_env_file = None
-        if env_file:
-            env_file_path = Path(env_file)
-            if not env_file_path.is_absolute():
-                env_file_path = Path.cwd() / env_file_path
+        Args:
+            status: Filter by status
+            app: Filter by application
+            tag: Filter by tag
+            path: Filter by path (partial match)
+            in_file: Filter by input file (partial match)
 
-            if not env_file_path.exists():
-                raise ValidationError(f"Environment file '{env_file}' does not exist")
-
-            if not env_file_path.is_file():
-                raise ValidationError(f"Environment file '{env_file}' is not a file")
-
-            final_env_file = str(env_file_path.resolve())
-
-        # Handle dependencies
-        final_parents = None
-        if add_deps is not None or rm_deps is not None:
-            current_job = self.get_job(job_id)
-            existing_parents = database.parse_existing_parents(
-                current_job.get("parents")
-            )
-            updated_parents = existing_parents.copy()
-
-            # Validate parent IDs
-            all_parent_ids = []
-            if add_deps:
-                all_parent_ids.extend(add_deps)
-            if rm_deps:
-                all_parent_ids.extend(rm_deps)
-
-            if all_parent_ids:
-                invalid_ids = database.validate_parent_job_ids(
-                    self.db_path, all_parent_ids
-                )
-                if invalid_ids:
-                    raise ValidationError(f"Parent job IDs do not exist: {invalid_ids}")
-
-            # Prevent circular dependencies
-            if add_deps and job_id in add_deps:
-                raise ValidationError("Job cannot be a parent of itself")
-
-            # Process removals
-            if rm_deps:
-                updated_parents, _ = database.remove_dependencies(
-                    updated_parents, rm_deps
-                )
-
-            # Process additions
-            if add_deps:
-                updated_parents = database.add_dependencies(updated_parents, add_deps)
-
-            final_parents = updated_parents
-
-        # Handle node occupancy vs ngpus conflict
-        final_ngpus = ngpus
-        final_node_occupancy = node_occupancy
-
-        if node_occupancy is not None:
-            current_job = self.get_job(job_id)
-            if current_job.get("ngpus", 0) > 0:
-                # Setting node occupancy for GPU job - set ngpus to 0
-                final_ngpus = 0
-
-        # Update job
-        count = database.update_jobs(
-            db_path=self.db_path,
-            job_ids=[job_id],
-            status=status,
-            app=app,
-            tag=tag,
-            in_file=input_file,
-            ngpus=final_ngpus,
-            env_file=final_env_file,
-            num_nodes=nnodes,
-            node_occupancy=final_node_occupancy,
-            ranks_per_node=ranks_per_node,
-            parents=final_parents,
+        Returns:
+            List of job dictionaries
+        """
+        return database.get_jobs(
+            self.db_path, status=status, app=app, tag=tag, path=path, in_file=in_file
         )
-
-        return count > 0
-
+    
     def filter_jobs(
         self,
         status: Optional[str] = None,
@@ -560,6 +396,37 @@ class ParslBox:
             status=status, app=app, tag=tag, path=path, in_file=in_file
         )
         return [job["job_id"] for job in jobs]
+    
+
+    def get_job(self, job_id: int) -> Dict[str, Any]:
+        """
+        Get a single job by ID.
+
+        Args:
+            job_id: Job ID
+
+        Returns:
+            Job dictionary
+
+        Raises:
+            JobNotFoundError: If job is not found
+        """
+        jobs = database.get_jobs_by_ids(self.db_path, [job_id])
+        if not jobs:
+            raise JobNotFoundError(f"Job {job_id} not found")
+        return jobs[0]
+
+    def get_jobs_by_ids(self, job_ids: List[int]) -> List[Dict[str, Any]]:
+        """
+        Get multiple jobs by their IDs.
+
+        Args:
+            job_ids: List of job IDs
+
+        Returns:
+            List of job dictionaries
+        """
+        return database.get_jobs_by_ids(self.db_path, job_ids)
 
     # ==================== Job Execution Methods ====================
 
@@ -635,123 +502,26 @@ class ParslBox:
             ValidationError: If configuration is invalid
             FileNotFoundError: If qsub command is not found
         """
-        # Load configuration
         try:
-            with open(self.config_path, "r") as f:
-                config_data = yaml.safe_load(f)
-        except FileNotFoundError:
-            raise ValidationError(f"Configuration file not found: {self.config_path}")
-        except yaml.YAMLError as e:
-            raise ValidationError(f"Invalid YAML in configuration file: {e}")
-
-        # Validate that config_data is not None (empty file or None YAML)
-        if config_data is None:
-            raise ValidationError("Configuration file is empty or contains no data")
-
-        # Validate scheduler template
-        if "schedulers" not in config_data or "pbs" not in config_data["schedulers"]:
-            raise ValidationError("PBS scheduler template not found in configuration")
-
-        # Validate system configuration
-        if config not in config_data:
-            raise ValidationError(f"System '{config}' not found in configuration")
-
-        # Get system-specific python environment setup
-        system_config = config_data[config]
-        pbx_python_env_setup = system_config.get("pbx_python_env_setup", "")
-
-        # Determine run directory
-        if run_dir is None:
-            now = datetime.now()
-            time_str = now.strftime("%H%M%S")
-            date_str = now.strftime("%d%m%y")
-            dir_name = f"{time_str}_{date_str}"
-            run_dir = Path.home() / ".parslbox" / "runs" / dir_name
-
-        # Create run directory
-        run_dir.mkdir(parents=True, exist_ok=True)
-
-        # Convert walltime to HH:MM:SS format
-        hours = walltime // 60
-        mins = walltime % 60
-        walltime_formatted = f"{hours:02d}:{mins:02d}:00"
-
-        # Build run options string
-        run_options = []
-        if apps:
-            run_options.append(f"--apps {','.join(apps)}")
-        if tags:
-            run_options.append(f"--tags {','.join(tags)}")
-        if retries > 0:
-            run_options.append(f"--retries {retries}")
-
-        run_options_str = " ".join(run_options)
-
-        # Capture environment variables
-        pbx_env_vars = ""
-        if os.getenv("PBX_DB_PATH"):
-            pbx_env_vars += f'export PBX_DB_PATH="{os.getenv("PBX_DB_PATH")}"\n'
-        if os.getenv("PBX_CONFIG_PATH"):
-            pbx_env_vars += f'export PBX_CONFIG_PATH="{os.getenv("PBX_CONFIG_PATH")}"\n'
-
-        # Prepare template variables
-        template_vars = {
-            "job_name": job_name,
-            "queue": queue,
-            "select": select,
-            "walltime": walltime_formatted,
-            "filesystems": filesystems or "",
-            "project": project,
-            "pbx_python_env_setup": pbx_python_env_setup,
-            "pbx_env_vars": pbx_env_vars,
-            "config": config,
-            "run_dir": "./",
-            "run_options": run_options_str,
-        }
-
-        # Get PBS template and format it
-        pbs_template = config_data["schedulers"]["pbs"]["template"]
-
-        # Handle optional filesystems directive
-        if not filesystems:
-            pbs_template = "\n".join(
-                line
-                for line in pbs_template.split("\n")
-                if "#PBS -l filesystems=" not in line
+            # Use the core function with API-specific settings
+            result = submit_to_scheduler(
+                config_name=config,
+                job_name=job_name,
+                queue=queue,
+                select=select,
+                walltime=walltime,
+                project=project,
+                filesystems=filesystems,
+                run_dir=run_dir,
+                apps=apps,
+                tags=tags,
+                retries=retries,
+                config_path=self.config_path,
             )
-
-        submit_script = pbs_template.format(**template_vars)
-
-        # Write submit script
-        submit_file = run_dir / "submit.sh"
-        with open(submit_file, "w") as f:
-            f.write(submit_script)
-
-        # Submit the job
-        try:
-            result = subprocess.run(
-                ["qsub", "submit.sh"],
-                cwd=run_dir,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-
-            job_id = result.stdout.strip()
-
-            return {
-                "success": True,
-                "pbs_job_id": job_id,
-                "run_dir": str(run_dir),
-                "submit_file": str(submit_file),
-            }
-
-        except subprocess.CalledProcessError as e:
-            return {
-                "success": False,
-                "error": e.stderr,
-                "run_dir": str(run_dir),
-                "submit_file": str(submit_file),
-            }
-        except FileNotFoundError:
-            raise ValidationError("qsub command not found. Make sure PBS is available.")
+            return result
+        except Exception as e:
+            # Convert command ValidationError to API ValidationError if needed
+            if "ValidationError" in str(type(e)):
+                raise ValidationError(str(e))
+            else:
+                raise

@@ -34,94 +34,13 @@ git clone https://github.com/fbhuiyan2/parslbox.git
 cd parslbox
 poetry install
 
-# First call initializes ~/.parslbox/config.yaml and the job database
+# First call initializes ~/.parslbox/config_pbx.yaml and the job database
+# (or custom locations via PBX_CONFIG_PATH / PBX_DB_PATH)
 pbx ls
 ```
 
-On first run, a default config is created at ~/.parslbox/config.yaml. Edit this file to set correct executable paths, environment setup, and system settings before running jobs.
+On first run, a default config is created at ~/.parslbox/config_pbx.yaml (unless PBX_CONFIG_PATH overrides it). Edit this file to set correct executable paths, environment setup, and system settings before running jobs.
 
-## Programmatic API
-
-In addition to the CLI, ParslBox provides a clean Python API for programmatic job management. The API is available in `parslbox.api` and works alongside the existing CLI without requiring any changes to the codebase.
-
-```python
-from parslbox.api import ParslBox
-
-# Initialize the API
-pbx = ParslBox()
-
-# Add a job
-job_id = pbx.add_job(
-    path="/path/to/simulation",
-    app="lammps",
-    config="polaris",
-    ngpus=2,
-    tag="production"
-)
-
-# List jobs
-jobs = pbx.list_jobs(status="Ready", app="lammps")
-
-# Update a job
-pbx.update_job(job_id, status="Submitted")
-
-# Get job details
-job = pbx.get_job(job_id)
-
-# Filter jobs
-job_ids = pbx.filter_jobs(status="Done", app="vasp")
-
-# Remove jobs
-pbx.remove_job(job_id)
-```
-
-### API Reference
-
-The `ParslBox` class provides the following main methods:
-
-- **Job Management:**
-  - `add_job()` - Add a single job
-  - `add_jobs()` - Add multiple jobs
-  - `list_jobs()` - List jobs with optional filtering
-  - `get_job()` - Get a single job by ID
-  - `get_jobs_by_ids()` - Get multiple jobs by IDs
-  - `update_job()` - Update job fields
-  - `remove_job()` - Remove a single job
-  - `remove_jobs()` - Remove multiple jobs
-  - `remove_all_jobs()` - Remove all jobs
-  - `filter_jobs()` - Filter jobs and return IDs
-
-- **Job Execution:**
-  - `qsub()` - Generate and submit PBS job scripts
-  - `run()` - Run Parsl workflows (placeholder for future implementation)
-
-### Error Handling
-
-The API raises the following exceptions:
-
-- `ParslBoxError` - Base exception for all ParslBox errors
-- `ValidationError` - Raised for validation errors (invalid parameters, etc.)
-- `JobNotFoundError` - Raised when a requested job is not found
-
-Example error handling:
-
-```python
-from parslbox.api import ParslBox, ValidationError, JobNotFoundError
-
-pbx = ParslBox()
-
-try:
-    job_id = pbx.add_job(path="/path", app="invalid", config="polaris")
-except ValidationError as e:
-    print(f"Validation error: {e}")
-
-try:
-    job = pbx.get_job(99999)
-except JobNotFoundError:
-    print("Job not found")
-```
-
-**Note:** The API is implemented in `parslbox/api.py` and uses the existing helper functions and database layer. The CLI commands remain unchanged and continue to work as before.
 
 ## Quick Start
 
@@ -181,6 +100,29 @@ pbx update 13 --envfile ./env.sh
 pbx rm 1 2 3
 pbx rm all
 pbx rm $(pbx filter --status done)
+```
+
+## Programmatic API (Python)
+
+ParslBox provides a compact Python API for scripts and AI agents. The API delegates to core logic inside the command modules (add/update/qsub), ensuring CLI and API behavior stay in sync without duplication.
+
+Main methods:
+- add_job(path, app, config, ...), add_jobs(paths, app, config, ...)
+- update_job(job_id, ...), update_jobs(job_ids, ...)
+- list_jobs(...): when called with no filters, returns all jobs
+- get_job(job_id), get_jobs_by_ids(ids)
+- remove_job, remove_jobs, remove_all_jobs
+- qsub(...): submit to the scheduler using the same template as the CLI
+
+Exceptions: ParslBoxError, ValidationError, JobNotFoundError
+
+Example:
+```python
+from parslbox.api import ParslBox
+pbx = ParslBox()
+job_id = pbx.add_job("/path/to/sim", app="lammps", config="polaris", ngpus=2)
+jobs = pbx.list_jobs()  # returns all jobs if no filters
+pbx.update_job(job_id, status="Submitted")
 ```
 
 ## Commands Overview
@@ -272,14 +214,28 @@ Note on usage:
 
 ## Configuration
 
-- A template is created at ~/.parslbox/config.yaml on first run.
-- Edit system entries (e.g., polaris, sophia) and per‑app settings (environment setup, executable paths, MPI options).
-- See parslbox/configs/*.py for programmatic configs and examples used by the engine.
+ParslBox uses environment-configurable paths for the job database and the user config via `parslbox/helpers/path_utils.py`.
 
-Data locations:
-- Database: ~/.parslbox/job_database.db
-- Runs: ~/.parslbox/runs/<timestamp>/
-- Config file: ~/.parslbox/config.yaml
+Environment variables:
+- PBX_DB_PATH
+  - Can be a directory or a full `.db` file path
+  - If a directory is provided, ParslBox uses `<dir>/job_database_pbx.db`
+- PBX_CONFIG_PATH
+  - Can be a directory or a full `.yaml`/`.yml` file path
+  - If a directory is provided, ParslBox uses `<dir>/config_pbx.yaml`
+
+Defaults (when env vars are not set):
+- Database: `~/.parslbox/job_database_pbx.db`
+- Config file: `~/.parslbox/config_pbx.yaml`
+- Runs: `~/.parslbox/runs/<timestamp>/`
+
+Both CLI and API honor these paths. Set them per session, for example:
+```bash
+export PBX_DB_PATH=/scratch/mydbs/pbx.db          # full file path
+export PBX_CONFIG_PATH=/scratch/mycfgs             # directory, becomes /scratch/mycfgs/config_pbx.yaml
+```
+
+Using PBX_DB_PATH and/or PBX_CONFIG_PATH to set the paths allow users to use multiple (and isolated) job databases and/or config files with PBX.
 
 ## Resource Manager (summary)
 
