@@ -310,7 +310,7 @@ class TestUpdateJob:
         job_dir.mkdir()
         job_id = pbx.add_job(path=str(job_dir), app="python", config="polaris")
 
-        with pytest.raises(ValidationError, match="cannot be a parent of itself"):
+        with pytest.raises(ValidationError, match="cannot be parents of themselves"):
             pbx.update_job(job_id, add_deps=[job_id])
 
 
@@ -347,13 +347,14 @@ class TestAddJobs:
             job_dir.mkdir()
             paths.append(str(job_dir))
 
-        results = pbx.add_jobs(paths=paths, app="python", config="polaris")
+        job_ids, failures = pbx.add_jobs(paths=paths, app="python", config="polaris")
 
-        assert len(results) == 3
+        assert len(job_ids) == 3
+        assert len(failures) == 0
         # All should succeed
-        for job_id, error in results:
+        for job_id in job_ids:
             assert job_id is not None
-            assert error is None
+            assert isinstance(job_id, int)
 
     def test_add_jobs_partial_failure(self, pbx, tmp_path):
         """Test adding jobs when some fail."""
@@ -363,12 +364,16 @@ class TestAddJobs:
         ]
         (tmp_path / "valid_job").mkdir()
 
-        results = pbx.add_jobs(paths=paths, app="python", config="polaris")
+        job_ids, failures = pbx.add_jobs(paths=paths, app="python", config="polaris")
 
-        assert len(results) == 2
+        assert len(job_ids) == 1  # One successful job
+        assert len(failures) == 1  # One failed job
+        
         # First should succeed
-        assert results[0][0] is not None
-        assert results[0][1] is None
+        assert job_ids[0] is not None
+        assert isinstance(job_ids[0], int)
+        
         # Second should fail
-        assert results[1][0] is None
-        assert results[1][1] is not None
+        failed_path, error_msg = failures[0]
+        assert failed_path == "/nonexistent/path"
+        assert "does not exist" in error_msg
