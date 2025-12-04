@@ -2,6 +2,8 @@
 
 Your autopilot for running HPC simulations. CLI orchestration built based on Parsl. Manage jobs for LAMMPS, VASP, and Python apps with resource‑aware scheduling, dependency tracking, and PBS submission. HPC configurations come out-of-the-box. Adding new apps and new HPC configurations is super simple.
 
+ParslBox provides both a command-line interface (CLI) and a programmatic Python API for managing and executing HPC jobs.
+
 
 ## Highlights
 
@@ -37,6 +39,89 @@ pbx ls
 ```
 
 On first run, a default config is created at ~/.parslbox/config.yaml. Edit this file to set correct executable paths, environment setup, and system settings before running jobs.
+
+## Programmatic API
+
+In addition to the CLI, ParslBox provides a clean Python API for programmatic job management. The API is available in `parslbox.api` and works alongside the existing CLI without requiring any changes to the codebase.
+
+```python
+from parslbox.api import ParslBox
+
+# Initialize the API
+pbx = ParslBox()
+
+# Add a job
+job_id = pbx.add_job(
+    path="/path/to/simulation",
+    app="lammps",
+    config="polaris",
+    ngpus=2,
+    tag="production"
+)
+
+# List jobs
+jobs = pbx.list_jobs(status="Ready", app="lammps")
+
+# Update a job
+pbx.update_job(job_id, status="Submitted")
+
+# Get job details
+job = pbx.get_job(job_id)
+
+# Filter jobs
+job_ids = pbx.filter_jobs(status="Done", app="vasp")
+
+# Remove jobs
+pbx.remove_job(job_id)
+```
+
+### API Reference
+
+The `ParslBox` class provides the following main methods:
+
+- **Job Management:**
+  - `add_job()` - Add a single job
+  - `add_jobs()` - Add multiple jobs
+  - `list_jobs()` - List jobs with optional filtering
+  - `get_job()` - Get a single job by ID
+  - `get_jobs_by_ids()` - Get multiple jobs by IDs
+  - `update_job()` - Update job fields
+  - `remove_job()` - Remove a single job
+  - `remove_jobs()` - Remove multiple jobs
+  - `remove_all_jobs()` - Remove all jobs
+  - `filter_jobs()` - Filter jobs and return IDs
+
+- **Job Execution:**
+  - `qsub()` - Generate and submit PBS job scripts
+  - `run()` - Run Parsl workflows (placeholder for future implementation)
+
+### Error Handling
+
+The API raises the following exceptions:
+
+- `ParslBoxError` - Base exception for all ParslBox errors
+- `ValidationError` - Raised for validation errors (invalid parameters, etc.)
+- `JobNotFoundError` - Raised when a requested job is not found
+
+Example error handling:
+
+```python
+from parslbox.api import ParslBox, ValidationError, JobNotFoundError
+
+pbx = ParslBox()
+
+try:
+    job_id = pbx.add_job(path="/path", app="invalid", config="polaris")
+except ValidationError as e:
+    print(f"Validation error: {e}")
+
+try:
+    job = pbx.get_job(99999)
+except JobNotFoundError:
+    print("Job not found")
+```
+
+**Note:** The API is implemented in `parslbox/api.py` and uses the existing helper functions and database layer. The CLI commands remain unchanged and continue to work as before.
 
 ## Quick Start
 
