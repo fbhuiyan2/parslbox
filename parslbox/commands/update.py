@@ -2,7 +2,9 @@ import typer
 from pathlib import Path
 from typing import List, Optional
 from typing_extensions import Annotated
-from parslbox.helpers import database, path_utils
+from parslbox.database import database
+from parslbox.utils import path_utils
+from parslbox.apps.app_registry import get_app_config
 
 app = typer.Typer()
 
@@ -27,7 +29,7 @@ def update_jobs(
     rm_deps: Optional[List[int]] = None,
     interactive_prompts: bool = True,
     db_path: Optional[Path] = None,
-) -> List[int]:
+) -> tuple[List[int], List[tuple[int, str]], List[str]]:
     """
     Core job update logic - used by both CLI and API.
     
@@ -48,7 +50,10 @@ def update_jobs(
         db_path: Database path (uses default if None)
     
     Returns:
-        List of job IDs that were successfully updated
+        Tuple of (successful_job_ids, failed_jobs, warnings) where:
+        - successful_job_ids: List of job IDs that were successfully updated
+        - failed_jobs: List of tuples (job_id, error_message) for failed jobs
+        - warnings: List of warning messages
         
     Raises:
         ValidationError: If validation fails
@@ -87,6 +92,73 @@ def update_jobs(
         
         final_env_file = str(env_file_path.resolve())
 
+    # Handle app update validation with input file logic
+    failed_jobs = []
+    warnings = []
+    final_input_file = input_file
+    
+    if app is not None:
+        # Get current jobs to check their existing apps
+        current_jobs = database.get_jobs_by_ids(db_path, job_ids)
+        
+        for job in current_jobs:
+            job_id = job['job_id']
+            original_app = job['app']
+            
+            try:
+                # Get app configurations
+                original_config = get_app_config(original_app)
+                new_config = get_app_config(app)
+                
+                original_input_required = original_config['INPUT_REQUIRED']
+                original_default_input = original_config['DFLT_INPUT']
+                new_input_required = new_config['INPUT_REQUIRED']
+                new_default_input = new_config['DFLT_INPUT']
+                
+                # Apply the four scenarios for input file handling
+                if original_input_required and not new_input_required:
+                    # Scenario 1: Original requires input, new doesn't -> set in_file to None
+                    if input_file is None:  # Only auto-set if user didn't explicitly provide input_file
+                        final_input_file = None
+                        warnings.append(f"Job {job_id}: App updated from '{original_app}' to '{app}'. Input file set to None since new app doesn't require input.")
+                    else:
+                        warnings.append(f"Job {job_id}: App updated from '{original_app}' to '{app}'. User-specified input file '{input_file}' will be kept despite new app not requiring input.")
+                
+                elif not original_input_required and new_input_required:
+                    # Scenario 2: Original doesn't require input, new does -> throw error unless user provided input
+                    if input_file is None:
+                        failed_jobs.append((job_id, f"Cannot update job {job_id} from '{original_app}' to '{app}': new app requires input file but none provided. Please specify --input filename."))
+                        continue
+                    else:
+                        warnings.append(f"Job {job_id}: App updated from '{original_app}' to '{app}'. User-specified input file '{input_file}' will be used.")
+                
+                elif original_input_required and new_input_required:
+                    # Scenario 3: Both require input -> check default inputs
+                    if input_file is None:  # User didn't specify input file
+                        if original_default_input == new_default_input:
+                            # Same default, update quietly
+                            warnings.append(f"Job {job_id}: App updated from '{original_app}' to '{app}'. Both apps have same default input file.")
+                        else:
+                            # Different defaults, require user to specify
+                            failed_jobs.append((job_id, f"Cannot update job {job_id} from '{original_app}' to '{app}': apps have different default input files ('{original_default_input}' vs '{new_default_input}'). Please specify --input filename."))
+                            continue
+                    else:
+                        warnings.append(f"Job {job_id}: App updated from '{original_app}' to '{app}'. User-specified input file '{input_file}' will be used.")
+                
+                else:
+                    # Scenario 4: Both don't require input -> update with warning
+                    warnings.append(f"Job {job_id}: App updated from '{original_app}' to '{app}'. Both apps don't require input files, but user should verify input file compatibility.")
+                
+            except ValueError as e:
+                # App doesn't exist
+                failed_jobs.append((job_id, f"Cannot update job {job_id}: {str(e)}"))
+                continue
+    
+    # Remove failed job IDs from the list to process
+    if failed_jobs:
+        failed_job_ids = {job_id for job_id, _ in failed_jobs}
+        job_ids = [job_id for job_id in job_ids if job_id not in failed_job_ids]
+    
     # Handle node occupancy vs ngpus conflict
     final_ngpus = ngpus
     final_node_occupancy = node_occupancy
@@ -171,7 +243,7 @@ def update_jobs(
                 status=status,
                 app=app,
                 tag=tag,
-                in_file=input_file,
+                in_file=final_input_file,
                 ngpus=final_ngpus,
                 env_file=final_env_file,
                 num_nodes=nnodes,
@@ -184,7 +256,7 @@ def update_jobs(
     
     # Combine all updated job IDs and remove duplicates
     all_updated_job_ids = list(set(dependency_updated_job_ids + non_dependency_updated_job_ids))
-    return sorted(all_updated_job_ids)
+    return sorted(all_updated_job_ids), failed_jobs, warnings
 
 @app.command()
 def update(
@@ -289,7 +361,7 @@ def update(
             typer.secho(f"ℹ️  Using environment file: {env_file_path.resolve()}", fg=typer.colors.BLUE)
 
         # Call the core function
-        updated_job_ids = update_jobs(
+        updated_job_ids, failed_jobs, warnings = update_jobs(
             job_ids=job_ids,
             status=status,
             app=app,
@@ -305,11 +377,23 @@ def update(
             interactive_prompts=True,
         )
         
+        # Display warnings
+        for warning in warnings:
+            typer.secho(f"⚠️  {warning}", fg=typer.colors.YELLOW)
+        
+        # Display failed jobs
+        for job_id, error_msg in failed_jobs:
+            typer.secho(f"❌ {error_msg}", fg=typer.colors.RED)
+        
         # CLI-specific success output
         if updated_job_ids:
             typer.secho(f"🔄 Successfully updated {len(updated_job_ids)} job(s): {', '.join(map(str, updated_job_ids))}", fg=typer.colors.BLUE)
         else:
             typer.secho("⚠️ No jobs were updated.", fg=typer.colors.YELLOW)
+        
+        # Provide summary if there were both successes and failures
+        if updated_job_ids and failed_jobs:
+            typer.secho(f"ℹ️  Summary: {len(updated_job_ids)} succeeded, {len(failed_jobs)} failed", fg=typer.colors.BLUE)
         
     except ValidationError as e:
         typer.secho(f"❌ Error: {e}", fg=typer.colors.RED)

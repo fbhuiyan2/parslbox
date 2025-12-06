@@ -16,8 +16,9 @@ import yaml
 from datetime import datetime
 from concurrent.futures import as_completed
 
-from parslbox.helpers import database, path_utils
-from parslbox.helpers import pbx_config_utils as config_utils
+from parslbox.database import database
+from parslbox.utils import path_utils
+from parslbox.utils import pbx_config_utils as config_utils
 from parslbox.apps.app_registry import (
     get_app_config,
     is_app_registered,
@@ -28,7 +29,7 @@ from parslbox.system_configs.loader import get_system_config, load_config
 from parslbox.resource_manager.mpi_launcher import compose_mpi_command
 from parslbox.resource_manager.exceptions import InsufficientResources
 from parslbox.resource_manager.models import create_job_resource_spec
-from parslbox.helpers.logging_utils import setup_logging
+from parslbox.utils.logging_utils import setup_logging
 from parslbox.commands.add import add_jobs
 from parslbox.commands.update import update_jobs
 from parslbox.commands.qsub import submit_to_scheduler
@@ -149,75 +150,33 @@ class ParslBox:
                 for path, error in failures:
                     print(f"  {path}: {error}")
         """
-        # Handle each path individually to allow partial failures
-        successful_job_ids = []
-        failed_jobs = []
         
-        for path in paths:
-            try:
-                job_id = self.add_job(
-                    path=path,
-                    app=app,
-                    config=config,
-                    tag=tag,
-                    input_file=input_file,
-                    ngpus=ngpus,
-                    nnodes=nnodes,
-                    node_occupancy=node_occupancy,
-                    ranks_per_node=ranks_per_node,
-                    mpi_opts=mpi_opts,
-                    env_file=env_file,
-                    parents=parents,
-                    parent_tag=parent_tag,
-                    status=status,
-                )
-                successful_job_ids.append(job_id)
-            except Exception as e:
-                failed_jobs.append((path, str(e)))
-        
-        return successful_job_ids, failed_jobs
-
-    def add_job(
-        self,
-        path: str,
-        app: str,
-        config: str,
-        **kwargs
-    ) -> int:
-        """
-        Add a single job to the database (convenience method).
-
-        Args:
-            path: Path to the job directory
-            app: Application type (e.g., 'lammps', 'vasp', 'python')
-            config: System configuration name (e.g., 'polaris', 'sophia')
-            **kwargs: Additional arguments passed to add_jobs()
-
-        Returns:
-            The job ID of the newly created job
-
-        Raises:
-            ValidationError: If validation fails
-            sqlite3.IntegrityError: If job already exists
-        """
         try:
-            # Use the core function directly to avoid circular dependency
-            job_ids = add_jobs(
-                paths=[path],
+            # Use the core function directly
+            successful_job_ids, failed_jobs = add_jobs(
+                paths=paths,
                 app=app,
                 config_name=config,
-                interactive_prompts=False,  # No interactive prompts for API
+                tag=tag,
+                input_file=input_file,
+                ngpus=ngpus,
+                nnodes=nnodes,
+                node_occupancy=node_occupancy,
+                ranks_per_node=ranks_per_node,
+                mpi_opts=mpi_opts,
+                env_file=env_file,
+                parents=parents,
+                parent_tag=parent_tag,
+                status=status,
                 db_path=self.db_path,
-                **kwargs
             )
-            return job_ids[0]
+            return successful_job_ids, failed_jobs
         except Exception as e:
             # Convert command ValidationError to API ValidationError if needed
             if "ValidationError" in str(type(e)):
                 raise ValidationError(str(e))
             else:
                 raise
-
 
     def remove_job(self, job_id: int) -> bool:
         """
@@ -267,7 +226,7 @@ class ParslBox:
         ranks_per_node: Optional[int] = None,
         add_deps: Optional[List[int]] = None,
         rm_deps: Optional[List[int]] = None,
-    ) -> List[int]:
+    ) -> Tuple[List[int], List[Tuple[int, str]], List[str]]:
         """
         Update one or more jobs' fields.
 
@@ -286,21 +245,28 @@ class ParslBox:
             rm_deps: Parent job IDs to remove
 
         Returns:
-            List of job IDs that were successfully updated
+            Tuple of (successful_job_ids, failed_jobs, warnings) where:
+            - successful_job_ids: List of job IDs that were successfully updated
+            - failed_jobs: List of tuples (job_id, error_message) for failed jobs
+            - warnings: List of warning messages
 
         Raises:
             ValidationError: If validation fails
 
         Examples:
             # Update a single job
-            updated_ids = pbx.update_jobs([123], status="Submitted")
+            updated_ids, failures, warnings = pbx.update_jobs([123], status="Submitted")
             
-            # Update multiple jobs
-            updated_ids = pbx.update_jobs([123, 124, 125], status="Failed")
+            # Update multiple jobs with app change
+            updated_ids, failures, warnings = pbx.update_jobs([123, 124, 125], app="vasp")
+            for warning in warnings:
+                print(f"Warning: {warning}")
+            for job_id, error in failures:
+                print(f"Failed job {job_id}: {error}")
         """
         try:
             # Use the core function with API-specific settings
-            updated_job_ids = update_jobs(
+            updated_job_ids, failed_jobs, warnings = update_jobs(
                 job_ids=job_ids,
                 status=status,
                 app=app,
@@ -316,35 +282,13 @@ class ParslBox:
                 interactive_prompts=False,  # No interactive prompts for API
                 db_path=self.db_path,
             )
-            return updated_job_ids
+            return updated_job_ids, failed_jobs, warnings
         except Exception as e:
             # Convert command ValidationError to API ValidationError if needed
             if "ValidationError" in str(type(e)):
                 raise ValidationError(str(e))
             else:
                 raise
-
-    def update_job(
-        self,
-        job_id: int,
-        **kwargs
-    ) -> bool:
-        """
-        Update a single job's fields (convenience method).
-
-        Args:
-            job_id: Job ID to update
-            **kwargs: Additional arguments passed to update_jobs()
-
-        Returns:
-            True if job was updated, False if not found
-
-        Raises:
-            ValidationError: If validation fails
-        """
-        updated_job_ids = self.update_jobs(job_ids=[job_id], **kwargs)
-        return job_id in updated_job_ids
-
 
     def list_jobs(
         self,

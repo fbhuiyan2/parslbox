@@ -1,7 +1,8 @@
 import typer
 from typing import Optional
 
-from parslbox.helpers import database, path_utils
+from parslbox.database import database
+from parslbox.utils import path_utils
 
 app = typer.Typer()
 

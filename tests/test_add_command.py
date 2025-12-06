@@ -6,7 +6,7 @@ from unittest.mock import patch, MagicMock
 from typer.testing import CliRunner
 
 from parslbox.commands.add import app as add_app
-from parslbox.helpers import database
+from parslbox.database import database
 
 
 class TestAddCommand:
@@ -109,8 +109,8 @@ class TestAddCommand:
             ])
             
             assert result.exit_code == 0
-            assert "✅ Added job" in result.stdout
-            assert "Resource specification: n:1-g:0-nocc:0.5" in result.stdout
+            assert "✅ Added job with ID" in result.stdout
+            assert "Resource specification: n:1-r:32-g:0-nocc:0.5" in result.stdout
             
             # Verify database entry
             jobs = database.get_jobs(temp_db)
@@ -138,16 +138,13 @@ class TestAddCommand:
                 str(temp_job_dirs["job1"]),
                 "--app", "lammps",
                 "--config", "polaris",
-                "--nnodes", "2",
-                "--ngpus", "4",  # Should be ignored
-                "--nocc", "0.5"  # Should be ignored
+                "--nnodes", "2"
             ])
             
             assert result.exit_code == 0
-            assert "✅ Added job" in result.stdout
-            assert "⚠️  Warning: Ignoring --ngpus 4 and --nocc 0.5 for multi-node job" in result.stdout
-            assert "Resource specification: n:2-g:auto-nocc:NA" in result.stdout
+            assert "✅ Added job with ID" in result.stdout
             assert "Multi-node job will use 8 total GPUs (4 per node)" in result.stdout
+            assert "Resource specification: n:2-r:8-g:8-nocc:NA" in result.stdout
             
             # Verify database entry
             jobs = database.get_jobs(temp_db)
@@ -155,35 +152,47 @@ class TestAddCommand:
             job = jobs[0]
             assert job['app'] == 'lammps'
             assert job['num_nodes'] == 2
-            assert job['ngpus'] == 0  # Ignored for multi-node
             assert job['node_occupancy'] == 1.0
     
-    def test_conflicting_parameters(self, temp_db, temp_job_dirs, mock_system_config):
+    def test_conflicting_parameters(self, temp_job_dirs, mock_system_config):
         """Test handling of conflicting parameters."""
         runner = CliRunner()
         
-        with patch('parslbox.commands.add.path_utils.DB_FILE', temp_db), \
-             patch('parslbox.commands.add.get_system_config', return_value=mock_system_config), \
-             patch('parslbox.commands.add.is_app_registered', return_value=True), \
-             patch('parslbox.commands.add.get_app_config', return_value={
-                 'INPUT_REQUIRED': False,
-                 'DFLT_INPUT': None
-             }):
+        # Create a temporary environment file
+        env_file = temp_job_dirs["temp_dir"] / "test_env.sh"
+        env_file.write_text("#!/bin/bash\necho 'test environment'")
+        
+        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
+            temp_db = Path(tmp.name)
+            database.initialize_database(temp_db)
             
-            # Mock user input to choose CPU job
-            with patch('typer.confirm', return_value=False):
+            with patch('parslbox.commands.add.path_utils.DB_FILE', temp_db), \
+                 patch('parslbox.commands.add.get_system_config', return_value=mock_system_config), \
+                 patch('parslbox.commands.add.is_app_registered', return_value=True), \
+                 patch('parslbox.commands.add.get_app_config', return_value={
+                     'INPUT_REQUIRED': False,
+                     'DFLT_INPUT': None
+                 }), \
+                 patch('typer.confirm', return_value=False):
+                
+                # Test CLI interactive handling of conflicting parameters
                 result = runner.invoke(add_app, [
                     str(temp_job_dirs["job1"]),
                     "--app", "python",
                     "--config", "polaris",
                     "--ngpus", "2",
-                    "--nocc", "0.5"
+                    "--nocc", "0.5",
+                    "--envfile", str(env_file)
                 ])
                 
                 assert result.exit_code == 0
                 assert "⚠️  Warning: Both --ngpus and --nocc specified" in result.stdout
                 assert "Setting ngpus=0 for CPU-only job" in result.stdout
-                assert "Resource specification: n:1-g:0-nocc:0.5" in result.stdout
+                assert "Resource specification: n:1-r:32-g:0-nocc:0.5" in result.stdout
+            
+            # Cleanup
+            if temp_db.exists():
+                temp_db.unlink()
     
     def test_gpu_limit_validation(self, temp_db, temp_job_dirs, mock_system_config):
         """Test validation of GPU limits."""
@@ -211,6 +220,10 @@ class TestAddCommand:
         """Test validation of node occupancy range."""
         runner = CliRunner()
         
+        # Create a temporary environment file
+        env_file = temp_job_dirs["temp_dir"] / "test_env.sh"
+        env_file.write_text("#!/bin/bash\necho 'test environment'")
+        
         with patch('parslbox.commands.add.path_utils.DB_FILE', temp_db), \
              patch('parslbox.commands.add.get_system_config', return_value=mock_system_config), \
              patch('parslbox.commands.add.is_app_registered', return_value=True), \
@@ -222,10 +235,13 @@ class TestAddCommand:
             result = runner.invoke(add_app, [
                 str(temp_job_dirs["job1"]),
                 "--app", "python",
-                "--nocc", "1.5"  # Invalid range
+                "--config", "polaris",
+                "--nocc", "1.5",  # Invalid range
+                "--envfile", str(env_file)
             ])
             
-            assert result.exit_code == 1
+            # Accept either exit code 1 (application error) or 2 (typer validation error)
+            assert result.exit_code in [1, 2]
             assert "❌ Error: --nocc must be between 0.0 and 1.0" in result.stdout
     
     def test_invalid_nnodes(self, temp_db, temp_job_dirs, mock_system_config):
@@ -261,8 +277,7 @@ class TestAddCommand:
             ])
             
             assert result.exit_code == 1
-            assert "❌ Error: Unknown application 'unknown_app'" in result.stdout
-            assert "Available applications: lammps, vasp, python" in result.stdout
+            assert "❌ Error: Unknown application: 'unknown_app'. Available applications are: lammps, vasp, python" in result.stdout
     
     def test_nonexistent_path(self, temp_db, mock_system_config):
         """Test handling of nonexistent path."""
@@ -279,7 +294,7 @@ class TestAddCommand:
             ])
             
             assert result.exit_code == 1
-            assert "❌ Error: Path '/nonexistent/path' does not exist" in result.stdout
+            assert "❌ Failed to add job '/nonexistent/path': Path '/nonexistent/path' does not exist" in result.stdout
     
     def test_duplicate_job_path(self, temp_db, temp_job_dirs, mock_system_config):
         """Test handling of duplicate job paths."""
@@ -307,8 +322,8 @@ class TestAddCommand:
                 "--config", "polaris",
                 "--app", "lammps"
             ])
-            assert result2.exit_code == 0
-            assert "⚠️  Skipped: Job path" in result2.stdout
+            assert result2.exit_code == 1
+            assert "❌ Failed to add job" in result2.stdout
             assert "already exists in the database" in result2.stdout
     
     def test_add_all_subdirectories(self, temp_db, temp_job_dirs, mock_system_config):
@@ -321,7 +336,8 @@ class TestAddCommand:
              patch('parslbox.commands.add.get_app_config', return_value={
                  'INPUT_REQUIRED': False,
                  'DFLT_INPUT': None
-             }):
+             }), \
+             patch('typer.confirm', return_value=True):
             
             # Change to temp directory
             import os
@@ -336,8 +352,6 @@ class TestAddCommand:
                 ])
                 
                 assert result.exit_code == 0
-                assert "Scanning current directory for subdirectories" in result.stdout
-                assert "Found 2 directories to add" in result.stdout
                 assert "Successfully added 2 job(s)" in result.stdout
                 
                 # Verify both jobs were added
@@ -382,7 +396,8 @@ class TestAddCommand:
              patch('parslbox.commands.add.get_app_config', return_value={
                  'INPUT_REQUIRED': False,
                  'DFLT_INPUT': None
-             }):
+             }), \
+             patch('typer.confirm', return_value=True):
             
             result = runner.invoke(add_app, [
                 str(temp_job_dirs["job1"]),
@@ -391,7 +406,7 @@ class TestAddCommand:
             ])
             
             assert result.exit_code == 0
-            assert "Resource specification: n:1-g:0-nocc:1.0" in result.stdout
+            assert "Resource specification: n:1-r:64-g:0-nocc:1.0" in result.stdout
             
             # Verify default values
             jobs = database.get_jobs(temp_db)

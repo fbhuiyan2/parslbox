@@ -13,7 +13,7 @@ import pytest
 import os
 import tempfile
 from unittest.mock import Mock
-from parslbox.helpers.mpi_launcher_helpers import (
+from parslbox.resource_manager.helpers.mpi_launcher_helpers import (
     generate_openmpi_rankfile,
     generate_mpiexec_rankfile,
     generate_openmpi_gpu_wrapper,

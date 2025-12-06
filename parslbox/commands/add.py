@@ -3,7 +3,8 @@ import sqlite3
 from pathlib import Path
 from typing import List, Optional
 from typing_extensions import Annotated
-from parslbox.helpers import database, path_utils
+from parslbox.database import database
+from parslbox.utils import path_utils
 from parslbox.apps.app_registry import get_app_config, is_app_registered, get_registered_apps
 from parslbox.system_configs.loader import get_system_config
 
@@ -30,9 +31,8 @@ def add_jobs(
     parents: Optional[List[int]] = None,
     parent_tag: Optional[str] = None,
     status: str = "Ready",
-    interactive_prompts: bool = True,
     db_path: Optional[Path] = None,
-) -> List[int]:
+) -> tuple[List[int], List[tuple[str, str]]]:
     """
     Core job addition logic - used by both CLI and API.
     
@@ -51,15 +51,15 @@ def add_jobs(
         parents: List of parent job IDs
         parent_tag: Tag to wait for (all jobs with this tag must be Done)
         status: Initial job status (default: 'Ready')
-        interactive_prompts: Whether to allow interactive prompts (CLI only)
         db_path: Database path (uses default if None)
     
     Returns:
-        List of created job IDs
+        Tuple of (successful_job_ids, failed_jobs) where:
+        - successful_job_ids: List of created job IDs
+        - failed_jobs: List of tuples (path, error_message) for failed jobs
         
     Raises:
-        ValidationError: If validation fails
-        sqlite3.IntegrityError: If job already exists
+        ValidationError: If global validation fails (e.g., invalid app, invalid parameters)
     """
     if db_path is None:
         db_path = path_utils.DB_FILE
@@ -68,6 +68,16 @@ def add_jobs(
     if not is_app_registered(app):
         available_apps = ", ".join(get_registered_apps())
         raise ValidationError(f"Unknown application '{app}'. Available applications: {available_apps}")
+    
+    # API-specific validation for Python apps
+    # CLI handles this by interactive prompt
+    if app == "python":
+        if env_file == 'pass':
+            env_file = None
+        elif env_file is None:
+            raise ValidationError("Python app requires an environment file. " \
+            "Please specify env_file parameter. " \
+            "If you wish to proceed without an environment file, set env_file='pass'.")
 
     # --- Handle input file logic based on app configuration ---
     try:
@@ -80,12 +90,8 @@ def add_jobs(
         if input_required and default_input is None:
             # Must have input file, no default available
             if input_file is None:
-                if interactive_prompts:
-                    # This will be handled by CLI wrapper
-                    raise ValidationError(f"Input filename is required for {app}")
-                else:
-                    # API usage - allow None for programmatic use
-                    final_input_file = None
+                # CLI and API should handle this validation before calling core function
+                final_input_file = None
             else:
                 final_input_file = input_file
         elif input_required and default_input is not None:
@@ -124,12 +130,7 @@ def add_jobs(
     else:
         # Single-node job: check for conflicting parameters
         if ngpus > 0 and node_occupancy is not None:
-            if interactive_prompts:
-                # This will be handled by CLI wrapper
-                raise ValidationError("Both --ngpus and --nocc specified. Please resolve conflict interactively.")
-            else:
-                # API usage - GPU takes precedence
-                node_occupancy = None
+            raise ValidationError("Cannot specify both ngpus and node_occupancy. Use ngpus for GPU jobs or node_occupancy for CPU jobs.")
         
         if ngpus > 0:
             # Single-node GPU job
@@ -179,11 +180,6 @@ def add_jobs(
             raise ValidationError(f"Environment file '{env_file}' is not a file")
         
         final_env_file = str(env_file_path.resolve())
-    
-    # --- Special handling for Python app without environment file ---
-    elif app == "python" and interactive_prompts:
-        # This will be handled by CLI wrapper
-        raise ValidationError("Python app requires environment file confirmation")
 
     # --- Handle parent dependencies ---
     final_parents = []
@@ -210,6 +206,7 @@ def add_jobs(
 
     # --- Determine the list of paths to process ---
     paths_to_add: List[Path] = []
+    failed_jobs: List[tuple[str, str]] = []
     
     if len(paths) == 1 and paths[0].lower() == 'all':
         current_dir = Path.cwd()
@@ -220,13 +217,15 @@ def add_jobs(
             
         paths_to_add = [p.resolve() for p in subdirectories]
     else:
-        # Validate user-provided paths
+        # Validate user-provided paths - collect failures instead of raising immediately
         for path_str in paths:
             path_obj = Path(path_str)
             if not path_obj.exists():
-                raise ValidationError(f"Path '{path_str}' does not exist")
+                failed_jobs.append((path_str, f"Path '{path_str}' does not exist"))
+                continue
             if not path_obj.is_dir():
-                raise ValidationError(f"Path '{path_str}' is not a directory")
+                failed_jobs.append((path_str, f"Path '{path_str}' is not a directory"))
+                continue
             paths_to_add.append(path_obj.resolve())
 
     # --- Add the determined paths to the database ---
@@ -252,9 +251,12 @@ def add_jobs(
             created_job_ids.append(new_id)
         except sqlite3.IntegrityError:
             input_display = f"input file '{final_input_file}'" if final_input_file else "no input file"
-            raise ValidationError(f"Job with path '{path}' and {input_display} already exists in the database")
+            failed_jobs.append((str(path), f"Job with path '{path}' and {input_display} already exists in the database"))
     
-    return created_job_ids
+    return created_job_ids, failed_jobs
+
+
+# Main CLI command
 
 @app.command()
 def add(
@@ -366,6 +368,7 @@ def add(
             if not proceed_without_env:
                 typer.secho("❌ Job creation cancelled. Please specify an environment file with --envfile/-e", fg=typer.colors.RED)
                 raise typer.Exit(code=1)
+            env_file = 'pass'  # Special value to indicate no env file for core function
         
         # Parse parents string for CLI
         final_parents = None
@@ -377,7 +380,7 @@ def add(
                 raise typer.Exit(code=1)
         
         # Call the core function
-        job_ids = add_jobs(
+        job_ids, failed_jobs = add_jobs(
             paths=paths,
             app=app,
             config_name=config_name,
@@ -392,8 +395,11 @@ def add(
             parents=final_parents,
             parent_tag=parent_tag,
             status=status,
-            interactive_prompts=True,
         )
+        
+        # Display failed jobs
+        for path, error_msg in failed_jobs:
+            typer.secho(f"❌ Failed to add job '{path}': {error_msg}", fg=typer.colors.RED)
         
         # CLI-specific success output
         success_count = len(job_ids)
@@ -479,13 +485,22 @@ def add(
                 pass  # Don't fail on display issues
         
         # Display job creation results
-        for i, job_id in enumerate(job_ids):
-            path_str = paths[i] if i < len(paths) and paths[0].lower() != 'all' else f"job {job_id}"
+        for job_id in job_ids:
             input_info = f" (input: {final_input_file})" if final_input_file else " (no input file)"
-            typer.secho(f"✅ Added job '{path_str}' with ID {job_id}{input_info}", fg=typer.colors.GREEN)
+            typer.secho(f"✅ Added job with ID {job_id}{input_info}", fg=typer.colors.GREEN)
         
         typer.echo("---")  # Separator
-        typer.secho(f"Summary: Successfully added {success_count} job(s).", fg=typer.colors.GREEN)
+        
+        # Summary with both successes and failures
+        if success_count > 0 and failed_jobs:
+            typer.secho(f"Summary: Successfully added {success_count} job(s), {len(failed_jobs)} failed.", fg=typer.colors.BLUE)
+        elif success_count > 0:
+            typer.secho(f"Summary: Successfully added {success_count} job(s).", fg=typer.colors.GREEN)
+        elif failed_jobs:
+            typer.secho(f"Summary: Failed to add {len(failed_jobs)} job(s).", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+        else:
+            typer.secho("Summary: No jobs were processed.", fg=typer.colors.YELLOW)
         
     except ValidationError as e:
         typer.secho(f"❌ Error: {e}", fg=typer.colors.RED)

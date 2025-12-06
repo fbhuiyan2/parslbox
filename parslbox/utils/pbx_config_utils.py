@@ -2,8 +2,8 @@ import yaml
 import typer
 from pathlib import Path
 
-from parslbox.helpers import path_utils
-from parslbox.helpers.pbx_config_template import DEFAULT_CONFIG_YAML
+from parslbox.utils import path_utils
+from parslbox.utils.pbx_config_template import DEFAULT_CONFIG_YAML
 
 def initialize_config_file():
     """

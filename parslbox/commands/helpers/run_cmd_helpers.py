@@ -3,7 +3,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from parslbox.helpers import database
+from parslbox.database import database
 
 # Valid job status values (stored in lowercase for comparison)
 VALID_JOB_STATUSES = ["ready", "done", "failed", "restart", "running", "submitted", "warning"]

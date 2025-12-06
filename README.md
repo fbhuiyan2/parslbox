@@ -27,7 +27,11 @@ Using Conda + Poetry:
 ```bash
 conda create --name parslbox python=3.11.9
 conda activate parslbox
-pip install poetry
+pip install poetry    # without any optional packages
+
+# poetry install --extras "simulation"   # optional simulation packages installed
+# poetry install --extras "agentic"   # optional agentic packages installed for using agents+PBX
+# poetry install --all-extras   # all optional packages installed
 
 # Clone and install
 git clone https://github.com/fbhuiyan2/parslbox.git

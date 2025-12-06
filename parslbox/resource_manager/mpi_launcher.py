@@ -9,7 +9,7 @@ import logging
 from typing import Dict, TYPE_CHECKING
 
 # Import helper functions
-from parslbox.helpers.mpi_launcher_helpers import (
+from parslbox.resource_manager.helpers.mpi_launcher_helpers import (
     generate_openmpi_rankfile,
     generate_mpiexec_rankfile,
     generate_openmpi_gpu_wrapper,

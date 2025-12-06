@@ -1,6 +1,7 @@
 import typer
-from parslbox.helpers import database, path_utils
-from parslbox.helpers import pbx_config_utils as config_utils
+from parslbox.database import database
+from parslbox.utils import path_utils
+from parslbox.utils import pbx_config_utils as config_utils
 from parslbox.commands.ls import app as list_jobs
 from parslbox.commands.add import app as add_job
 from parslbox.commands.rm import app as remove_jobs

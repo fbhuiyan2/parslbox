@@ -513,7 +513,7 @@ class TestIntegrationScenarios:
         assert "node1,node2" not in command
         assert "-np 4" in command  # Should keep essential flags
     
-    @patch('parslbox.helpers.mpi_launcher_helpers.generate_openmpi_rankfile')
+    @patch('parslbox.resource_manager.helpers.mpi_launcher_helpers.generate_openmpi_rankfile')
     def test_custom_mpi_tuning_scenario(self, mock_rankfile):
         """Test scenario with custom MPI tuning flags."""
         mock_rankfile.return_value = "/tmp/rankfile.txt"

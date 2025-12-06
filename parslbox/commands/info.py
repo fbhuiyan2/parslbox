@@ -3,7 +3,8 @@ from typing import List
 from rich.console import Console
 from rich.table import Table
 
-from parslbox.helpers import database, path_utils
+from parslbox.database import database
+from parslbox.utils import path_utils
 
 console = Console()
 
@@ -32,6 +33,8 @@ def format_job_id_with_parents(job_id: int, parents: List[int], show_all: bool =
         last_parent = parents[-1]
         return f"{job_id} ({first_parents},...,{last_parent})"
 
+
+# Main CLI command
 
 @app.command()
 def info(
