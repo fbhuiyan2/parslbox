@@ -29,14 +29,13 @@ conda create --name parslbox python=3.11.9
 conda activate parslbox
 pip install poetry    # without any optional packages
 
-# poetry install --extras "simulation"   # optional simulation packages installed
-# poetry install --extras "agentic"   # optional agentic packages installed for using agents+PBX
-# poetry install --all-extras   # all optional packages installed
-
 # Clone and install
 git clone https://github.com/fbhuiyan2/parslbox.git
 cd parslbox
 poetry install
+# poetry install --extras "simulation"   # optional simulation packages installed
+# poetry install --extras "agentic"   # optional agentic packages installed for using agents+PBX
+# poetry install --all-extras   # all optional packages installed
 
 # First call initializes ~/.parslbox/config_pbx.yaml and the job database
 # (or custom locations via PBX_CONFIG_PATH / PBX_DB_PATH)
