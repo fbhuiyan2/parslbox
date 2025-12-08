@@ -4,20 +4,18 @@ from typing import List, Optional
 from typing_extensions import Annotated
 from parslbox.database import database
 from parslbox.utils import path_utils
-from parslbox.apps.app_registry import get_app_config
+from parslbox.commands.helpers.job_info_validator import (
+    ValidationError,
+    validate_environment_file,
+    validate_input_file,
+)
 
 app = typer.Typer()
-
-
-class ValidationError(Exception):
-    """Exception raised for validation errors."""
-    pass
 
 
 def update_jobs(
     job_ids: List[int],
     status: Optional[str] = None,
-    app: Optional[str] = None,
     tag: Optional[str] = None,
     input_file: Optional[str] = None,
     ngpus: Optional[int] = None,
@@ -27,16 +25,14 @@ def update_jobs(
     ranks_per_node: Optional[int] = None,
     add_deps: Optional[List[int]] = None,
     rm_deps: Optional[List[int]] = None,
-    interactive_prompts: bool = True,
     db_path: Optional[Path] = None,
-) -> tuple[List[int], List[tuple[int, str]], List[str]]:
+) -> tuple[List[int], List[tuple[int, str]], dict]:
     """
     Core job update logic - used by both CLI and API.
     
     Args:
         job_ids: List of job IDs to update
         status: New status
-        app: New application
         tag: New tag
         input_file: New input file
         ngpus: New number of GPUs
@@ -46,14 +42,13 @@ def update_jobs(
         ranks_per_node: New ranks per node
         add_deps: Parent job IDs to add
         rm_deps: Parent job IDs to remove
-        interactive_prompts: Whether to allow interactive prompts (CLI only)
         db_path: Database path (uses default if None)
     
     Returns:
-        Tuple of (successful_job_ids, failed_jobs, warnings) where:
+        Tuple of (successful_job_ids, failed_jobs, msg_log) where:
         - successful_job_ids: List of job IDs that were successfully updated
         - failed_jobs: List of tuples (job_id, error_message) for failed jobs
-        - warnings: List of warning messages
+        - msg_log: Dictionary with 'warnings' and 'info' lists
         
     Raises:
         ValidationError: If validation fails
@@ -61,13 +56,20 @@ def update_jobs(
     if db_path is None:
         db_path = path_utils.DB_FILE
     
+    # --- Use helper functions for validation and collect messages ---
+    info_messages = []
+    warning_messages = []
+    
     # Validate that at least one update option was provided
-    if all(opt is None for opt in [status, app, tag, input_file, ngpus, env_file, nnodes, node_occupancy, ranks_per_node, add_deps, rm_deps]):
+    if all(opt is None for opt in [status, tag, input_file, ngpus, env_file, nnodes, node_occupancy, ranks_per_node, add_deps, rm_deps]):
         raise ValidationError("You must provide at least one field to update")
 
-    # Validate parameters
+    # Basic parameter validation
     if nnodes is not None and nnodes < 1:
         raise ValidationError(f"--nnodes must be at least 1, got {nnodes}")
+
+    if ngpus is not None and ngpus < 0:
+        raise ValidationError(f"--ngpus must be non-negative, got {ngpus}")
 
     if node_occupancy is not None and not (0.0 < node_occupancy <= 1.0):
         raise ValidationError("--nocc must be between 0.0 and 1.0")
@@ -76,84 +78,49 @@ def update_jobs(
         raise ValidationError(f"--ranks-per-node must be a positive integer, got {ranks_per_node}")
 
     # Handle environment file validation and processing
-    final_env_file = None
-    if env_file:
-        # Convert relative path to absolute path
-        env_file_path = Path(env_file)
-        if not env_file_path.is_absolute():
-            env_file_path = Path.cwd() / env_file_path
-        
-        # Validate that the environment file exists
-        if not env_file_path.exists():
-            raise ValidationError(f"Environment file '{env_file}' does not exist")
-        
-        if not env_file_path.is_file():
-            raise ValidationError(f"Environment file '{env_file}' is not a file")
-        
-        final_env_file = str(env_file_path.resolve())
+    final_env_file, env_info, env_warnings = validate_environment_file(env_file)
+    info_messages.extend(env_info)
+    warning_messages.extend(env_warnings)
 
-    # Handle app update validation with input file logic
+    # Handle input file validation for existing jobs
     failed_jobs = []
-    warnings = []
     final_input_file = input_file
     
-    if app is not None:
-        # Get current jobs to check their existing apps
+    if input_file is not None:
+        # Validate input file against each job's existing app
         current_jobs = database.get_jobs_by_ids(db_path, job_ids)
-        
         for job in current_jobs:
             job_id = job['job_id']
-            original_app = job['app']
+            job_app = job['app']
             
             try:
-                # Get app configurations
-                original_config = get_app_config(original_app)
-                new_config = get_app_config(app)
+                # Validate input file against the job's existing app
+                validated_input, input_info, input_warnings = validate_input_file(job_app, input_file)
                 
-                original_input_required = original_config['INPUT_REQUIRED']
-                original_default_input = original_config['DFLT_INPUT']
-                new_input_required = new_config['INPUT_REQUIRED']
-                new_default_input = new_config['DFLT_INPUT']
+                # Fail the job if there are any warnings (e.g., input file ignored)
+                if input_warnings:
+                    failed_jobs.append((job_id, f"Input file '{input_file}' validation warning for job {job_id} app '{job_app}': {'; '.join(input_warnings)}"))
+
                 
-                # Apply the four scenarios for input file handling
-                if original_input_required and not new_input_required:
-                    # Scenario 1: Original requires input, new doesn't -> set in_file to None
-                    if input_file is None:  # Only auto-set if user didn't explicitly provide input_file
-                        final_input_file = None
-                        warnings.append(f"Job {job_id}: App updated from '{original_app}' to '{app}'. Input file set to None since new app doesn't require input.")
-                    else:
-                        warnings.append(f"Job {job_id}: App updated from '{original_app}' to '{app}'. User-specified input file '{input_file}' will be kept despite new app not requiring input.")
-                
-                elif not original_input_required and new_input_required:
-                    # Scenario 2: Original doesn't require input, new does -> throw error unless user provided input
-                    if input_file is None:
-                        failed_jobs.append((job_id, f"Cannot update job {job_id} from '{original_app}' to '{app}': new app requires input file but none provided. Please specify --input filename."))
-                        continue
-                    else:
-                        warnings.append(f"Job {job_id}: App updated from '{original_app}' to '{app}'. User-specified input file '{input_file}' will be used.")
-                
-                elif original_input_required and new_input_required:
-                    # Scenario 3: Both require input -> check default inputs
-                    if input_file is None:  # User didn't specify input file
-                        if original_default_input == new_default_input:
-                            # Same default, update quietly
-                            warnings.append(f"Job {job_id}: App updated from '{original_app}' to '{app}'. Both apps have same default input file.")
-                        else:
-                            # Different defaults, require user to specify
-                            failed_jobs.append((job_id, f"Cannot update job {job_id} from '{original_app}' to '{app}': apps have different default input files ('{original_default_input}' vs '{new_default_input}'). Please specify --input filename."))
-                            continue
-                    else:
-                        warnings.append(f"Job {job_id}: App updated from '{original_app}' to '{app}'. User-specified input file '{input_file}' will be used.")
-                
-                else:
-                    # Scenario 4: Both don't require input -> update with warning
-                    warnings.append(f"Job {job_id}: App updated from '{original_app}' to '{app}'. Both apps don't require input files, but user should verify input file compatibility.")
-                
-            except ValueError as e:
-                # App doesn't exist
-                failed_jobs.append((job_id, f"Cannot update job {job_id}: {str(e)}"))
-                continue
+            except ValidationError as e:
+                # Input file validation failed for this job's app
+                failed_jobs.append((job_id, f"Input file '{input_file}' is not compatible with job {job_id} app '{job_app}': {str(e)}"))
     
+    # Check for direct conflict: both ngpus and node_occupancy specified
+    if ngpus is not None and node_occupancy is not None and ngpus > 0 and node_occupancy > 0:
+        raise ValidationError("Cannot specify both ngpus and node_occupancy to be > 0.")
+    
+    # Validate GPU/CPU conflicts for each job
+    if node_occupancy is not None and ngpus is None:
+        # Setting node_occupancy but not ngpus - check if jobs currently have GPUs
+        jobs = database.get_jobs_by_ids(db_path, job_ids)
+        for job in jobs:
+            job_id = job['job_id']
+            current_ngpus = job.get('ngpus', 0)
+            if current_ngpus > 0:
+                failed_jobs.append((job_id, f"Cannot set node_occupancy for job {job_id} which currently has {current_ngpus} GPUs. Set ngpus=0 first."))
+    
+        
     # Remove failed job IDs from the list to process
     if failed_jobs:
         failed_job_ids = {job_id for job_id, _ in failed_jobs}
@@ -163,17 +130,6 @@ def update_jobs(
     final_ngpus = ngpus
     final_node_occupancy = node_occupancy
     
-    if node_occupancy is not None:
-        # Check if any of the jobs currently have ngpus > 0
-        jobs = database.get_jobs_by_ids(db_path, job_ids)
-        jobs_with_gpus = [job for job in jobs if job.get('ngpus', 0) > 0]
-        
-        if jobs_with_gpus and interactive_prompts:
-            # This will be handled by CLI wrapper
-            raise ValidationError("Setting node occupancy for GPU jobs requires interactive confirmation")
-        elif jobs_with_gpus:
-            # API usage - automatically set ngpus to 0
-            final_ngpus = 0
 
     # Handle dependency management
     dependency_updated_job_ids = []
@@ -228,7 +184,7 @@ def update_jobs(
                 dependency_updated_job_ids.append(job_id)
 
     # Update other fields (non-dependency fields)
-    non_dependency_updates = any(opt is not None for opt in [status, app, tag, input_file, final_ngpus, final_env_file, nnodes, final_node_occupancy, ranks_per_node])
+    non_dependency_updates = any(opt is not None for opt in [status, tag, input_file, final_ngpus, final_env_file, nnodes, final_node_occupancy, ranks_per_node])
     
     non_dependency_updated_job_ids = []
     if non_dependency_updates:
@@ -241,7 +197,6 @@ def update_jobs(
                 db_path=db_path,
                 job_ids=existing_job_ids,
                 status=status,
-                app=app,
                 tag=tag,
                 in_file=final_input_file,
                 ngpus=final_ngpus,
@@ -256,7 +211,14 @@ def update_jobs(
     
     # Combine all updated job IDs and remove duplicates
     all_updated_job_ids = list(set(dependency_updated_job_ids + non_dependency_updated_job_ids))
-    return sorted(all_updated_job_ids), failed_jobs, warnings
+    
+    # Create message log dictionary
+    msg_log = {
+        "warnings": warning_messages,
+        "info": info_messages
+    }
+    
+    return sorted(all_updated_job_ids), failed_jobs, msg_log
 
 @app.command()
 def update(
@@ -267,10 +229,6 @@ def update(
     status: Annotated[
         Optional[str],
         typer.Option("--status", "-s", help="Update the job status.")
-    ] = None,
-    app: Annotated[
-        Optional[str],
-        typer.Option("--app", "-a", help="Update the job application.")
     ] = None,
     tag: Annotated[
         Optional[str],
@@ -353,18 +311,12 @@ def update(
                 typer.secho("❌ Error: Invalid rm_deps job IDs. Use space-separated integers in quotes.", fg=typer.colors.RED)
                 raise typer.Exit(code=1)
 
-        # Display environment file info for CLI
-        if env_file:
-            env_file_path = Path(env_file)
-            if not env_file_path.is_absolute():
-                env_file_path = Path.cwd() / env_file_path
-            typer.secho(f"ℹ️  Using environment file: {env_file_path.resolve()}", fg=typer.colors.BLUE)
+        # Environment file info will be displayed by the validator helper function
 
         # Call the core function
-        updated_job_ids, failed_jobs, warnings = update_jobs(
+        updated_job_ids, failed_jobs, msg_log = update_jobs(
             job_ids=job_ids,
             status=status,
-            app=app,
             tag=tag,
             input_file=input_file,
             ngpus=ngpus,
@@ -374,12 +326,13 @@ def update(
             ranks_per_node=ranks_per_node,
             add_deps=parsed_add_deps,
             rm_deps=parsed_rm_deps,
-            interactive_prompts=True,
         )
         
-        # Display warnings
-        for warning in warnings:
+        # Display messages from core function
+        for warning in msg_log["warnings"]:
             typer.secho(f"⚠️  {warning}", fg=typer.colors.YELLOW)
+        for info in msg_log["info"]:
+            typer.secho(f"ℹ️  {info}", fg=typer.colors.BLUE)
         
         # Display failed jobs
         for job_id, error_msg in failed_jobs:

@@ -7,13 +7,21 @@ from parslbox.database import database
 from parslbox.utils import path_utils
 from parslbox.apps.app_registry import get_app_config, is_app_registered, get_registered_apps
 from parslbox.system_configs.loader import get_system_config
+from parslbox.commands.helpers.job_info_validator import (
+    ValidationError,
+    ResourceConflictError,
+    validate_app_configuration,
+    validate_system_configuration,
+    validate_input_file,
+    validate_resource_parameters,
+    validate_environment_file,
+    validate_parent_dependencies,
+    validate_paths,
+    validate_python_app_env_file,
+    calculate_resource_display_info
+)
 
 app = typer.Typer()
-
-
-class ValidationError(Exception):
-    """Exception raised for validation errors."""
-    pass
 
 
 def add_jobs(
@@ -32,7 +40,7 @@ def add_jobs(
     parent_tag: Optional[str] = None,
     status: str = "Ready",
     db_path: Optional[Path] = None,
-) -> tuple[List[int], List[tuple[str, str]]]:
+) -> tuple[List[int], List[tuple[str, str]], dict]:
     """
     Core job addition logic - used by both CLI and API.
     
@@ -54,9 +62,10 @@ def add_jobs(
         db_path: Database path (uses default if None)
     
     Returns:
-        Tuple of (successful_job_ids, failed_jobs) where:
+        Tuple of (successful_job_ids, failed_jobs, msg_log) where:
         - successful_job_ids: List of created job IDs
         - failed_jobs: List of tuples (path, error_message) for failed jobs
+        - msg_log: Dictionary with 'warnings' and 'info' lists
         
     Raises:
         ValidationError: If global validation fails (e.g., invalid app, invalid parameters)
@@ -64,169 +73,45 @@ def add_jobs(
     if db_path is None:
         db_path = path_utils.DB_FILE
     
-    # --- Validate application exists in registry ---
-    if not is_app_registered(app):
-        available_apps = ", ".join(get_registered_apps())
-        raise ValidationError(f"Unknown application '{app}'. Available applications: {available_apps}")
+    # --- Use helper functions for validation and collect messages ---
+    info_messages = []
+    warning_messages = []
+    
+    # Validate application exists in registry
+    validate_app_configuration(app)
     
     # API-specific validation for Python apps
-    # CLI handles this by interactive prompt
-    if app == "python":
-        if env_file == 'pass':
-            env_file = None
-        elif env_file is None:
-            raise ValidationError("Python app requires an environment file. " \
-            "Please specify env_file parameter. " \
-            "If you wish to proceed without an environment file, set env_file='pass'.")
-
-    # --- Handle input file logic based on app configuration ---
-    try:
-        app_config = get_app_config(app)
-        input_required = app_config["INPUT_REQUIRED"]
-        default_input = app_config["DFLT_INPUT"]
-        
-        final_input_file = None
-        
-        if input_required and default_input is None:
-            # Must have input file, no default available
-            if input_file is None:
-                # CLI and API should handle this validation before calling core function
-                final_input_file = None
-            else:
-                final_input_file = input_file
-        elif input_required and default_input is not None:
-            # Input required but has default
-            final_input_file = input_file if input_file is not None else default_input
-        else:
-            # Input not required (input_required = False)
-            final_input_file = default_input  # Will be None for apps that don't need input
-            
-    except ValueError as e:
-        raise ValidationError(str(e))
-
-    # --- Validate resource parameters ---
-    if node_occupancy is not None and not (0.0 < node_occupancy <= 1.0):
-        raise ValidationError("--nocc must be between 0.0 and 1.0")
+    env_file = validate_python_app_env_file(app, env_file)
     
-    if ranks_per_node is not None and ranks_per_node < 1:
-        raise ValidationError(f"--ranks-per-node must be a positive integer, got {ranks_per_node}")
+    # Handle input file logic based on app configuration
+    final_input_file, input_info, input_warnings = validate_input_file(app, input_file)
+    info_messages.extend(input_info)
+    warning_messages.extend(input_warnings)
     
-    if nnodes < 1:
-        raise ValidationError(f"--nnodes must be at least 1, got {nnodes}")
+    # Get system configuration and validate resource parameters
+    system_config = validate_system_configuration(config_name)
+    resource_params, resource_info, resource_warnings = validate_resource_parameters(ngpus, nnodes, node_occupancy, ranks_per_node, system_config)
+    info_messages.extend(resource_info)
+    warning_messages.extend(resource_warnings)
     
-    # Get system configuration to determine GPUs per node
-    try:
-        system_config = get_system_config(config_name)
-        gpus_per_node = system_config.GPUS_PER_NODE
-    except Exception as e:
-        raise ValidationError(f"Could not load system configuration: {e}")
+    # Extract final resource values
+    final_num_nodes = resource_params['final_num_nodes']
+    final_ngpus = resource_params['final_ngpus']
+    final_node_occupancy = resource_params['final_node_occupancy']
+    final_ranks_per_node = resource_params['final_ranks_per_node']
     
-    # Determine final resource parameters
-    if nnodes > 1:
-        # Multi-node job: ignore ngpus and node occupancy
-        final_num_nodes = nnodes
-        final_ngpus = nnodes * gpus_per_node  # Multi-node jobs use up all cpus or gpus on the nodes. This here is only for display purposes though
-        final_node_occupancy = 1.0
-    else:
-        # Single-node job: check for conflicting parameters
-        if ngpus > 0 and node_occupancy is not None:
-            raise ValidationError("Cannot specify both ngpus and node_occupancy. Use ngpus for GPU jobs or node_occupancy for CPU jobs.")
-        
-        if ngpus > 0:
-            # Single-node GPU job
-            if ngpus > gpus_per_node:
-                raise ValidationError(f"Requested {ngpus} GPUs but only {gpus_per_node} available per node")
-            
-            final_num_nodes = 1
-            final_ngpus = ngpus
-            final_node_occupancy = 1.0
-        else:
-            # Single-node CPU-only job
-            final_num_nodes = 1
-            final_ngpus = 0
-            final_node_occupancy = node_occupancy if node_occupancy is not None else 1.0
+    # Handle environment file validation and processing
+    final_env_file, env_info, env_warnings = validate_environment_file(env_file)
+    info_messages.extend(env_info)
+    warning_messages.extend(env_warnings)
     
-    # Calculate smart default for ranks_per_node if not specified
-    if ranks_per_node is None:
-        if final_ngpus > 0:
-            # GPU jobs: 1 rank per GPU
-            final_ranks_per_node = 1
-        else:
-            # CPU jobs: calculate based on cores_per_node * node_occupancy
-            calculated_ranks = int(system_config.CORES_PER_NODE * final_node_occupancy)
-            final_ranks_per_node = max(1, calculated_ranks)  # Ensure at least 1
-    else:
-        # User specified ranks_per_node
-        if final_ngpus > 0:
-            # GPU jobs: force to 1 regardless of user input (ranks_per_node is ignored)
-            final_ranks_per_node = 1
-        else:
-            # CPU jobs: use user-specified value
-            final_ranks_per_node = ranks_per_node
-
-    # --- Handle environment file validation and processing ---
-    final_env_file = None
-    if env_file:
-        # Convert relative path to absolute path
-        env_file_path = Path(env_file)
-        if not env_file_path.is_absolute():
-            env_file_path = Path.cwd() / env_file_path
-        
-        # Validate that the environment file exists
-        if not env_file_path.exists():
-            raise ValidationError(f"Environment file '{env_file}' does not exist")
-        
-        if not env_file_path.is_file():
-            raise ValidationError(f"Environment file '{env_file}' is not a file")
-        
-        final_env_file = str(env_file_path.resolve())
-
-    # --- Handle parent dependencies ---
-    final_parents = []
+    # Handle parent dependencies
+    final_parents, parent_info, parent_warnings = validate_parent_dependencies(parents, parent_tag, db_path)
+    info_messages.extend(parent_info)
+    warning_messages.extend(parent_warnings)
     
-    # Parse parents list if provided
-    if parents:
-        final_parents = list(parents)  # Create a copy
-    
-    # Handle parent_tag conversion to parent IDs
-    if parent_tag:
-        # Get all jobs with the specified tag that are Done
-        tag_jobs = database.get_jobs(db_path, tag=parent_tag, status='Done')
-        tag_parent_ids = [job['job_id'] for job in tag_jobs]
-        final_parents.extend(tag_parent_ids)
-    
-    # Validate parent job IDs exist
-    if final_parents:
-        existing_jobs = database.get_jobs_by_ids(db_path, final_parents)
-        existing_ids = {job['job_id'] for job in existing_jobs}
-        missing_ids = set(final_parents) - existing_ids
-        
-        if missing_ids:
-            raise ValidationError(f"Parent job IDs do not exist: {sorted(missing_ids)}")
-
-    # --- Determine the list of paths to process ---
-    paths_to_add: List[Path] = []
-    failed_jobs: List[tuple[str, str]] = []
-    
-    if len(paths) == 1 and paths[0].lower() == 'all':
-        current_dir = Path.cwd()
-        subdirectories = [p for p in current_dir.iterdir() if p.is_dir()]
-        
-        if not subdirectories:
-            raise ValidationError("No subdirectories found in the current directory")
-            
-        paths_to_add = [p.resolve() for p in subdirectories]
-    else:
-        # Validate user-provided paths - collect failures instead of raising immediately
-        for path_str in paths:
-            path_obj = Path(path_str)
-            if not path_obj.exists():
-                failed_jobs.append((path_str, f"Path '{path_str}' does not exist"))
-                continue
-            if not path_obj.is_dir():
-                failed_jobs.append((path_str, f"Path '{path_str}' is not a directory"))
-                continue
-            paths_to_add.append(path_obj.resolve())
+    # Determine the list of paths to process
+    paths_to_add, failed_jobs = validate_paths(paths)
 
     # --- Add the determined paths to the database ---
     created_job_ids = []
@@ -251,9 +136,15 @@ def add_jobs(
             created_job_ids.append(new_id)
         except sqlite3.IntegrityError:
             input_display = f"input file '{final_input_file}'" if final_input_file else "no input file"
-            failed_jobs.append((str(path), f"Job with path '{path}' and {input_display} already exists in the database"))
+            failed_jobs.append((str(path), f"A job in the same path and {input_display} already exists in the database"))
     
-    return created_job_ids, failed_jobs
+    # Create message log dictionary
+    msg_log = {
+        "warnings": warning_messages,
+        "info": info_messages
+    }
+    
+    return created_job_ids, failed_jobs, msg_log
 
 
 # Main CLI command
@@ -380,7 +271,7 @@ def add(
                 raise typer.Exit(code=1)
         
         # Call the core function
-        job_ids, failed_jobs = add_jobs(
+        job_ids, failed_jobs, msg_log = add_jobs(
             paths=paths,
             app=app,
             config_name=config_name,
@@ -397,9 +288,17 @@ def add(
             status=status,
         )
         
-        # Display failed jobs
-        for path, error_msg in failed_jobs:
-            typer.secho(f"❌ Failed to add job '{path}': {error_msg}", fg=typer.colors.RED)
+        # Display messages from core function
+        for warning in msg_log["warnings"]:
+            typer.secho(f"⚠️  Warning: {warning}", fg=typer.colors.YELLOW)
+        for info in msg_log["info"]:
+            typer.secho(f"ℹ️  {info}", fg=typer.colors.BLUE)
+        
+        # Display failed jobs with better formatting
+        if failed_jobs:
+            typer.secho(f"❌ Failed to add {len(failed_jobs)} job(s):", fg=typer.colors.RED)
+            for path, error_msg in failed_jobs:
+                typer.secho(f"  - {path}: {error_msg}", fg=typer.colors.RED)
         
         # CLI-specific success output
         success_count = len(job_ids)
@@ -409,86 +308,26 @@ def add(
             # Get system config for display
             try:
                 system_config = get_system_config(config_name)
-                gpus_per_node = system_config.GPUS_PER_NODE
                 
-                # Calculate display parameters (same logic as core function)
-                if nnodes > 1:
-                    final_num_nodes = nnodes
-                    final_ngpus = nnodes * gpus_per_node
-                    final_node_occupancy = 1.0
-                    typer.secho(f"ℹ️  Multi-node job will use {nnodes * gpus_per_node} total GPUs ({gpus_per_node} per node)", fg=typer.colors.BLUE)
-                else:
-                    if ngpus > 0:
-                        final_num_nodes = 1
-                        final_ngpus = ngpus
-                        final_node_occupancy = 1.0
-                    else:
-                        final_num_nodes = 1
-                        final_ngpus = 0
-                        final_node_occupancy = node_occupancy if node_occupancy is not None else 1.0
-                
-                # Calculate ranks_per_node for display
-                if ranks_per_node is None:
-                    if final_ngpus > 0:
-                        final_ranks_per_node = 1
-                    else:
-                        calculated_ranks = int(system_config.CORES_PER_NODE * final_node_occupancy)
-                        final_ranks_per_node = max(1, calculated_ranks)
-                        typer.secho(f"ℹ️  Using smart default: ranks_per_node = {final_ranks_per_node} (cores_per_node={system_config.CORES_PER_NODE} * node_occupancy={final_node_occupancy})", fg=typer.colors.BLUE)
-                else:
-                    if final_ngpus > 0:
-                        final_ranks_per_node = 1
-                        if ranks_per_node != 1:
-                            typer.secho("⚠️  Warning: --ranks-per-node is ignored for GPU jobs (1 rank per GPU)", fg=typer.colors.YELLOW)
-                    else:
-                        final_ranks_per_node = ranks_per_node
-                
-                # Calculate total ranks for display
-                if final_ngpus > 0:
-                    total_ranks = final_num_nodes * final_ngpus
-                else:
-                    total_ranks = final_num_nodes * final_ranks_per_node
+                # Calculate display parameters using helper function
+                resource_params, _, _ = validate_resource_parameters(ngpus, nnodes, node_occupancy, ranks_per_node, system_config)
+                display_info = calculate_resource_display_info(resource_params, system_config)
                 
                 # Display resource specification
-                if final_num_nodes > 1:
-                    if final_ngpus > 0:
-                        display_str = f"n:{final_num_nodes}-r:{final_ngpus}-g:{final_ngpus}-nocc:NA"
-                    else:
-                        display_str = f"n:{final_num_nodes}-r:{total_ranks}-g:0-nocc:NA"
-                elif final_ngpus > 0:
-                    display_str = f"n:1-r:{total_ranks}-g:{final_ngpus}-nocc:NA"
-                else:
-                    display_str = f"n:1-r:{total_ranks}-g:0-nocc:{final_node_occupancy}"
-                
-                typer.secho(f"ℹ️  Resource specification: {display_str}", fg=typer.colors.BLUE)
-                
-                # Display environment file info
-                if env_file:
-                    env_file_path = Path(env_file)
-                    if not env_file_path.is_absolute():
-                        env_file_path = Path.cwd() / env_file_path
-                    typer.secho(f"ℹ️  Using environment file: {env_file_path.resolve()}", fg=typer.colors.BLUE)
+                typer.secho(f"ℹ️  Resource specification: {display_info['resource_spec_string']}", fg=typer.colors.BLUE)
                 
                 # Display parent info
                 if final_parents:
                     typer.secho(f"ℹ️  Job will depend on parent jobs: {final_parents}", fg=typer.colors.BLUE)
                 
-                if parent_tag:
-                    tag_jobs = database.get_jobs(path_utils.DB_FILE, tag=parent_tag, status='Done')
-                    tag_parent_ids = [job['job_id'] for job in tag_jobs]
-                    if tag_parent_ids:
-                        typer.secho(f"ℹ️  Added {len(tag_parent_ids)} parent jobs from tag '{parent_tag}': {tag_parent_ids}", fg=typer.colors.BLUE)
-                    else:
-                        typer.secho(f"⚠️  Warning: No completed jobs found with tag '{parent_tag}'", fg=typer.colors.YELLOW)
-                
             except Exception:
                 pass  # Don't fail on display issues
         
         # Display job creation results
-        for job_id in job_ids:
+        if job_ids:
             input_info = f" (input: {final_input_file})" if final_input_file else " (no input file)"
-            typer.secho(f"✅ Added job with ID {job_id}{input_info}", fg=typer.colors.GREEN)
-        
+            typer.secho(f"✅ Added {len(job_ids)} job(s) with IDs: {', '.join(map(str, job_ids))}{input_info}", fg=typer.colors.GREEN)
+                
         typer.echo("---")  # Separator
         
         # Summary with both successes and failures

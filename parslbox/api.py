@@ -116,7 +116,7 @@ class ParslBox:
         parents: Optional[List[int]] = None,
         parent_tag: Optional[str] = None,
         status: str = "Ready",
-    ) -> Tuple[List[int], List[Tuple[str, str]]]:
+    ) -> Tuple[List[int], List[Tuple[str, str]], Dict[str, List[str]]]:
         """
         Add one or more jobs to the database.
 
@@ -137,23 +137,28 @@ class ParslBox:
             status: Initial job status (default: 'Ready')
 
         Returns:
-            Tuple of (successful_job_ids, failed_jobs) where:
+            Tuple of (successful_job_ids, failed_jobs, msg_log) where:
             - successful_job_ids: List of created job IDs
             - failed_jobs: List of tuples (path, error_message) for failed jobs
+            - msg_log: Dictionary with 'warnings' and 'info' lists
 
         Examples:
             # Add multiple jobs with partial failure handling
-            job_ids, failures = pbx.add_jobs(["/path/job1", "/invalid/path"], app="lammps", config="polaris")
+            job_ids, failures, msg_log = pbx.add_jobs(["/path/job1", "/invalid/path"], app="lammps", config="polaris")
             print(f"Successfully added {len(job_ids)} jobs")
             if failures:
                 print(f"Failed to add {len(failures)} jobs:")
                 for path, error in failures:
                     print(f"  {path}: {error}")
+            for warning in msg_log["warnings"]:
+                print(f"Warning: {warning}")
+            for info in msg_log["info"]:
+                print(f"Info: {info}")
         """
         
         try:
             # Use the core function directly
-            successful_job_ids, failed_jobs = add_jobs(
+            successful_job_ids, failed_jobs, msg_log = add_jobs(
                 paths=paths,
                 app=app,
                 config_name=config,
@@ -170,7 +175,7 @@ class ParslBox:
                 status=status,
                 db_path=self.db_path,
             )
-            return successful_job_ids, failed_jobs
+            return successful_job_ids, failed_jobs, msg_log
         except Exception as e:
             # Convert command ValidationError to API ValidationError if needed
             if "ValidationError" in str(type(e)):
@@ -216,7 +221,6 @@ class ParslBox:
         self,
         job_ids: List[int],
         status: Optional[str] = None,
-        app: Optional[str] = None,
         tag: Optional[str] = None,
         input_file: Optional[str] = None,
         ngpus: Optional[int] = None,
@@ -226,14 +230,13 @@ class ParslBox:
         ranks_per_node: Optional[int] = None,
         add_deps: Optional[List[int]] = None,
         rm_deps: Optional[List[int]] = None,
-    ) -> Tuple[List[int], List[Tuple[int, str]], List[str]]:
+    ) -> Tuple[List[int], List[Tuple[int, str]], Dict[str, List[str]]]:
         """
         Update one or more jobs' fields.
 
         Args:
             job_ids: List of job IDs to update
             status: New status
-            app: New application
             tag: New tag
             input_file: New input file
             ngpus: New number of GPUs
@@ -245,31 +248,32 @@ class ParslBox:
             rm_deps: Parent job IDs to remove
 
         Returns:
-            Tuple of (successful_job_ids, failed_jobs, warnings) where:
+            Tuple of (successful_job_ids, failed_jobs, msg_log) where:
             - successful_job_ids: List of job IDs that were successfully updated
             - failed_jobs: List of tuples (job_id, error_message) for failed jobs
-            - warnings: List of warning messages
+            - msg_log: Dictionary with 'warnings' and 'info' lists
 
         Raises:
             ValidationError: If validation fails
 
         Examples:
             # Update a single job
-            updated_ids, failures, warnings = pbx.update_jobs([123], status="Submitted")
+            updated_ids, failures, msg_log = pbx.update_jobs([123], status="Submitted")
             
-            # Update multiple jobs with app change
-            updated_ids, failures, warnings = pbx.update_jobs([123, 124, 125], app="vasp")
-            for warning in warnings:
+            # Update multiple jobs
+            updated_ids, failures, msg_log = pbx.update_jobs([123, 124, 125], status="Running")
+            for warning in msg_log["warnings"]:
                 print(f"Warning: {warning}")
+            for info in msg_log["info"]:
+                print(f"Info: {info}")
             for job_id, error in failures:
                 print(f"Failed job {job_id}: {error}")
         """
         try:
             # Use the core function with API-specific settings
-            updated_job_ids, failed_jobs, warnings = update_jobs(
+            updated_job_ids, failed_jobs, msg_log = update_jobs(
                 job_ids=job_ids,
                 status=status,
-                app=app,
                 tag=tag,
                 input_file=input_file,
                 ngpus=ngpus,
@@ -279,10 +283,9 @@ class ParslBox:
                 ranks_per_node=ranks_per_node,
                 add_deps=add_deps,
                 rm_deps=rm_deps,
-                interactive_prompts=False,  # No interactive prompts for API
                 db_path=self.db_path,
             )
-            return updated_job_ids, failed_jobs, warnings
+            return updated_job_ids, failed_jobs, msg_log
         except Exception as e:
             # Convert command ValidationError to API ValidationError if needed
             if "ValidationError" in str(type(e)):

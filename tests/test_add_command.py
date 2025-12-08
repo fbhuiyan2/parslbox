@@ -58,9 +58,9 @@ class TestAddCommand:
         runner = CliRunner()
         
         with patch('parslbox.commands.add.path_utils.DB_FILE', temp_db), \
-             patch('parslbox.commands.add.get_system_config', return_value=mock_system_config), \
-             patch('parslbox.commands.add.is_app_registered', return_value=True), \
-             patch('parslbox.commands.add.get_app_config', return_value={
+             patch('parslbox.system_configs.loader.get_system_config', return_value=mock_system_config), \
+             patch('parslbox.apps.app_registry.is_app_registered', return_value=True), \
+             patch('parslbox.apps.app_registry.get_app_config', return_value={
                  'INPUT_REQUIRED': True,
                  'DFLT_INPUT': 'in.lammps'
              }):
@@ -74,7 +74,7 @@ class TestAddCommand:
             ])
             
             assert result.exit_code == 0
-            assert "✅ Added job" in result.stdout
+            assert "✅ Added 1 job(s) with IDs:" in result.stdout
             assert "Resource specification: n:1-r:2-g:2-nocc:NA" in result.stdout
             
             # Verify database entry
@@ -91,10 +91,20 @@ class TestAddCommand:
         """Test adding a single-node CPU job with node allocation."""
         runner = CliRunner()
         
+        # Create a temporary environment file for Python app
+        env_file = temp_job_dirs["temp_dir"] / "test_env.sh"
+        env_file.write_text("#!/bin/bash\necho 'test environment'")
+        
         with patch('parslbox.commands.add.path_utils.DB_FILE', temp_db), \
              patch('parslbox.commands.add.get_system_config', return_value=mock_system_config), \
              patch('parslbox.commands.add.is_app_registered', return_value=True), \
              patch('parslbox.commands.add.get_app_config', return_value={
+                 'INPUT_REQUIRED': False,
+                 'DFLT_INPUT': None
+             }), \
+             patch('parslbox.commands.helpers.job_info_validator.get_system_config', return_value=mock_system_config), \
+             patch('parslbox.commands.helpers.job_info_validator.is_app_registered', return_value=True), \
+             patch('parslbox.commands.helpers.job_info_validator.get_app_config', return_value={
                  'INPUT_REQUIRED': False,
                  'DFLT_INPUT': None
              }), \
@@ -105,11 +115,12 @@ class TestAddCommand:
                 "--app", "python",
                 "--config", "polaris",
                 "--nocc", "0.5",
-                "--tag", "test-cpu"
+                "--tag", "test-cpu",
+                "--envfile", str(env_file)
             ])
             
             assert result.exit_code == 0
-            assert "✅ Added job with ID" in result.stdout
+            assert "✅ Added 1 job(s) with IDs:" in result.stdout
             assert "Resource specification: n:1-r:32-g:0-nocc:0.5" in result.stdout
             
             # Verify database entry
@@ -127,9 +138,9 @@ class TestAddCommand:
         runner = CliRunner()
         
         with patch('parslbox.commands.add.path_utils.DB_FILE', temp_db), \
-             patch('parslbox.commands.add.get_system_config', return_value=mock_system_config), \
-             patch('parslbox.commands.add.is_app_registered', return_value=True), \
-             patch('parslbox.commands.add.get_app_config', return_value={
+             patch('parslbox.system_configs.loader.get_system_config', return_value=mock_system_config), \
+             patch('parslbox.apps.app_registry.is_app_registered', return_value=True), \
+             patch('parslbox.apps.app_registry.get_app_config', return_value={
                  'INPUT_REQUIRED': True,
                  'DFLT_INPUT': 'in.lammps'
              }):
@@ -142,7 +153,7 @@ class TestAddCommand:
             ])
             
             assert result.exit_code == 0
-            assert "✅ Added job with ID" in result.stdout
+            assert "✅ Added 1 job(s) with IDs:" in result.stdout
             assert "Multi-node job will use 8 total GPUs (4 per node)" in result.stdout
             assert "Resource specification: n:2-r:8-g:8-nocc:NA" in result.stdout
             
@@ -170,6 +181,12 @@ class TestAddCommand:
                  patch('parslbox.commands.add.get_system_config', return_value=mock_system_config), \
                  patch('parslbox.commands.add.is_app_registered', return_value=True), \
                  patch('parslbox.commands.add.get_app_config', return_value={
+                     'INPUT_REQUIRED': False,
+                     'DFLT_INPUT': None
+                 }), \
+                 patch('parslbox.commands.helpers.job_info_validator.get_system_config', return_value=mock_system_config), \
+                 patch('parslbox.commands.helpers.job_info_validator.is_app_registered', return_value=True), \
+                 patch('parslbox.commands.helpers.job_info_validator.get_app_config', return_value={
                      'INPUT_REQUIRED': False,
                      'DFLT_INPUT': None
                  }), \
@@ -225,9 +242,19 @@ class TestAddCommand:
         env_file.write_text("#!/bin/bash\necho 'test environment'")
         
         with patch('parslbox.commands.add.path_utils.DB_FILE', temp_db), \
-             patch('parslbox.commands.add.get_system_config', return_value=mock_system_config), \
-             patch('parslbox.commands.add.is_app_registered', return_value=True), \
+             patch('parslbox.system_configs.loader.get_system_config', return_value=mock_system_config), \
+             patch('parslbox.apps.app_registry.is_app_registered', return_value=True), \
+             patch('parslbox.apps.app_registry.get_app_config', return_value={
+                 'INPUT_REQUIRED': False,
+                 'DFLT_INPUT': None
+             }), \
              patch('parslbox.commands.add.get_app_config', return_value={
+                 'INPUT_REQUIRED': False,
+                 'DFLT_INPUT': None
+             }), \
+             patch('parslbox.commands.helpers.job_info_validator.get_system_config', return_value=mock_system_config), \
+             patch('parslbox.commands.helpers.job_info_validator.is_app_registered', return_value=True), \
+             patch('parslbox.commands.helpers.job_info_validator.get_app_config', return_value={
                  'INPUT_REQUIRED': False,
                  'DFLT_INPUT': None
              }):
@@ -249,8 +276,8 @@ class TestAddCommand:
         runner = CliRunner()
         
         with patch('parslbox.commands.add.path_utils.DB_FILE', temp_db), \
-             patch('parslbox.commands.add.get_system_config', return_value=mock_system_config), \
-             patch('parslbox.commands.add.is_app_registered', return_value=True):
+             patch('parslbox.system_configs.loader.get_system_config', return_value=mock_system_config), \
+             patch('parslbox.apps.app_registry.is_app_registered', return_value=True):
             
             result = runner.invoke(add_app, [
                 str(temp_job_dirs["job1"]),
@@ -284,8 +311,8 @@ class TestAddCommand:
         runner = CliRunner()
         
         with patch('parslbox.commands.add.path_utils.DB_FILE', temp_db), \
-             patch('parslbox.commands.add.get_system_config', return_value=mock_system_config), \
-             patch('parslbox.commands.add.is_app_registered', return_value=True):
+             patch('parslbox.system_configs.loader.get_system_config', return_value=mock_system_config), \
+             patch('parslbox.apps.app_registry.is_app_registered', return_value=True):
             
             result = runner.invoke(add_app, [
                 "/nonexistent/path",
@@ -294,16 +321,17 @@ class TestAddCommand:
             ])
             
             assert result.exit_code == 1
-            assert "❌ Failed to add job '/nonexistent/path': Path '/nonexistent/path' does not exist" in result.stdout
+            assert "❌ Failed to add 1 job(s):" in result.stdout
+            assert "- /nonexistent/path: Path '/nonexistent/path' does not exist" in result.stdout
     
     def test_duplicate_job_path(self, temp_db, temp_job_dirs, mock_system_config):
         """Test handling of duplicate job paths."""
         runner = CliRunner()
         
         with patch('parslbox.commands.add.path_utils.DB_FILE', temp_db), \
-             patch('parslbox.commands.add.get_system_config', return_value=mock_system_config), \
-             patch('parslbox.commands.add.is_app_registered', return_value=True), \
-             patch('parslbox.commands.add.get_app_config', return_value={
+             patch('parslbox.system_configs.loader.get_system_config', return_value=mock_system_config), \
+             patch('parslbox.apps.app_registry.is_app_registered', return_value=True), \
+             patch('parslbox.apps.app_registry.get_app_config', return_value={
                  'INPUT_REQUIRED': False,
                  'DFLT_INPUT': None
              }):
@@ -323,17 +351,27 @@ class TestAddCommand:
                 "--app", "lammps"
             ])
             assert result2.exit_code == 1
-            assert "❌ Failed to add job" in result2.stdout
+            assert "❌ Failed to add 1 job(s):" in result2.stdout
             assert "already exists in the database" in result2.stdout
     
     def test_add_all_subdirectories(self, temp_db, temp_job_dirs, mock_system_config):
         """Test adding all subdirectories with 'all' argument."""
         runner = CliRunner()
         
+        # Create a temporary environment file for Python app
+        env_file = temp_job_dirs["temp_dir"] / "test_env.sh"
+        env_file.write_text("#!/bin/bash\necho 'test environment'")
+        
         with patch('parslbox.commands.add.path_utils.DB_FILE', temp_db), \
              patch('parslbox.commands.add.get_system_config', return_value=mock_system_config), \
              patch('parslbox.commands.add.is_app_registered', return_value=True), \
              patch('parslbox.commands.add.get_app_config', return_value={
+                 'INPUT_REQUIRED': False,
+                 'DFLT_INPUT': None
+             }), \
+             patch('parslbox.commands.helpers.job_info_validator.get_system_config', return_value=mock_system_config), \
+             patch('parslbox.commands.helpers.job_info_validator.is_app_registered', return_value=True), \
+             patch('parslbox.commands.helpers.job_info_validator.get_app_config', return_value={
                  'INPUT_REQUIRED': False,
                  'DFLT_INPUT': None
              }), \
@@ -348,7 +386,8 @@ class TestAddCommand:
                 result = runner.invoke(add_app, [
                     "all",
                     "--config", "polaris",
-                    "--app", "python"
+                    "--app", "python",
+                    "--envfile", str(env_file)
                 ])
                 
                 assert result.exit_code == 0
@@ -366,11 +405,11 @@ class TestAddCommand:
         runner = CliRunner()
         
         with patch('parslbox.commands.add.path_utils.DB_FILE', temp_db), \
-             patch('parslbox.commands.add.get_system_config', return_value=mock_system_config), \
-             patch('parslbox.commands.add.is_app_registered', return_value=True):
+             patch('parslbox.system_configs.loader.get_system_config', return_value=mock_system_config), \
+             patch('parslbox.apps.app_registry.is_app_registered', return_value=True):
             
             # Test app with required input and default
-            with patch('parslbox.commands.add.get_app_config', return_value={
+            with patch('parslbox.apps.app_registry.get_app_config', return_value={
                 'INPUT_REQUIRED': True,
                 'DFLT_INPUT': 'in.lammps'
             }):
@@ -390,10 +429,20 @@ class TestAddCommand:
         """Test default parameter values."""
         runner = CliRunner()
         
+        # Create a temporary environment file for Python app
+        env_file = temp_job_dirs["temp_dir"] / "test_env.sh"
+        env_file.write_text("#!/bin/bash\necho 'test environment'")
+        
         with patch('parslbox.commands.add.path_utils.DB_FILE', temp_db), \
              patch('parslbox.commands.add.get_system_config', return_value=mock_system_config), \
              patch('parslbox.commands.add.is_app_registered', return_value=True), \
              patch('parslbox.commands.add.get_app_config', return_value={
+                 'INPUT_REQUIRED': False,
+                 'DFLT_INPUT': None
+             }), \
+             patch('parslbox.commands.helpers.job_info_validator.get_system_config', return_value=mock_system_config), \
+             patch('parslbox.commands.helpers.job_info_validator.is_app_registered', return_value=True), \
+             patch('parslbox.commands.helpers.job_info_validator.get_app_config', return_value={
                  'INPUT_REQUIRED': False,
                  'DFLT_INPUT': None
              }), \
@@ -402,7 +451,8 @@ class TestAddCommand:
             result = runner.invoke(add_app, [
                 str(temp_job_dirs["job1"]),
                 "--config", "polaris",
-                "--app", "python"
+                "--app", "python",
+                "--envfile", str(env_file)
             ])
             
             assert result.exit_code == 0
