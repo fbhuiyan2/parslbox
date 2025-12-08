@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "parslbox"
-version = "0.5.0"
+version = "0.5.1"
 description = ""
 authors = ["fbhuiyan2 <fakhrul.hasan117@gmail.com>"]
 readme = "README.md"
