@@ -549,7 +549,8 @@ class ResourceManager:
             return []
         
         # Import here to avoid circular imports
-        from parslbox.helpers import database, path_utils
+        from parslbox.database import database
+        from parslbox.utils import path_utils
         
         # Get job details from database
         job_ids = list(self._backlogged_jobs_set)
