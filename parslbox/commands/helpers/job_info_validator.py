@@ -107,7 +107,7 @@ def validate_input_file(app: str, input_file: Optional[str] = None) -> Tuple[Opt
     else:
         # Input not required (input_required = False)
         if input_file is not None:
-            warning_messages.append(f"Input file ignored for {app} (not required), using default behavior")
+            warning_messages.append(f"Input file ignored for {app}. App is configured with `INPUT_REQUIRED = False`.")
         return default_input, info_messages, warning_messages  # Will be None for apps that don't need input
 
 

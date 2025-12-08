@@ -99,7 +99,7 @@ def update_jobs(
                 
                 # Fail the job if there are any warnings (e.g., input file ignored)
                 if input_warnings:
-                    failed_jobs.append((job_id, f"Input file '{input_file}' validation warning for job {job_id} app '{job_app}': {'; '.join(input_warnings)}"))
+                    failed_jobs.append((job_id, f"Cannot update input file to '{input_file}' for job {job_id} app '{job_app}': {'; '.join(input_warnings)}"))
 
                 
             except ValidationError as e:
