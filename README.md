@@ -98,6 +98,7 @@ pbx update 10 --nnodes 2          # multi-node
 pbx update 11 --nocc 0.25    # CPU-only fractional occupancy
 pbx update 12 --add_deps "8 9" --rm_deps "7"
 pbx update 13 --envfile ./env.sh
+pbx update 14 --input new_input.dat  # update input file
 
 # Remove jobs
 pbx rm 1 2 3
@@ -110,8 +111,8 @@ pbx rm $(pbx filter --status done)
 ParslBox provides a compact Python API for scripts and AI agents. The API delegates to core logic inside the command modules (add/update/qsub), ensuring CLI and API behavior stay in sync without duplication.
 
 Main methods:
-- add_job(path, app, config, ...), add_jobs(paths, app, config, ...)
-- update_job(job_id, ...), update_jobs(job_ids, ...)
+- add_jobs(paths, app, config, ...)
+- update_jobs(job_ids, ...)
 - list_jobs(...): when called with no filters, returns all jobs
 - get_job(job_id), get_jobs_by_ids(ids)
 - remove_job, remove_jobs, remove_all_jobs
@@ -188,11 +189,12 @@ Note on usage:
   - If no jobs match, outputs nothing (silent)
 
 - pbx update
-  - Fields: --status, --app, --tag, --input/-i, --ngpus/-g, --envfile/-e,
+  - Fields: --status, --tag, --input/-i, --ngpus/-g, --envfile/-e,
     --nnodes/-n, --nocc/-o, --ranks-per-node/-rpn
   - Dependencies: --add_deps/--padd, --rm_deps/--parm
   - Validation:
     - --nnodes must be ≥ 1; --nocc in (0.0, 1.0]; --ranks-per-node ≥ 1.
+    - --input file validation: input files are validated against the job's existing app; warnings cause update failures.
   - CPU vs GPU updates:
     - Setting --nocc for jobs with ngpus > 0 prompts confirmation to convert to CPU-only (ngpus=0).
   - Dependency updates:
@@ -202,6 +204,7 @@ Note on usage:
     - pbx update 14 --ranks-per-node 8
     - pbx update 12 --add_deps "8 9" --rm_deps "7"
     - pbx update 11 --nocc 0.5
+    - pbx update 15 --input new_file.dat
 
 - pbx rm
   - Remove by explicit IDs, or pbx rm all (with confirmation)

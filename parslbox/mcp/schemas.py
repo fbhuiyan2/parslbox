@@ -53,9 +53,9 @@ class AddJobSchema(BaseModel):
         default=None,
         description="Path to environment setup file (relative or absolute).",
     )
-    parents: Optional[str] = Field(
+    parents: Optional[List[int]] = Field(
         default=None,
-        description="Space-separated job IDs in quotes (e.g., '1 2 3').",
+        description="List of parent job IDs.",
     )
     parent_tag: Optional[str] = Field(
         default=None,
@@ -195,11 +195,6 @@ class UpdateJobSchema(BaseModel):
     status: Optional[str] = Field(
         default=None,
         description="New status for the job.",
-    )
-
-    app: Optional[str] = Field(
-        default=None,
-        description="New application name for the job.",
     )
 
     tag: Optional[str] = Field(

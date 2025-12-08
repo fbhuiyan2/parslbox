@@ -22,7 +22,7 @@ mcp = FastMCP(
         "- add_jobs: create new jobs and add them to the ParslBox database.\n"
         "- submit_job: submit PBS jobs to the queue using a qsub-style configuration.\n"
         "- remove_jobs: remove one or more jobs from the database.\n"
-        "- update_job: modify fields of an existing job (status, app, tag, resources, dependencies, etc.).\n"
+        "- update_job: modify fields of an existing job (status, tag, input file, resources, dependencies, etc.). Note: app cannot be changed after job creation.\n"
         "- filter_jobs: filter jobs by status, app, tag, path, or input file and return their IDs.\n\n"
     ),
 )
@@ -32,14 +32,36 @@ mcp = FastMCP(
     name="add_jobs",
     description="Add jobs to ParslBox",
 )
-def add_jobs(params: AddJobSchema):
+def add_jobs(params: AddJobSchema) -> str:
     input_dict = params.model_dump()
+    
     try:
-        job_id = pbx.add_jobs(**input_dict)
+        successful_job_ids, failed_jobs, msg_log = pbx.add_jobs(**input_dict)
     except Exception as e:
-        message = f"Exception occured when submitting job. Exception: {e}"
-    message = f"JobID {job_id} added to database"
-    return message
+        return f"Exception occurred when adding jobs. Exception: {e}"
+    
+    # Build response message
+    response_parts = []
+    
+    if successful_job_ids:
+        response_parts.append(f"Successfully added {len(successful_job_ids)} job(s) with IDs: {', '.join(map(str, successful_job_ids))}")
+    
+    if failed_jobs:
+        response_parts.append(f"Failed to add {len(failed_jobs)} job(s):")
+        for path, error in failed_jobs:
+            response_parts.append(f"  - {path}: {error}")
+    
+    # Add warnings and info messages
+    for warning in msg_log.get('warnings', []):
+        response_parts.append(f"Warning: {warning}")
+    
+    for info in msg_log.get('info', []):
+        response_parts.append(f"Info: {info}")
+    
+    if not successful_job_ids and not failed_jobs:
+        response_parts.append("No jobs were processed.")
+    
+    return "\n".join(response_parts)
 
 
 @mcp.tool(
@@ -79,15 +101,19 @@ def submit_job(params: QSubSchema) -> str:
 
 @mcp.tool(
     name="remove_job",
-    description="Remove a job from ParslBox",
+    description="Remove jobs from ParslBox",
 )
-def remove_jobs(params: RemoveJobsSchema):
+def remove_jobs(params: RemoveJobsSchema) -> str:
     input_dict = params.model_dump()
     try:
         removed_count = pbx.remove_jobs(**input_dict)
     except Exception as e:
-        return f"Exception occured when removing job. Exception: {e}"
-    return f"Removed {removed_count} job(s)."
+        return f"Exception occurred when removing jobs. Exception: {e}"
+    
+    if removed_count > 0:
+        return f"Successfully removed {removed_count} job(s)."
+    else:
+        return "No jobs were removed (jobs may not exist)."
 
 
 @mcp.tool(
@@ -96,16 +122,40 @@ def remove_jobs(params: RemoveJobsSchema):
 )
 def update_job(params: UpdateJobSchema) -> str:
     input_dict = params.model_dump()
+    
+    # Extract job_id and convert to list for the API call
+    job_id = input_dict.pop('job_id')
+    input_dict['job_ids'] = [job_id]
 
     try:
-        success = pbx.update_job(**input_dict)
+        updated_job_ids, failed_jobs, msg_log = pbx.update_jobs(**input_dict)
     except Exception as e:
-        return f"Exception occurred when updating job {params.job_id}. Exception: {e}"
+        return f"Exception occurred when updating job {job_id}. Exception: {e}"
 
-    if success:
-        return f"Successfully updated job {params.job_id}."
+    # Build response message
+    response_parts = []
+    
+    if job_id in updated_job_ids:
+        response_parts.append(f"Successfully updated job {job_id}.")
+    elif failed_jobs:
+        # Find the specific error for this job
+        for failed_job_id, error_msg in failed_jobs:
+            if failed_job_id == job_id:
+                response_parts.append(f"Failed to update job {job_id}: {error_msg}")
+                break
+        else:
+            response_parts.append(f"Job {job_id} was not found or no fields were updated.")
     else:
-        return f"Job {params.job_id} was not found or no fields were updated."
+        response_parts.append(f"Job {job_id} was not found or no fields were updated.")
+    
+    # Add warnings and info messages
+    for warning in msg_log.get('warnings', []):
+        response_parts.append(f"Warning: {warning}")
+    
+    for info in msg_log.get('info', []):
+        response_parts.append(f"Info: {info}")
+    
+    return "\n".join(response_parts)
 
 
 @mcp.tool(
