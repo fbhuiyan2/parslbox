@@ -24,8 +24,8 @@ from pathlib import Path
 from typing import List, Tuple, Optional
 
 # Import parslbox modules
-sys.path.append(str(Path(__file__).parent))
-from parslbox.helpers.pbx_config_utils import load_app_config
+sys.path.append(str(Path(__file__).parent.parent))
+from parslbox.utils.pbx_config_utils import load_app_config
 from parslbox.system_configs.loader import get_system_config
 
 
