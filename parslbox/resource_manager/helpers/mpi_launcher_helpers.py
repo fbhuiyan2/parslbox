@@ -40,7 +40,7 @@ def write_gpu_wrapper(wrapper_content: str, assignment: 'ResourceAssignment', wr
             f.write(wrapper_content)
         os.chmod(wrapper_path, 0o755)
         logger.debug(f"Generated {wrapper_type} GPU wrapper: {wrapper_path}")
-        return filename  # Return relative path when job_path provided
+        return "./" + filename  # Return relative path when job_path provided
     else:
         # Fallback to temp location
         wrapper_path = os.path.join(tempfile.gettempdir(), filename)
@@ -73,7 +73,7 @@ def write_rankfile(rankfile_content: str, assignment: 'ResourceAssignment', laun
         with open(rankfile_path, 'w') as f:
             f.write(rankfile_content)
         logger.debug(f"Generated {launcher_type} rankfile: {rankfile_path}")
-        return filename  # Return relative path when job_path provided
+        return "./" + filename  # Return relative path when job_path provided
     else:
         # Fallback to temp location
         rankfile_path = os.path.join(tempfile.gettempdir(), filename)
