@@ -28,23 +28,27 @@ def write_gpu_wrapper(wrapper_content: str, assignment: 'ResourceAssignment', wr
         job_path: Optional job directory path
         
     Returns:
-        Path to the written wrapper script
+        Path to the written wrapper script. When job_path is provided, returns relative path
+        (filename only) to avoid OpenMPI buffer limits. When job_path is None, returns full path.
     """
+    filename = f"gpu_wrapper_pbx_{wrapper_type}_{assignment.job_id}.sh"
+    
     if job_path:
         # Write to job directory
-        wrapper_path = os.path.join(job_path, f"gpu_wrapper_pbx_{wrapper_type}_{assignment.job_id}.sh")
+        wrapper_path = os.path.join(job_path, filename)
         with open(wrapper_path, 'w') as f:
             f.write(wrapper_content)
         os.chmod(wrapper_path, 0o755)
+        logger.debug(f"Generated {wrapper_type} GPU wrapper: {wrapper_path}")
+        return filename  # Return relative path when job_path provided
     else:
         # Fallback to temp location
-        wrapper_path = os.path.join(tempfile.gettempdir(), f"gpu_wrapper_pbx_{wrapper_type}_{assignment.job_id}.sh")
+        wrapper_path = os.path.join(tempfile.gettempdir(), filename)
         with open(wrapper_path, 'w') as f:
             f.write(wrapper_content)
         os.chmod(wrapper_path, 0o755)
-    
-    logger.debug(f"Generated {wrapper_type} GPU wrapper: {wrapper_path}")
-    return wrapper_path
+        logger.debug(f"Generated {wrapper_type} GPU wrapper: {wrapper_path}")
+        return wrapper_path  # Return full path for temp location
 
 
 def write_rankfile(rankfile_content: str, assignment: 'ResourceAssignment', launcher_type: str, job_path: str = None) -> str:
@@ -58,21 +62,25 @@ def write_rankfile(rankfile_content: str, assignment: 'ResourceAssignment', laun
         job_path: Optional job directory path
         
     Returns:
-        Path to the written rankfile
+        Path to the written rankfile. When job_path is provided, returns relative path
+        (filename only) to avoid OpenMPI buffer limits. When job_path is None, returns full path.
     """
+    filename = f"rankfile_pbx_{launcher_type}_{assignment.job_id}.txt"
+    
     if job_path:
         # Write to job directory
-        rankfile_path = os.path.join(job_path, f"rankfile_pbx_{launcher_type}_{assignment.job_id}.txt")
+        rankfile_path = os.path.join(job_path, filename)
         with open(rankfile_path, 'w') as f:
             f.write(rankfile_content)
+        logger.debug(f"Generated {launcher_type} rankfile: {rankfile_path}")
+        return filename  # Return relative path when job_path provided
     else:
         # Fallback to temp location
-        rankfile_path = os.path.join(tempfile.gettempdir(), f"rankfile_pbx_{launcher_type}_{assignment.job_id}.txt")
+        rankfile_path = os.path.join(tempfile.gettempdir(), filename)
         with open(rankfile_path, 'w') as f:
             f.write(rankfile_content)
-    
-    logger.debug(f"Generated {launcher_type} rankfile: {rankfile_path}")
-    return rankfile_path
+        logger.debug(f"Generated {launcher_type} rankfile: {rankfile_path}")
+        return rankfile_path  # Return full path for temp location
 
 
 def generate_openmpi_rankfile(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec', job_path: str = None) -> str:
