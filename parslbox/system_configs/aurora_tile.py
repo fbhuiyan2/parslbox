@@ -21,8 +21,9 @@ class AuroraTileConfig(SystemConfig):
     
     # System specifications
     SYSTEM_NAME = 'aurora-tile'
-    CORES_PER_NODE = 208  # 104 physical cores with hyperthreading
+    CORES_PER_NODE = 204  # 104 physical cores with hyperthreading - 4 CPU sockets reserved for system services
     GPUS_PER_NODE = 12    # 6 physical GPUs × 2 tiles each = 12 tile units
+    CORES_PER_GPU = 16  # Because Aurora is set up weird, even though there are 17 cores per tile, worker_cpu_affinity has 16 cores. check aurora system design to learn why
     SCHEDULER = "PBS"
     MPI_CMD_TO_USE = "mpiexec"
     MAX_WORKERS_PER_NODE = 12  # One worker per tile

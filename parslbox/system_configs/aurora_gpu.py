@@ -20,8 +20,9 @@ class AuroraGpuConfig(SystemConfig):
     
     # System specifications
     SYSTEM_NAME = 'aurora-gpu'
-    CORES_PER_NODE = 208  # 104 physical cores with hyperthreading
+    CORES_PER_NODE = 204  # 104 physical cores with hyperthreading - 4 CPU sockets reserved for system services
     GPUS_PER_NODE = 6     # 6 physical GPUs
+    CORES_PER_GPU = 32    # Each full GPU gets 32 cores (16+16 from combined tile affinity groups)
     SCHEDULER = "PBS"
     MPI_CMD_TO_USE = "mpiexec"
     MAX_WORKERS_PER_NODE = 6  # One worker per full GPU

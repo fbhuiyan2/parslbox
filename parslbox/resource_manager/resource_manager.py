@@ -294,7 +294,10 @@ class ResourceManager:
 
         """
         # Calculate cores per GPU for balanced allocation
-        cores_per_gpu = self.system_config.CORES_PER_NODE // self.system_config.GPUS_PER_NODE
+        if self.system_config.CORES_PER_GPU:    # if CORES_PER_GPU is defined in system config, use that
+            cores_per_gpu = self.system_config.CORES_PER_GPU
+        else:
+            cores_per_gpu = self.system_config.CORES_PER_NODE // self.system_config.GPUS_PER_NODE
         
         # Find a healthy node with enough GPUs and CPU cores
         for node in self.nodes:

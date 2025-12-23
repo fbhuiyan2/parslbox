@@ -37,6 +37,7 @@ class SystemConfig(ABC):
     SYSTEM_NAME: str  # Human-readable system name
     CORES_PER_NODE: int
     GPUS_PER_NODE: int
+    CORES_PER_GPU: Optional[int] = None     # Some systems can have a weird design where number of affinity core does not match CORES_PER_NODE//GPUS_PER_NODE
     SCHEDULER: str
     MPI_CMD_TO_USE: str
     MAX_WORKERS_PER_NODE: int
