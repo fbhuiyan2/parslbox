@@ -108,7 +108,7 @@ class SophiaConfig(SystemConfig):
                     heartbeat_period=120,
                     heartbeat_threshold=300,
                     worker_debug=True,
-                    available_accelerators=total_gpus,
+                    available_accelerators=0, #total_gpus,
                     max_workers_per_node=max_workers_per_node,
                     cores_per_worker=cores_per_worker,
                     #cpu_affinity=self.WORKER_CPU_AFFINITY,

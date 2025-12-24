@@ -9,7 +9,7 @@ and generating Parsl configurations.
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, List
 from parsl.config import Config
 
 if TYPE_CHECKING:
@@ -42,6 +42,7 @@ class SystemConfig(ABC):
     MPI_CMD_TO_USE: str
     MAX_WORKERS_PER_NODE: int
     WORKER_CPU_AFFINITY: Optional[str] = None
+    EXCLUDE_CORES: Optional[List[int]] = None
     GPU_TYPE: str     # GPU type: 'cuda', 'intel', None, etc.
     
     def __init__(self):
@@ -58,7 +59,7 @@ class SystemConfig(ABC):
         Validate system configuration parameters.
         
         Raises:
-            ValueError: If WORKER_CPU_AFFINITY is invalid
+            ValueError: If WORKER_CPU_AFFINITY or EXCLUDE_CORES is invalid
         """
         if self.WORKER_CPU_AFFINITY:
             is_valid, error_msg, warnings = self._validate_affinity_string(
@@ -77,6 +78,25 @@ class SystemConfig(ABC):
             # Log warnings for non-fatal issues
             for warning in warnings:
                 logger.warning(f"WORKER_CPU_AFFINITY in {self.__class__.__name__}: {warning}")
+        
+        # Validate EXCLUDE_CORES
+        if self.EXCLUDE_CORES:
+            invalid_cores = [core for core in self.EXCLUDE_CORES if core < 0 or core >= self.CORES_PER_NODE]
+            if invalid_cores:
+                raise ValueError(
+                    f"Invalid EXCLUDE_CORES in {self.__class__.__name__}: {invalid_cores}\n"
+                    f"Core IDs must be within valid range (0 to {self.CORES_PER_NODE-1})"
+                )
+            
+            # Check if too many cores are excluded
+            if len(self.EXCLUDE_CORES) >= self.CORES_PER_NODE:
+                raise ValueError(
+                    f"Invalid EXCLUDE_CORES in {self.__class__.__name__}: Cannot exclude all cores\n"
+                    f"Excluding {len(self.EXCLUDE_CORES)} cores out of {self.CORES_PER_NODE} total cores"
+                )
+            
+            # Log info about excluded cores
+            logger.info(f"EXCLUDE_CORES in {self.__class__.__name__}: Excluding cores {sorted(self.EXCLUDE_CORES)}")
     
     def _validate_affinity_string(self, affinity_str: str, total_cores: int, gpus_per_node: int = 0) -> tuple[bool, str, list[str]]:
         """

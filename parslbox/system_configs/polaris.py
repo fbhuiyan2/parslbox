@@ -88,7 +88,7 @@ class PolarisConfig(SystemConfig):
                     heartbeat_threshold=300,
                     worker_debug=True,
                     # Tell the executor how many total GPUs are available
-                    available_accelerators=total_gpus,
+                    available_accelerators=0, #total_gpus,
                     # Use the configurable max workers per node
                     max_workers_per_node=max_workers_per_node,
                     # Assign a balanced number of cores to each worker

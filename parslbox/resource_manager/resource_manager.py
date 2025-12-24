@@ -78,7 +78,8 @@ class ResourceManager:
                     node_id=node_id,
                     hostname=hostname,
                     total_gpus=gpus_per_node,
-                    total_cores=self.system_config.CORES_PER_NODE
+                    total_cores=self.system_config.CORES_PER_NODE,
+                    excluded_cores=getattr(self.system_config, 'EXCLUDE_CORES', None)
                 )
                 self.nodes.append(node)
                 
@@ -240,8 +241,12 @@ class ResourceManager:
 
     def _assign_subnode_cpu_job(self, spec: JobResourceSpec) -> ResourceAssignment:
         """Assign resources for a sub-node CPU-only job with per-rank allocation."""
+        # Calculate effective cores per node accounting for excluded cores
+        excluded_cores = getattr(self.system_config, 'EXCLUDE_CORES', None) or []
+        effective_cores_per_node = self.system_config.CORES_PER_NODE - len(excluded_cores)
+        
         # Calculate number of CPU cores needed based on occupancy
-        num_cores_needed = max(1, int(spec.node_occupancy * self.system_config.CORES_PER_NODE))
+        num_cores_needed = max(1, int(spec.node_occupancy * effective_cores_per_node))
         
         # Find a healthy node with enough CPU cores
         for node in self.nodes:
@@ -294,10 +299,14 @@ class ResourceManager:
 
         """
         # Calculate cores per GPU for balanced allocation
-        if self.system_config.CORES_PER_GPU:    # if CORES_PER_GPU is defined in system config, use that
-            cores_per_gpu = self.system_config.CORES_PER_GPU
+        cores_per_gpu_config = getattr(self.system_config, 'CORES_PER_GPU', None)
+        if cores_per_gpu_config:    # if CORES_PER_GPU is defined in system config, use that
+            cores_per_gpu = cores_per_gpu_config
         else:
-            cores_per_gpu = self.system_config.CORES_PER_NODE // self.system_config.GPUS_PER_NODE
+            # Account for excluded cores when calculating cores per GPU
+            excluded_cores = getattr(self.system_config, 'EXCLUDE_CORES', None) or []
+            effective_cores_per_node = self.system_config.CORES_PER_NODE - len(excluded_cores)
+            cores_per_gpu = effective_cores_per_node // self.system_config.GPUS_PER_NODE
         
         # Find a healthy node with enough GPUs and CPU cores
         for node in self.nodes:

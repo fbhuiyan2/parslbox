@@ -37,12 +37,13 @@ class MockSystemConfig:
     """Mock system configuration for testing."""
     
     def __init__(self, cores_per_node=32, gpus_per_node=4, num_nodes=2, 
-                 worker_cpu_affinity=None, mpi_cmd="mpirun"):
+                 worker_cpu_affinity=None, mpi_cmd="mpirun", exclude_cores=None):
         self.CORES_PER_NODE = cores_per_node
         self.GPUS_PER_NODE = gpus_per_node
         self.SCHEDULER = "PBS"
         self.MPI_CMD_TO_USE = mpi_cmd
         self.WORKER_CPU_AFFINITY = worker_cpu_affinity
+        self.EXCLUDE_CORES = exclude_cores
         self._num_nodes = num_nodes
         self._total_gpus = num_nodes * gpus_per_node
     
@@ -797,6 +798,169 @@ class TestErrorHandling:
         # Try to assign again
         with pytest.raises(ValueError, match="already has resources assigned"):
             resource_manager.assign_resources(job)
+
+
+class TestExcludeCores:
+    """Test EXCLUDE_CORES functionality."""
+    
+    def test_exclude_cores_basic(self):
+        """Test basic exclude cores functionality."""
+        # Create config with excluded cores
+        config = MockSystemConfig(cores_per_node=32, exclude_cores=[0, 1, 30, 31])
+        rm = ResourceManager(config)
+        
+        # Check that nodes have correct available cores
+        node = rm.nodes[0]
+        assert len(node.available_core_ids) == 28  # 32 - 4 excluded
+        assert 0 not in node.available_core_ids
+        assert 1 not in node.available_core_ids
+        assert 30 not in node.available_core_ids
+        assert 31 not in node.available_core_ids
+        assert 2 in node.available_core_ids
+        assert 29 in node.available_core_ids
+    
+    def test_exclude_cores_cpu_job_allocation(self):
+        """Test CPU job allocation with excluded cores."""
+        config = MockSystemConfig(cores_per_node=32, exclude_cores=[0, 1, 30, 31])
+        rm = ResourceManager(config)
+        
+        # Allocate a sub-node CPU job
+        job = {'job_id': 1, 'num_nodes': 1, 'ngpus': 0, 'node_occupancy': 0.5, 'ranks_per_node': 2}
+        assignment = rm.assign_resources(job)
+        
+        # Should get 14 cores (0.5 * 28 available cores)
+        rank0_cores = assignment.get_cpu_assignments_for_rank(0)
+        rank1_cores = assignment.get_cpu_assignments_for_rank(1)
+        total_assigned = len(rank0_cores) + len(rank1_cores)
+        assert total_assigned == 14
+        
+        # Verify excluded cores are not assigned
+        all_assigned_cores = rank0_cores + rank1_cores
+        assert 0 not in all_assigned_cores
+        assert 1 not in all_assigned_cores
+        assert 30 not in all_assigned_cores
+        assert 31 not in all_assigned_cores
+        
+        # Verify node state
+        node = rm.nodes[0]
+        assert len(node.available_core_ids) == 14  # 28 - 14 used
+    
+    def test_exclude_cores_gpu_job_allocation(self):
+        """Test GPU job allocation with excluded cores."""
+        config = MockSystemConfig(cores_per_node=32, gpus_per_node=4, exclude_cores=[0, 1, 30, 31])
+        rm = ResourceManager(config)
+        
+        # Allocate a GPU job
+        job = {'job_id': 1, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0}
+        assignment = rm.assign_resources(job)
+        
+        # Should get 7 cores per GPU (28 available / 4 GPUs = 7 cores per GPU)
+        rank0_cores = assignment.get_cpu_assignments_for_rank(0)
+        rank1_cores = assignment.get_cpu_assignments_for_rank(1)
+        assert len(rank0_cores) == 7
+        assert len(rank1_cores) == 7
+        
+        # Verify excluded cores are not assigned
+        all_assigned_cores = rank0_cores + rank1_cores
+        assert 0 not in all_assigned_cores
+        assert 1 not in all_assigned_cores
+        assert 30 not in all_assigned_cores
+        assert 31 not in all_assigned_cores
+    
+    def test_exclude_cores_cleanup(self):
+        """Test resource cleanup with excluded cores."""
+        config = MockSystemConfig(cores_per_node=32, exclude_cores=[0, 1, 30, 31])
+        rm = ResourceManager(config)
+        
+        # Allocate and then free a job
+        job = {'job_id': 1, 'num_nodes': 1, 'ngpus': 0, 'node_occupancy': 0.5, 'ranks_per_node': 2}
+        assignment = rm.assign_resources(job)
+        
+        # Free the job
+        rm.free_resources(1)
+        
+        # Verify excluded cores are still excluded after cleanup
+        node = rm.nodes[0]
+        assert len(node.available_core_ids) == 28  # Back to 28 available
+        assert 0 not in node.available_core_ids
+        assert 1 not in node.available_core_ids
+        assert 30 not in node.available_core_ids
+        assert 31 not in node.available_core_ids
+    
+    def test_exclude_cores_multinode_cleanup(self):
+        """Test multinode job cleanup with excluded cores."""
+        config = MockSystemConfig(cores_per_node=32, exclude_cores=[0, 1, 30, 31])
+        rm = ResourceManager(config)
+        
+        # Allocate a multinode job
+        job = {'job_id': 1, 'num_nodes': 2, 'ngpus': 0, 'node_occupancy': 1.0, 'ranks_per_node': 4}
+        assignment = rm.assign_resources(job)
+        
+        # Free the job
+        rm.free_resources(1)
+        
+        # Verify excluded cores are still excluded on both nodes
+        for node in rm.nodes:
+            assert len(node.available_core_ids) == 28
+            assert 0 not in node.available_core_ids
+            assert 1 not in node.available_core_ids
+            assert 30 not in node.available_core_ids
+            assert 31 not in node.available_core_ids
+    
+    def test_exclude_cores_invalid_cores(self):
+        """Test handling of invalid excluded cores."""
+        # Test with some invalid core IDs (outside valid range)
+        config = MockSystemConfig(cores_per_node=32, exclude_cores=[0, 1, 35, 40, 30, 31])
+        rm = ResourceManager(config)
+        
+        # Should only exclude valid cores (0, 1, 30, 31)
+        node = rm.nodes[0]
+        assert len(node.available_core_ids) == 28  # 32 - 4 valid excluded cores
+        assert 0 not in node.available_core_ids
+        assert 1 not in node.available_core_ids
+        assert 30 not in node.available_core_ids
+        assert 31 not in node.available_core_ids
+        # Invalid cores (35, 40) should be ignored
+    
+    def test_exclude_cores_none(self):
+        """Test that None exclude_cores works (no exclusion)."""
+        config = MockSystemConfig(cores_per_node=32, exclude_cores=None)
+        rm = ResourceManager(config)
+        
+        # Should have all cores available
+        node = rm.nodes[0]
+        assert len(node.available_core_ids) == 32
+        assert set(node.available_core_ids) == set(range(32))
+    
+    def test_exclude_cores_empty_list(self):
+        """Test that empty exclude_cores list works (no exclusion)."""
+        config = MockSystemConfig(cores_per_node=32, exclude_cores=[])
+        rm = ResourceManager(config)
+        
+        # Should have all cores available
+        node = rm.nodes[0]
+        assert len(node.available_core_ids) == 32
+        assert set(node.available_core_ids) == set(range(32))
+    
+    def test_exclude_cores_with_affinity(self):
+        """Test exclude cores with CPU affinity."""
+        # Exclude cores 0,1 and use affinity that includes some excluded cores
+        affinity = "list:0-7:8-15:16-23:24-31"  # GPU 0 gets cores 0-7 (includes excluded 0,1)
+        config = MockSystemConfig(cores_per_node=32, gpus_per_node=4, 
+                                 worker_cpu_affinity=affinity, exclude_cores=[0, 1, 30, 31])
+        rm = ResourceManager(config)
+        
+        # Allocate a GPU job
+        job = {'job_id': 1, 'num_nodes': 1, 'ngpus': 1, 'node_occupancy': 1.0}
+        assignment = rm.assign_resources(job)
+        
+        # Should get cores but excluded cores should not be assigned
+        rank0_cores = assignment.get_cpu_assignments_for_rank(0)
+        assert len(rank0_cores) == 7  # 28 available / 4 GPUs = 7 cores per GPU
+        assert 0 not in rank0_cores
+        assert 1 not in rank0_cores
+        assert 30 not in rank0_cores
+        assert 31 not in rank0_cores
 
 
 class TestResourceStatus:

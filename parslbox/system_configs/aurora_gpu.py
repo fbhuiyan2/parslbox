@@ -21,6 +21,7 @@ class AuroraGpuConfig(SystemConfig):
     # System specifications
     SYSTEM_NAME = 'aurora-gpu'
     CORES_PER_NODE = 208  # 104 physical cores with hyperthreading  [4 CPU sockets reserved for system services]
+    EXCLUDE_CORES = [0, 104, 52, 156]   # aurora reserves these cores for system services
     GPUS_PER_NODE = 6     # 6 physical GPUs
     CORES_PER_GPU = 32    # Each full GPU gets 32 cores (16+16 from combined tile affinity groups)
     SCHEDULER = "PBS"
@@ -91,7 +92,7 @@ class AuroraGpuConfig(SystemConfig):
                     heartbeat_threshold=300,
                     worker_debug=True,
                     # Tell the executor how many total GPUs are available
-                    available_accelerators=total_gpus,
+                    available_accelerators=0, #total_gpus,
                     # Use the configurable max workers per node (6 for Aurora full GPUs)
                     max_workers_per_node=max_workers_per_node,
                     # Assign a balanced number of cores to each worker

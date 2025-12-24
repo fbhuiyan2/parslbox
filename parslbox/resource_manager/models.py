@@ -51,19 +51,42 @@ class NodeResource:
     total_cores: int = 0
     available_gpu_ids: List[int] = field(default_factory=list)
     available_core_ids: List[int] = field(default_factory=list)
+    excluded_cores: List[int] = None
     cpu_occupancy: float = 0.0  # 0.0 = free, 1.0 = fully occupied
     assigned_jobs: List[int] = field(default_factory=list)
     job_cpu_assignments: Dict[int, List[int]] = field(default_factory=dict)  # job_id -> assigned core IDs
     job_gpu_assignments: Dict[int, List[int]] = field(default_factory=dict)  # job_id -> assigned GPU IDs
     health_tracker: NodeHealthTracker = field(default_factory=NodeHealthTracker)  # Health tracking for fault tolerance
     
+    def _get_available_cores(self) -> List[int]:
+        """Get list of available cores excluding any excluded cores."""
+        if self.total_cores <= 0:
+            return []
+        
+        all_cores = list(range(self.total_cores))
+        
+        if not self.excluded_cores:
+            return all_cores
+        
+        # Filter out excluded cores, with validation
+        valid_excluded = [core for core in self.excluded_cores 
+                         if 0 <= core < self.total_cores]
+        
+        if len(valid_excluded) != len(self.excluded_cores):
+            invalid_cores = [core for core in self.excluded_cores 
+                            if core < 0 or core >= self.total_cores]
+            logger.warning(f"Invalid excluded cores {invalid_cores} for node {self.node_id} "
+                          f"(valid range: 0-{self.total_cores-1})")
+        
+        return [core for core in all_cores if core not in valid_excluded]
+
     def __post_init__(self):
         """Initialize available GPU and CPU core IDs if not provided."""
         if not self.available_gpu_ids and self.total_gpus > 0:
             self.available_gpu_ids = list(range(self.total_gpus))
         
         if not self.available_core_ids and self.total_cores > 0:
-            self.available_core_ids = list(range(self.total_cores))
+            self.available_core_ids = self._get_available_cores()
     
     def can_fit_gpu_job(self, num_gpus: int, cores_per_gpu: int = None) -> bool:
         """Check if this node can accommodate a GPU job with optional CPU requirements."""
@@ -278,7 +301,7 @@ class NodeResource:
         if is_multinode_job:
             # For multi-node jobs, reset entire node
             self.available_gpu_ids = list(range(self.total_gpus))
-            self.available_core_ids = list(range(self.total_cores))
+            self.available_core_ids = self._get_available_cores()
             self.job_cpu_assignments.clear()
             self.job_gpu_assignments.clear()
             self.cpu_occupancy = 0.0
