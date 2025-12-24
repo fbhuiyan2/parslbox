@@ -27,6 +27,7 @@ from parslbox.commands.helpers.run_cmd_helpers import (
     get_dependency_ready_jobs,
     get_default_run_dir
 )
+from parslbox.database.status_buffer import StatusBuffer
 
 app = typer.Typer()
 
@@ -34,8 +35,17 @@ app = typer.Typer()
 VALID_JOB_STATUSES = ["ready", "done", "failed", "restart", "running", "submitted", "warning"]
 
 
+def get_scheduler_job_id(scheduler):
+    """Get scheduler job ID from environment variables."""
+    if scheduler == "PBS":
+        return os.environ.get('PBS_JOBID', f'local_{int(time.time())}')
+    elif scheduler == "SLURM":
+        return os.environ.get('SLURM_JOB_ID', f'local_{int(time.time())}')
+    else:
+        return f'local_{int(time.time())}'
 
-def create_parsl_future(job, app_instance, app_config, config_name, db_path, scheduler, resource_manager, futures, system_config):
+
+def create_parsl_future(job, app_instance, app_config, config_name, db_path, scheduler, resource_manager, futures, system_config, status_buffer):
     """
     Create a Parsl future for a job with proper preprocessing and error handling.
     
@@ -69,8 +79,9 @@ def create_parsl_future(job, app_instance, app_config, config_name, db_path, sch
             logger.info(f"Job {job_id}: Status is '{current_status}', skipping (already processed by another process)")
             return False
         
-        # Immediately claim the job by updating status to "Submitted"
-        database.update_jobs(db_path, job_ids=[job_id], status="Submitted")
+        # Immediately claim the job by updating status to "Submitted" and Set scheduler job ID
+        sched_job_id = get_scheduler_job_id(scheduler)
+        database.update_jobs(db_path, job_ids=[job_id], status="Submitted", sched_job_id=sched_job_id)
         logger.info(f"Job {job_id}: Successfully claimed job for processing")
         
         # Get resource assignment (should already exist)
@@ -96,13 +107,6 @@ def create_parsl_future(job, app_instance, app_config, config_name, db_path, sch
             config_name=config_name
         )
         
-        # Set scheduler job ID
-        if scheduler == "PBS":
-            PBS_JOB_ID = os.environ.get('PBS_JOBID', f'local_{int(time.time())}')
-            database.update_jobs(db_path, job_ids=[job_id], sched_job_id=PBS_JOB_ID)
-        elif scheduler == "SLURM":
-            SLURM_JOB_ID = os.environ.get('SLURM_JOB_ID', f'local_{int(time.time())}')
-            database.update_jobs(db_path, job_ids=[job_id], sched_job_id=SLURM_JOB_ID)
         
         # Create Parsl future
         fut = app_instance.parsl_app(
@@ -130,13 +134,18 @@ def create_parsl_future(job, app_instance, app_config, config_name, db_path, sch
         })
         
         logger.info(f"Job {job_id}: Successfully created Parsl future")
+        
+        # Buffer the "Running" status update instead of immediate DB write
+        status_buffer.add_status_update(job_id, status='Running')
+
         return True
         
     except Exception as e:
         logger.error(f"Job {job_id}: Failed to submit Parsl app: {e}")
         # Free resources if job submission failed (with health tracking)
         resource_manager.free_resources_with_health_check(job_id, job_succeeded=False, error_message=str(e))
-        database.update_jobs(db_path, job_ids=[job_id], status="Failed")
+        # Buffer the "Failed" status update instead of immediate DB write
+        status_buffer.add_status_update(job_id, status="Failed")
         return False
 
 
@@ -229,6 +238,10 @@ def run(
     resource_manager = system_config.create_resource_manager()
     logger.info(f"Initialized resource manager for {config_name}")
 
+    # Initialize Status Buffer for batching database updates
+    status_buffer = StatusBuffer(db_path)
+    logger.info("Initialized StatusBuffer for batching database updates")
+
     # Pre-load App Contexts
     unique_app_names = list(set(job['app'] for job in filtered_jobs))
     app_instances = {}
@@ -299,7 +312,7 @@ def run(
             # Create Parsl future with pre-loaded contexts
             success = create_parsl_future(
                 job, app_instances[app_name], app_configs[app_name], 
-                config_name, db_path, scheduler, resource_manager, futures, system_config
+                config_name, db_path, scheduler, resource_manager, futures, system_config, status_buffer
             )
             
             # Future created successfully - no additional tracking needed
@@ -320,6 +333,12 @@ def run(
             logger.error(f"Job {job_id}: Failed to allocate resources: {e}")
             database.update_jobs(db_path, job_ids=[job_id], status="Failed")
             continue
+
+    # FLUSH POINT 1: After all initial futures are created
+    # Batch update all "Running" and "Failed" status updates from job creation
+    updated_count = status_buffer.flush_all()
+    if updated_count > 0:
+        logger.info(f"Batch updated status for {updated_count} initial jobs")
 
     # Await and Process Results (Dynamic future handling)
     # Create mapping from futures to their metadata
@@ -394,9 +413,9 @@ def run(
                 else:
                     logger.info(f"Job {job_id}: Success check failed. Skipping post-processing.")
                 
-                # Update database with final validated status
-                database.update_jobs(db_path, job_ids=[job_id], status=job_status)
-                logger.info(f"Job {job_id}: Final status set to '{job_status}'.")
+                # Buffer final status update instead of immediate database write
+                status_buffer.add_status_update(job_id, status=job_status)
+                logger.info(f"Job {job_id}: Final status set to '{job_status}' (buffered).")
                 
                 # Free resources with health tracking based on job outcome
                 try:
@@ -431,7 +450,7 @@ def run(
                                 app_instances[rescheduled_app_name], 
                                 app_configs[rescheduled_app_name],
                                 config_name, db_path, scheduler, resource_manager, 
-                                new_futures, system_config
+                                new_futures, system_config, status_buffer
                             )
                             
                             # Add each new future to tracking dict
@@ -442,6 +461,12 @@ def run(
                         else:
                             logger.error(f"App context not found for rescheduled job {rescheduled_job_id}")
                             database.update_jobs(db_path, job_ids=[rescheduled_job_id], status="Failed")
+                    
+                    # FLUSH POINT 2: After processing completed job and rescheduling
+                    # Batch update final statuses and new "Running" statuses
+                    updated_count = status_buffer.flush_all()
+                    if updated_count > 0:
+                        logger.debug(f"Batch updated status for {updated_count} jobs after job {job_id} completion")
                     
                     # Log comprehensive status after rescheduling
                     status = resource_manager.get_resource_status()
@@ -461,6 +486,11 @@ def run(
             continue
 
     logger.info("All jobs completed, including rescheduled ones")
+    
+    # FLUSH POINT 3: Final flush before cleanup (safety net)
+    final_updated_count = status_buffer.flush_all()
+    if final_updated_count > 0:
+        logger.info(f"Final flush: Updated status for {final_updated_count} jobs before cleanup")
     
     # Log final node health summary
     try:

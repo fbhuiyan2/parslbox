@@ -195,8 +195,7 @@ class AppBase(ABC):
         )
         
         # Update status to Running
-        from parslbox.database import database
-        database.update_jobs(db_path, job_ids=[job_id], status='Running')
+        # Now this is handled in 'run' cmd
         
         # Construct the full bash script
         return f"""
