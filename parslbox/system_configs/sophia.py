@@ -105,8 +105,8 @@ class SophiaConfig(SystemConfig):
             executors=[
                 HighThroughputExecutor(
                     label="htex_sophia",
-                    heartbeat_period=60,
-                    heartbeat_threshold=120,
+                    heartbeat_period=120,
+                    heartbeat_threshold=300,
                     worker_debug=True,
                     available_accelerators=total_gpus,
                     max_workers_per_node=max_workers_per_node,

@@ -84,8 +84,8 @@ class PolarisConfig(SystemConfig):
             executors=[
                 HighThroughputExecutor(
                     label="htex_polaris",
-                    heartbeat_period=60,
-                    heartbeat_threshold=120,
+                    heartbeat_period=120,
+                    heartbeat_threshold=300,
                     worker_debug=True,
                     # Tell the executor how many total GPUs are available
                     available_accelerators=total_gpus,

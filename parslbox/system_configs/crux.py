@@ -93,8 +93,8 @@ class CruxConfig(SystemConfig):
             executors=[
                 HighThroughputExecutor(
                     label="htex_crux",
-                    heartbeat_period=60,
-                    heartbeat_threshold=120,
+                    heartbeat_period=120,
+                    heartbeat_threshold=300,
                     worker_debug=True,
                     # No GPUs available on Crux
                     available_accelerators=0,

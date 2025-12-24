@@ -87,8 +87,8 @@ class AuroraGpuConfig(SystemConfig):
             executors=[
                 HighThroughputExecutor(
                     label="htex_aurora_gpu",
-                    heartbeat_period=60,
-                    heartbeat_threshold=120,
+                    heartbeat_period=120,
+                    heartbeat_threshold=300,
                     worker_debug=True,
                     # Tell the executor how many total GPUs are available
                     available_accelerators=total_gpus,
@@ -97,7 +97,7 @@ class AuroraGpuConfig(SystemConfig):
                     # Assign a balanced number of cores to each worker
                     cores_per_worker=cores_per_worker,
                     # Use the configurable CPU affinity for Parsl workers
-                    cpu_affinity=self.WORKER_CPU_AFFINITY,
+                    #cpu_affinity=self.WORKER_CPU_AFFINITY,
                     prefetch_capacity=0,  # Recommended for GPU workloads
                     provider=LocalProvider(
                         init_blocks=1,
