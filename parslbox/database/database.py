@@ -54,7 +54,7 @@ def configure_connection(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA synchronous=NORMAL;")  # Faster than FULL, still safe
     conn.execute("PRAGMA cache_size=10000;")    # 10MB cache for better performance
     conn.execute("PRAGMA temp_store=memory;")   # Use RAM for temporary tables
-    conn.execute("PRAGMA busy_timeout=5000;")  # Wait 5 seconds for locks before failing
+    conn.execute("PRAGMA busy_timeout=30000;")  # Wait 30 seconds for locks before failing
 
 
 def get_configured_connection(db_path: Path) -> sqlite3.Connection:
