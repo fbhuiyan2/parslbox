@@ -1,6 +1,6 @@
 from pathlib import Path
 from parsl.config import Config
-from parslbox.system_configs.base import SystemConfig
+from parslbox.system_configs.base_sysconf import SystemConfig
 
 # Import the system configuration classes
 from parslbox.system_configs.polaris import PolarisConfig
@@ -19,7 +19,7 @@ CONFIG_FACTORIES = {
     # To add a new system, create its module and add it here.
 }
 
-def load_config(name: str, run_dir: Path, retries: int) -> tuple[Config, str]:
+def load_config(name: str, run_dir: Path, retries: int, max_workers: int = None) -> tuple[Config, str]:
     """
     Loads a Parsl configuration by name.
 
@@ -31,6 +31,8 @@ def load_config(name: str, run_dir: Path, retries: int) -> tuple[Config, str]:
         name (str): The name of the configuration to load (e.g., "polaris").
         run_dir (Path): The path for Parsl's run directory.
         retries (int): The number of retries for failed Parsl apps.
+        max_workers (int, optional): Optional override for total workers across all nodes.
+                                     If None, uses system default (MAX_WORKERS_PER_NODE * nodes).
 
     Raises:
         ValueError: If the requested configuration name is not found.
@@ -48,7 +50,7 @@ def load_config(name: str, run_dir: Path, retries: int) -> tuple[Config, str]:
         )
 
     config_instance = config_class()
-    parsl_config = config_instance.get_config(run_dir=run_dir, retries=retries)
+    parsl_config = config_instance.get_config(run_dir=run_dir, retries=retries, max_workers=max_workers)
     return parsl_config, config_instance.SCHEDULER
 
 def get_system_config(name: str) -> SystemConfig:

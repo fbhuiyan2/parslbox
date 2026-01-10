@@ -1,10 +1,11 @@
 import os
 from pathlib import Path
+from typing import Optional
 from parsl.config import Config
 from parsl.executors import HighThroughputExecutor
 from parsl.providers import LocalProvider
 from parsl.launchers import SimpleLauncher
-from parslbox.system_configs.base import SystemConfig
+from parslbox.system_configs.base_sysconf import SystemConfig
 
 
 class AuroraTileConfig(SystemConfig):
@@ -60,7 +61,7 @@ class AuroraTileConfig(SystemConfig):
         total_tiles = nodes * self.GPUS_PER_NODE
         return nodes, total_tiles
 
-    def get_config(self, run_dir: Path, retries: int = 0) -> Config:
+    def get_config(self, run_dir: Path, retries: int = 0, max_workers: Optional[int] = None) -> Config:
         """
         Generates a Parsl configuration for the ALCF Aurora supercomputer (tile mode).
 
@@ -71,14 +72,22 @@ class AuroraTileConfig(SystemConfig):
         Args:
             run_dir (Path): The path for Parsl's run directory.
             retries (int): The number of retries for failed Parsl apps.
+            max_workers (Optional[int]): Optional override for total workers across all nodes.
+                                        If None, uses MAX_WORKERS_PER_NODE * nodes (default behavior).
+                                        If provided, will be capped at MAX_WORKERS_PER_NODE * nodes.
 
         Returns:
             Config: A Parsl configuration object.
         """
         nodes, total_tiles = self.detect_resources()
         
-        max_workers_per_node=self.MAX_WORKERS_PER_NODE*nodes    # Because LocalProvider does not launch workers on compute nodes.
-                                                                # It only launches workers on the first node where the Parsl manager is running.
+        # Use provided max_workers or fall back to default calculation
+        # Cap at system maximum to prevent oversubscription
+        if max_workers is not None:
+            max_workers_per_node = min(max_workers, self.MAX_WORKERS_PER_NODE * nodes)
+        else:
+            max_workers_per_node = self.MAX_WORKERS_PER_NODE * nodes    # Because LocalProvider does not launch workers on compute nodes.
+                                                                        # It only launches workers on the first node where the Parsl manager is running.
 
         # Calculate how many physical cores each worker (mapped to a GPU tile) gets
         cores_per_worker = self.CORES_PER_NODE / max_workers_per_node      # cores to be assigned to each worker. Oversubscription is possible

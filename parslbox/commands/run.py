@@ -4,6 +4,9 @@ import logging
 import os
 import time
 import importlib
+import signal
+import atexit
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -25,7 +28,9 @@ from parslbox.commands.helpers.run_cmd_helpers import (
     parse_parents,
     are_parents_done,
     get_dependency_ready_jobs,
-    get_default_run_dir
+    get_default_run_dir,
+    create_shutdown_handler,
+    create_atexit_handler
 )
 from parslbox.database.status_buffer import StatusBuffer
 
@@ -173,6 +178,10 @@ def run(
         int,
         typer.Option("--retries", help="Number of retries for failed tasks.")
     ] = 0,
+    flush_interval: Annotated[
+        int,
+        typer.Option("--flush-interval", help="Interval in seconds for periodic status buffer flush (default: 150).")
+    ] = 150,
 ):
     """
     Run Parsl workflows by discovering and executing application plugins.
@@ -204,15 +213,8 @@ def run(
     else:
         logger.info(f"Using default config path: {path_utils.PBX_CONFIG_FILE}")
 
-    try:
-        parsl_config, scheduler = load_config(name=config_name, run_dir=run_dir, retries=retries)
-        parsl.load(parsl_config)
-        logger.info(f"Successfully loaded Parsl config '{config_name}'.")
-    except (FileNotFoundError, ValueError, parsl.errors.ConfigurationError) as e:
-        logger.error(f"Failed to load Parsl configuration: {e}")
-        raise typer.Exit(code=1)
-
-    # Job Fetching and Filtering
+    # Job Fetching and Filtering 
+    # The job count will be passed to the config for dynamic worker allocation
     app_filter = set(apps.split(',')) if apps else None
     tag_filter = set(tags.split(',')) if tags else None
     
@@ -228,10 +230,28 @@ def run(
 
     if not filtered_jobs:
         logger.info("No runnable jobs found matching the specified filters. Exiting.")
-        parsl.dfk().cleanup()
         return
 
-    logger.info(f"Found {len(filtered_jobs)} jobs to execute.")
+    njobs = len(filtered_jobs)
+    logger.info(f"Found {njobs} jobs to execute.")
+
+    # Track Parsl loading state for signal handler (must be defined before use)
+    parsl_loaded_flag = {'loaded': False}
+
+    # Load Parsl configuration with dynamic worker count based on number of jobs
+    try:
+        parsl_config, scheduler = load_config(
+            name=config_name, 
+            run_dir=run_dir, 
+            retries=retries,
+            max_workers=njobs  # Pass job count to limit worker spawning
+        )
+        parsl.load(parsl_config)
+        parsl_loaded_flag['loaded'] = True  # Mark Parsl as loaded for signal handler
+        logger.info(f"Successfully loaded Parsl config '{config_name}' with max_workers={njobs}.")
+    except (FileNotFoundError, ValueError, parsl.errors.ConfigurationError) as e:
+        logger.error(f"Failed to load Parsl configuration: {e}")
+        raise typer.Exit(code=1)
 
     # Initialize Resource Manager
     system_config = get_system_config(config_name)
@@ -241,6 +261,17 @@ def run(
     # Initialize Status Buffer for batching database updates
     status_buffer = StatusBuffer(db_path)
     logger.info("Initialized StatusBuffer for batching database updates")
+    
+    # Register signal handlers for graceful shutdown on walltime exceeded
+    shutdown_handler = create_shutdown_handler(status_buffer, logger, parsl_loaded_flag)
+    signal.signal(signal.SIGTERM, shutdown_handler)
+    signal.signal(signal.SIGINT, shutdown_handler)
+    logger.info("Registered signal handlers for SIGTERM and SIGINT")
+    
+    # Register atexit handler for normal termination
+    atexit_handler = create_atexit_handler(status_buffer, logger)
+    atexit.register(atexit_handler)
+    logger.info(f"Registered cleanup handlers (periodic flush interval: {flush_interval}s)")
 
     # Pre-load App Contexts
     unique_app_names = list(set(job['app'] for job in filtered_jobs))
@@ -350,11 +381,24 @@ def run(
     # Track last recovery attempt time for periodic node recovery
     last_recovery_attempt = time.time()
     recovery_interval = 60  # Attempt recovery every 60 seconds
+    
+    # Track last flush time for periodic status buffer flush
+    last_flush_time = time.time()
 
     while fut_to_item:
         try:
-            # Periodically attempt to recover quarantined nodes
             current_time = time.time()
+            
+            # Periodic status buffer flush (safety net for walltime termination)
+            if current_time - last_flush_time >= flush_interval:
+                flushed = status_buffer.flush_all()
+                if flushed > 0:
+                    logger.info(f"Periodic flush: Updated {flushed} job(s) in database")
+                else:
+                    logger.debug(f"Periodic flush: No pending updates")
+                last_flush_time = current_time
+            
+            # Periodically attempt to recover quarantined nodes
             if current_time - last_recovery_attempt >= recovery_interval:
                 recovered_nodes = resource_manager.attempt_node_recovery()
                 if recovered_nodes:

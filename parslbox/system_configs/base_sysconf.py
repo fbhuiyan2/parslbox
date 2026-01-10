@@ -169,13 +169,16 @@ class SystemConfig(ABC):
         pass
     
     @abstractmethod
-    def get_config(self, run_dir: Path, retries: int = 0) -> Config:
+    def get_config(self, run_dir: Path, retries: int = 0, max_workers: Optional[int] = None) -> Config:
         """
         Generate Parsl configuration for this system.
         
         Args:
             run_dir (Path): The path for Parsl's run directory
             retries (int): The number of retries for failed Parsl apps
+            max_workers (Optional[int]): Optional override for total workers across all nodes.
+                                        If None, uses MAX_WORKERS_PER_NODE * nodes (default behavior).
+                                        If provided, will be capped at MAX_WORKERS_PER_NODE * nodes.
             
         Returns:
             Config: A fully instantiated Parsl configuration object

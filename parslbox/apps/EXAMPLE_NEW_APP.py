@@ -17,7 +17,7 @@ bash script construction) is handled by the base class.
 import logging
 from pathlib import Path
 from parslbox.database import database
-from parslbox.apps.base import AppBase
+from parslbox.apps.appbase import AppBase
 
 
 class ExampleApp(AppBase):

@@ -5,7 +5,7 @@ This module defines the APP_FACTORY which contains the application classes
 for each supported application.
 """
 
-from parslbox.apps.base import AppBase
+from parslbox.apps.appbase import AppBase
 from parslbox.apps.lammps import LammpsApp
 from parslbox.apps.vasp import VaspApp
 from parslbox.apps.python import PythonApp

@@ -15,7 +15,7 @@ from .cpu_affinity import CPUAffinityManager
 from .node_failure_tracker import NodeFailureTracker
 
 if TYPE_CHECKING:
-    from parslbox.system_configs.base import SystemConfig
+    from parslbox.system_configs.base_sysconf import SystemConfig
 
 logger = logging.getLogger(__name__)
 

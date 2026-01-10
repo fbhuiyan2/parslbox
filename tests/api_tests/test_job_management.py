@@ -314,4 +314,4 @@ class TestUpdateJobs:
         assert job_id not in updated_ids
         assert len(failed_jobs) == 1
         assert failed_jobs[0][0] == job_id
-        assert "validation warning" in failed_jobs[0][1]
+        assert "Input file ignored" in failed_jobs[0][1]
