@@ -21,13 +21,12 @@ from parslbox.database import database
 from parslbox.resource_manager.mpi_launcher import compose_mpi_command
 from parslbox.resource_manager.exceptions import InsufficientResources
 from parslbox.resource_manager.models import create_job_resource_spec
+from parslbox.resource_manager.job_tracker import JobTracker
 
 # Import helper functions
 from parslbox.commands.helpers.run_cmd_helpers import (
     validate_and_normalize_status,
     parse_parents,
-    are_parents_done,
-    get_dependency_ready_jobs,
     get_default_run_dir,
     create_shutdown_handler,
     create_atexit_handler
@@ -87,6 +86,8 @@ def create_parsl_future(job, app_instance, app_config, config_name, db_path, sch
         # Immediately claim the job by updating status to "Submitted" and Set scheduler job ID
         sched_job_id = get_scheduler_job_id(scheduler)
         database.update_jobs(db_path, job_ids=[job_id], status="Submitted", sched_job_id=sched_job_id)
+        # Also update JobTracker 
+        resource_manager.job_tracker.update_job_status(job_id, "Submitted")
         logger.info(f"Job {job_id}: Successfully claimed job for processing")
         
         # Get resource assignment (should already exist)
@@ -140,7 +141,8 @@ def create_parsl_future(job, app_instance, app_config, config_name, db_path, sch
         
         logger.info(f"Job {job_id}: Successfully created Parsl future")
         
-        # Buffer the "Running" status update instead of immediate DB write
+        # Buffer the "Running" status update and update JobTracker
+        resource_manager.job_tracker.update_job_status(job_id, 'Running')
         status_buffer.add_status_update(job_id, status='Running')
 
         return True
@@ -149,7 +151,8 @@ def create_parsl_future(job, app_instance, app_config, config_name, db_path, sch
         logger.error(f"Job {job_id}: Failed to submit Parsl app: {e}")
         # Free resources if job submission failed (with health tracking)
         resource_manager.free_resources_with_health_check(job_id, job_succeeded=False, error_message=str(e))
-        # Buffer the "Failed" status update instead of immediate DB write
+        # Buffer the "Failed" status update and update JobTracker
+        resource_manager.job_tracker.update_job_status(job_id, "Failed")
         status_buffer.add_status_update(job_id, status="Failed")
         return False
 
@@ -253,9 +256,13 @@ def run(
         logger.error(f"Failed to load Parsl configuration: {e}")
         raise typer.Exit(code=1)
 
-    # Initialize Resource Manager
+    # Initialize JobTracker with filtered jobs
+    job_tracker = JobTracker(filtered_jobs)
+    logger.info(f"Initialized JobTracker with {job_tracker.get_job_count()} jobs")
+
+    # Initialize Resource Manager with JobTracker
     system_config = get_system_config(config_name)
-    resource_manager = system_config.create_resource_manager()
+    resource_manager = system_config.create_resource_manager(job_tracker)
     logger.info(f"Initialized resource manager for {config_name}")
 
     # Initialize Status Buffer for batching database updates
@@ -321,9 +328,9 @@ def run(
             
         logger.info(f"Submitting Job ID {job_id}...")
         
-        # Check dependencies first
+        # Check dependencies first using JobTracker
         try:
-            parents_done = are_parents_done(job, db_path)
+            parents_done = job_tracker.are_parents_done(job_id)
             
             if not parents_done:
                 logger.info(f"Job {job_id}: Parent dependencies not satisfied, adding to backlog")
@@ -332,6 +339,7 @@ def run(
                 
         except Exception as e:
             logger.error(f"Job {job_id}: Error checking parent dependencies: {e}")
+            job_tracker.update_job_status(job_id, "Failed")
             database.update_jobs(db_path, job_ids=[job_id], status="Failed")
             continue
         
@@ -362,6 +370,7 @@ def run(
         except Exception as e:
             # This IS an actual error (invalid spec, system error, etc.)
             logger.error(f"Job {job_id}: Failed to allocate resources: {e}")
+            job_tracker.update_job_status(job_id, "Failed")
             database.update_jobs(db_path, job_ids=[job_id], status="Failed")
             continue
 
@@ -457,7 +466,8 @@ def run(
                 else:
                     logger.info(f"Job {job_id}: Success check failed. Skipping post-processing.")
                 
-                # Buffer final status update instead of immediate database write
+                # Update JobTracker and buffer final status update
+                job_tracker.update_job_status(job_id, job_status)
                 status_buffer.add_status_update(job_id, status=job_status)
                 logger.info(f"Job {job_id}: Final status set to '{job_status}' (buffered).")
                 
@@ -471,9 +481,9 @@ def run(
                     )
                     logger.info(f"Job {job_id}: Finished running. Freed allocated resources.")
                     
-                    # Filter backlog by dependency satisfaction, then schedule
+                    # Filter backlog by dependency satisfaction using JobTracker, then schedule
                     try:
-                        dependency_ready_jobs = get_dependency_ready_jobs(resource_manager.backlog, db_path)
+                        dependency_ready_jobs = resource_manager.get_dependency_ready_jobs_from_backlog()
                         
                         # Schedule only dependency-ready jobs
                         rescheduled_jobs = resource_manager.schedule_backlog(dependency_ready_jobs)
@@ -504,6 +514,7 @@ def run(
                                 logger.info(f"Added rescheduled job {rescheduled_job_id} to tracking (total active: {len(fut_to_item)})")
                         else:
                             logger.error(f"App context not found for rescheduled job {rescheduled_job_id}")
+                            job_tracker.update_job_status(rescheduled_job_id, "Failed")
                             database.update_jobs(db_path, job_ids=[rescheduled_job_id], status="Failed")
                     
                     # FLUSH POINT 2: After processing completed job and rescheduling

@@ -81,19 +81,19 @@ def mock_config_partial_affinity():
 @pytest.fixture
 def resource_manager(mock_config):
     """Create resource manager with standard config."""
-    return ResourceManager(mock_config)
+    return ResourceManager(mock_config, job_tracker=None)
 
 
 @pytest.fixture
 def resource_manager_with_affinity(mock_config_with_affinity):
     """Create resource manager with affinity config."""
-    return ResourceManager(mock_config_with_affinity)
+    return ResourceManager(mock_config_with_affinity, job_tracker=None)
 
 
 @pytest.fixture
 def resource_manager_partial_affinity(mock_config_partial_affinity):
     """Create resource manager with partial affinity config."""
-    return ResourceManager(mock_config_partial_affinity)
+    return ResourceManager(mock_config_partial_affinity, job_tracker=None)
 
 
 class TestJobClassification:
@@ -657,7 +657,7 @@ class TestMPICommandGeneration:
         """Test mpiexec command generation."""
         # Create resource manager with mpiexec configuration
         config = MockSystemConfig(mpi_cmd="mpiexec")
-        rm = ResourceManager(config)
+        rm = ResourceManager(config, job_tracker=None)
         
         # Test sub-node CPU job
         job = {'job_id': 1, 'num_nodes': 1, 'ngpus': 0, 'node_occupancy': 0.5, 'ranks_per_node': 2}
@@ -807,7 +807,7 @@ class TestExcludeCores:
         """Test basic exclude cores functionality."""
         # Create config with excluded cores
         config = MockSystemConfig(cores_per_node=32, exclude_cores=[0, 1, 30, 31])
-        rm = ResourceManager(config)
+        rm = ResourceManager(config, job_tracker=None)
         
         # Check that nodes have correct available cores
         node = rm.nodes[0]
@@ -822,7 +822,7 @@ class TestExcludeCores:
     def test_exclude_cores_cpu_job_allocation(self):
         """Test CPU job allocation with excluded cores."""
         config = MockSystemConfig(cores_per_node=32, exclude_cores=[0, 1, 30, 31])
-        rm = ResourceManager(config)
+        rm = ResourceManager(config, job_tracker=None)
         
         # Allocate a sub-node CPU job
         job = {'job_id': 1, 'num_nodes': 1, 'ngpus': 0, 'node_occupancy': 0.5, 'ranks_per_node': 2}
@@ -848,7 +848,7 @@ class TestExcludeCores:
     def test_exclude_cores_gpu_job_allocation(self):
         """Test GPU job allocation with excluded cores."""
         config = MockSystemConfig(cores_per_node=32, gpus_per_node=4, exclude_cores=[0, 1, 30, 31])
-        rm = ResourceManager(config)
+        rm = ResourceManager(config, job_tracker=None)
         
         # Allocate a GPU job
         job = {'job_id': 1, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0}
@@ -870,7 +870,7 @@ class TestExcludeCores:
     def test_exclude_cores_cleanup(self):
         """Test resource cleanup with excluded cores."""
         config = MockSystemConfig(cores_per_node=32, exclude_cores=[0, 1, 30, 31])
-        rm = ResourceManager(config)
+        rm = ResourceManager(config, job_tracker=None)
         
         # Allocate and then free a job
         job = {'job_id': 1, 'num_nodes': 1, 'ngpus': 0, 'node_occupancy': 0.5, 'ranks_per_node': 2}
@@ -890,7 +890,7 @@ class TestExcludeCores:
     def test_exclude_cores_multinode_cleanup(self):
         """Test multinode job cleanup with excluded cores."""
         config = MockSystemConfig(cores_per_node=32, exclude_cores=[0, 1, 30, 31])
-        rm = ResourceManager(config)
+        rm = ResourceManager(config, job_tracker=None)
         
         # Allocate a multinode job
         job = {'job_id': 1, 'num_nodes': 2, 'ngpus': 0, 'node_occupancy': 1.0, 'ranks_per_node': 4}
@@ -911,7 +911,7 @@ class TestExcludeCores:
         """Test handling of invalid excluded cores."""
         # Test with some invalid core IDs (outside valid range)
         config = MockSystemConfig(cores_per_node=32, exclude_cores=[0, 1, 35, 40, 30, 31])
-        rm = ResourceManager(config)
+        rm = ResourceManager(config, job_tracker=None)
         
         # Should only exclude valid cores (0, 1, 30, 31)
         node = rm.nodes[0]
@@ -925,7 +925,7 @@ class TestExcludeCores:
     def test_exclude_cores_none(self):
         """Test that None exclude_cores works (no exclusion)."""
         config = MockSystemConfig(cores_per_node=32, exclude_cores=None)
-        rm = ResourceManager(config)
+        rm = ResourceManager(config, job_tracker=None)
         
         # Should have all cores available
         node = rm.nodes[0]
@@ -935,7 +935,7 @@ class TestExcludeCores:
     def test_exclude_cores_empty_list(self):
         """Test that empty exclude_cores list works (no exclusion)."""
         config = MockSystemConfig(cores_per_node=32, exclude_cores=[])
-        rm = ResourceManager(config)
+        rm = ResourceManager(config, job_tracker=None)
         
         # Should have all cores available
         node = rm.nodes[0]
@@ -948,7 +948,7 @@ class TestExcludeCores:
         affinity = "list:0-7:8-15:16-23:24-31"  # GPU 0 gets cores 0-7 (includes excluded 0,1)
         config = MockSystemConfig(cores_per_node=32, gpus_per_node=4, 
                                  worker_cpu_affinity=affinity, exclude_cores=[0, 1, 30, 31])
-        rm = ResourceManager(config)
+        rm = ResourceManager(config, job_tracker=None)
         
         # Allocate a GPU job
         job = {'job_id': 1, 'num_nodes': 1, 'ngpus': 1, 'node_occupancy': 1.0}
@@ -1003,7 +1003,7 @@ class TestResourceStatus:
 def test_comprehensive_workflow():
     """Test a comprehensive workflow with multiple job types."""
     config = MockSystemConfig(cores_per_node=32, gpus_per_node=4, num_nodes=3)
-    rm = ResourceManager(config)
+    rm = ResourceManager(config, job_tracker=None)
     
     # 1. Sub-node CPU job
     job1 = {'job_id': 1, 'num_nodes': 1, 'ngpus': 0, 'node_occupancy': 0.25, 'ranks_per_node': 2}

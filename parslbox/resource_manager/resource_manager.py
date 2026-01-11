@@ -13,6 +13,7 @@ from .models import NodeResource, JobResourceSpec, ResourceAssignment, create_jo
 from .exceptions import InsufficientResources, JobNotFound, InvalidResourceSpec
 from .cpu_affinity import CPUAffinityManager
 from .node_failure_tracker import NodeFailureTracker
+from .job_tracker import JobTracker
 
 if TYPE_CHECKING:
     from parslbox.system_configs.base_sysconf import SystemConfig
@@ -33,14 +34,16 @@ class ResourceManager:
     with intelligent resource sharing.
     """
     
-    def __init__(self, system_config: 'SystemConfig'):
+    def __init__(self, system_config: 'SystemConfig', job_tracker: JobTracker):
         """
         Initialize the resource manager.
         
         Args:
             system_config: System configuration object (Polaris, Sophia, etc.)
+            job_tracker: JobTracker for efficient dependency checking
         """
         self.system_config = system_config
+        self.job_tracker = job_tracker
         self.nodes: List[NodeResource] = []
         self.job_assignments: Dict[int, ResourceAssignment] = {}
         self._backlogged_jobs_set: set = set()  # Track job IDs in backlog
@@ -556,17 +559,25 @@ class ResourceManager:
     
     @property
     def backlog(self) -> List[dict]:
-        """Get list of jobs currently in backlog by querying database."""
+        """Get list of jobs currently in backlog using JobTracker."""
         if not self._backlogged_jobs_set:
             return []
         
-        # Import here to avoid circular imports
-        from parslbox.database import database
-        from parslbox.utils import path_utils
-        
-        # Get job details from database
         job_ids = list(self._backlogged_jobs_set)
-        return database.get_jobs_by_ids(path_utils.DB_FILE, job_ids)
+        return self.job_tracker.get_jobs_by_ids(job_ids)
+    
+    def get_dependency_ready_jobs_from_backlog(self) -> List[dict]:
+        """
+        Get backlogged jobs whose dependencies are satisfied using JobTracker.
+        
+        Returns:
+            List of job dictionaries for jobs whose dependencies are satisfied
+        """
+        if not self._backlogged_jobs_set:
+            return []
+        
+        backlog_job_ids = list(self._backlogged_jobs_set)
+        return self.job_tracker.get_dependency_ready_jobs(backlog_job_ids)
     
     def schedule_backlog(self, candidate_jobs: List[dict]) -> List[dict]:
         """Schedule jobs from candidate list that are in backlog."""

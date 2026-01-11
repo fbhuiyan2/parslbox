@@ -185,12 +185,15 @@ class SystemConfig(ABC):
         """
         pass
     
-    def create_resource_manager(self) -> 'ResourceManager':
+    def create_resource_manager(self, job_tracker=None) -> 'ResourceManager':
         """
         Create and initialize a resource manager for this system.
+        
+        Args:
+            job_tracker: Optional JobTracker for efficient dependency checking
         
         Returns:
             ResourceManager: Initialized resource manager
         """
         from parslbox.resource_manager import ResourceManager
-        return ResourceManager(self)
+        return ResourceManager(self, job_tracker)

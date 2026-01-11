@@ -60,49 +60,8 @@ def parse_parents(parents_str):
     return [int(x) for x in json.loads(parents_str)]
 
 
-def are_parents_done(job, db_path):
-    """
-    Check if job's parent dependencies are satisfied.
-    
-    Args:
-        job: Job dictionary from database
-        db_path: Path to database file
-    
-    Returns:
-        bool: True if all parents are done, False otherwise
-    """
-    parents_str = job.get('parents')
-    if not parents_str:
-        return True
-    
-    parent_ids = parse_parents(parents_str)
-    
-    for parent_id in parent_ids:
-        parent_job = database.get_jobs_by_ids(db_path, [parent_id])
-        if not parent_job:
-            raise ValueError(f"Job {job['job_id']} has non-existent parent {parent_id}")
-        
-        if parent_job[0]['status'] != 'Done':
-            return False  # Can't submit yet
-    
-    return True
-
-
-def get_dependency_ready_jobs(backlog_jobs, db_path):
-    """Filter jobs whose parents are done."""
-    ready_jobs = []
-    logger = logging.getLogger(__name__)
-    
-    for job in backlog_jobs:
-        try:
-            parents_done = are_parents_done(job, db_path)
-            if parents_done:
-                ready_jobs.append(job)
-        except Exception as e:
-            logger.error(f"Error when checking dependencies for job {job['job_id']}: {e}")
-            # Don't add to ready_jobs, but don't fail either - job stays in backlog
-            continue
-    return ready_jobs
+# NOTE: are_parents_done() and get_dependency_ready_jobs() functions have been removed
+# as they are now handled by JobTracker for better performance and to eliminate database reads
 
 
 def create_shutdown_handler(status_buffer, logger, parsl_loaded_flag):
