@@ -2,11 +2,12 @@
 JobTracker for ParslBox Resource Manager
 
 In-memory job registry for efficient dependency checking and status tracking.
-Eliminates database reads during job orchestration.
+Eliminates database reads during job orchestration with lazy loading for missing dependencies.
 """
 
 import logging
 from typing import Dict, List, Optional
+from pathlib import Path
 from parslbox.commands.helpers.run_cmd_helpers import parse_parents
 
 logger = logging.getLogger(__name__)
@@ -16,20 +17,22 @@ class JobTracker:
     """
     In-memory job registry for efficient dependency checking and status tracking.
     
-    This class maintains a complete job registry in memory to eliminate database
-    reads during job orchestration. It provides fast lookups for job information
-    and dependency checking.
+    This class maintains a job registry in memory to eliminate most database
+    reads during job orchestration. It uses lazy loading to fetch missing
+    parent jobs from the database when needed for dependency checking.
     """
     
-    def __init__(self, initial_jobs: List[dict]):
+    def __init__(self, initial_jobs: List[dict], db_path: Path):
         """
-        Initialize JobTracker with initial job list.
+        Initialize JobTracker with initial job list and database path.
         
         Args:
             initial_jobs: List of job dictionaries from database
+            db_path: Path to database file for lazy loading
         """
         # Main job registry - key: job_id, value: job dict
         self.jobs = {job['job_id']: job.copy() for job in initial_jobs}
+        self.db_path = db_path
         
         logger.info(f"Initialized JobTracker with {len(self.jobs)} jobs")
     
@@ -72,6 +75,34 @@ class JobTracker:
         """
         return [self.jobs[job_id] for job_id in job_ids if job_id in self.jobs]
     
+    def _load_job_from_database(self, job_id: int) -> Optional[dict]:
+        """
+        Load a job from the database and cache it in the registry.
+        
+        Args:
+            job_id: Job ID to load from database
+            
+        Returns:
+            Job dictionary if found in database, None otherwise
+        """
+        try:
+            from parslbox.database import database
+            
+            jobs = database.get_jobs_by_ids(self.db_path, [job_id])
+            if jobs:
+                job = jobs[0]
+                # Cache the job in our registry
+                self.jobs[job_id] = job.copy()
+                logger.debug(f"Lazy loaded job {job_id} from database")
+                return job
+            else:
+                logger.debug(f"Job {job_id} not found in database")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error loading job {job_id} from database: {e}")
+            return None
+    
     def are_parents_done(self, job_id: int) -> bool:
         """
         Check if all parent dependencies are satisfied for a job.
@@ -100,8 +131,11 @@ class JobTracker:
         for parent_id in parent_ids:
             parent_job = self.jobs.get(parent_id)
             if not parent_job:
-                logger.error(f"Job {job_id} has non-existent parent {parent_id}")
-                return False
+                # Try to load parent from database (lazy loading)
+                parent_job = self._load_job_from_database(parent_id)
+                if not parent_job:
+                    logger.error(f"Job {job_id} has non-existent parent {parent_id}")
+                    return False
             
             if parent_job['status'] != 'Done':
                 return False  # At least one parent is not done

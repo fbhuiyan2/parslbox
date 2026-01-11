@@ -256,8 +256,8 @@ def run(
         logger.error(f"Failed to load Parsl configuration: {e}")
         raise typer.Exit(code=1)
 
-    # Initialize JobTracker with filtered jobs
-    job_tracker = JobTracker(filtered_jobs)
+    # Initialize JobTracker with filtered jobs and database path
+    job_tracker = JobTracker(filtered_jobs, db_path)
     logger.info(f"Initialized JobTracker with {job_tracker.get_job_count()} jobs")
 
     # Initialize Resource Manager with JobTracker
