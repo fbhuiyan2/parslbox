@@ -131,12 +131,49 @@ class LammpsStrongScaleAnalyzer:
             print(f"❌ Error reading {log_file}: {e}")
             return None
     
+    def extract_timestep_data(self, log_file: Path) -> Optional[float]:
+        """
+        Extract timestep value from a LAMMPS log file.
+        
+        Looks for lines starting with "timestep" followed by a float value,
+        searching from the bottom of the file to get the most recent value.
+        
+        Args:
+            log_file: Path to log.lammps file
+            
+        Returns:
+            Timestep value as float or None if not found
+        """
+        if not log_file.exists():
+            print(f"⚠️  Log file not found: {log_file}")
+            return None
+        
+        try:
+            with open(log_file, 'r') as f:
+                lines = f.readlines()
+            
+            # Search from bottom of file for timestep line
+            timestep_pattern = r'^timestep\s+([\d.]+)'
+            
+            for line in reversed(lines):
+                line = line.strip()
+                match = re.search(timestep_pattern, line)
+                if match:
+                    return float(match.group(1))
+            
+            print(f"⚠️  No timestep data found in: {log_file}")
+            return None
+            
+        except Exception as e:
+            print(f"❌ Error reading {log_file}: {e}")
+            return None
+    
     def parse_log_files(self) -> Dict[int, Dict[str, float]]:
         """
-        Parse all log files and extract performance data.
+        Parse all log files and extract performance and timestep data.
         
         Returns:
-            Dictionary mapping GPU count to performance metrics
+            Dictionary mapping GPU count to performance metrics including timestep
         """
         print("📊 Parsing LAMMPS log files...")
         
@@ -153,9 +190,14 @@ class LammpsStrongScaleAnalyzer:
             print(f"  📄 Processing {log_file}")
             
             perf_data = self.extract_performance_data(log_file)
+            timestep_data = self.extract_timestep_data(log_file)
+            
             if perf_data:
+                # Add timestep data to performance data
+                perf_data['timestep'] = timestep_data
                 performance_data[gpu_count] = perf_data
-                print(f"    ✅ Found performance data: {perf_data['timesteps_per_s']:.2f} timesteps/s")
+                timestep_info = f", timestep: {timestep_data}" if timestep_data else ", timestep: N/A"
+                print(f"    ✅ Found performance data: {perf_data['timesteps_per_s']:.2f} timesteps/s, {perf_data['ns_per_day']:.3f} ns/day{timestep_info}")
             else:
                 print(f"    ❌ No performance data found")
         
@@ -218,7 +260,7 @@ class LammpsStrongScaleAnalyzer:
         """
         gpu_counts = sorted(performance_data.keys())
         timesteps_per_s = [performance_data[gpu]['timesteps_per_s'] for gpu in gpu_counts]
-        katom_step_per_s = [performance_data[gpu]['katom_step_per_s'] for gpu in gpu_counts]
+        ns_per_day = [performance_data[gpu]['ns_per_day'] for gpu in gpu_counts]
         
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 12))
         
@@ -233,11 +275,11 @@ class LammpsStrongScaleAnalyzer:
         # Set integer ticks for GPU count
         ax1.set_xticks(gpu_counts)
         
-        # katom-step/s plot
-        ax2.plot(gpu_counts, katom_step_per_s, 'o-', color='red', label='katom-step/s')
+        # ns/day plot
+        ax2.plot(gpu_counts, ns_per_day, 'o-', color='green', label='ns/day')
         ax2.set_xlabel('Number of GPUs')
-        ax2.set_ylabel('katom-step per Second')
-        ax2.set_title('LAMMPS Performance: katom-step per Second vs GPU Count')
+        ax2.set_ylabel('Nanoseconds per Day')
+        ax2.set_title('LAMMPS Performance: ns/day vs GPU Count')
         ax2.grid(True, alpha=0.3)
         ax2.legend()
         
@@ -322,6 +364,7 @@ class LammpsStrongScaleAnalyzer:
             
             row = {
                 'gpu_count': gpu_count,
+                'timestep': perf.get('timestep', None),
                 'ns_per_day': perf['ns_per_day'],
                 'hours_per_ns': perf['hours_per_ns'],
                 'timesteps_per_s': perf['timesteps_per_s'],
@@ -361,14 +404,22 @@ class LammpsStrongScaleAnalyzer:
             f.write("=" * 50 + "\n\n")
             
             f.write(f"Baseline: {baseline_gpu} GPU(s)\n")
-            f.write(f"GPU counts tested: {gpu_counts}\n\n")
+            f.write(f"GPU counts tested: {gpu_counts}\n")
+            
+            # Add timestep information
+            baseline_timestep = performance_data[baseline_gpu].get('timestep')
+            if baseline_timestep is not None:
+                f.write(f"Timestep: {baseline_timestep} ps\n")
+            else:
+                f.write("Timestep: N/A\n")
+            f.write("\n")
             
             f.write("Performance Data:\n")
             f.write("-" * 20 + "\n")
             for gpu_count in gpu_counts:
                 perf = performance_data[gpu_count]
                 f.write(f"{gpu_count:2d} GPUs: {perf['timesteps_per_s']:8.2f} timesteps/s, "
-                       f"{perf['katom_step_per_s']:8.2f} katom-step/s\n")
+                       f"{perf['ns_per_day']:8.3f} ns/day\n")
             
             f.write("\nScaling Efficiency:\n")
             f.write("-" * 20 + "\n")
@@ -387,6 +438,13 @@ class LammpsStrongScaleAnalyzer:
             best_gpu = max(gpu_counts, key=lambda x: efficiency_data[x]['efficiency_timesteps'])
             best_eff = efficiency_data[best_gpu]['efficiency_timesteps']
             f.write(f"Best efficiency: {best_eff:.1f}% at {best_gpu} GPUs\n")
+            
+            # Add ns/day performance summary
+            f.write(f"\nSimulation Speed Summary:\n")
+            f.write("-" * 25 + "\n")
+            for gpu_count in gpu_counts:
+                perf = performance_data[gpu_count]
+                f.write(f"{gpu_count:2d} GPUs: {perf['ns_per_day']:8.3f} ns/day\n")
         
         return output_file
     

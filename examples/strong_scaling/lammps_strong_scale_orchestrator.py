@@ -15,6 +15,7 @@ Examples:
 """
 
 import argparse
+import math
 import shutil
 import sys
 from pathlib import Path
@@ -57,6 +58,37 @@ class LammpsStrongScaleOrchestrator:
                 f"LAMMPS not configured for system '{self.config_name}'. "
                 f"Please configure the executable_path in ~/.parslbox/config.yaml"
             )
+    
+    def _get_gpus_per_node(self) -> int:
+        """Get the number of GPUs per node for this system."""
+        return self.system_config.GPUS_PER_NODE
+    
+    def _validate_gpu_counts(self, gpu_counts: List[int]) -> None:
+        """
+        Validate that GPU counts are compatible with multi-node requirements.
+        
+        For multi-node jobs, ParslBox automatically uses all GPUs on allocated nodes.
+        Therefore, GPU counts must be multiples of gpus_per_node for multi-node cases.
+        
+        Args:
+            gpu_counts: List of GPU counts to validate
+            
+        Raises:
+            ValueError: If any GPU count is incompatible with multi-node behavior
+        """
+        gpus_per_node = self._get_gpus_per_node()
+        
+        for gpu_count in gpu_counts:
+            if gpu_count > gpus_per_node:
+                # Multi-node case: must be multiple of gpus_per_node
+                if gpu_count % gpus_per_node != 0:
+                    raise ValueError(
+                        f"GPU count {gpu_count} is not compatible with multi-node jobs. "
+                        f"For {self.config_name} with {gpus_per_node} GPUs per node, "
+                        f"multi-node jobs must use multiples of {gpus_per_node} GPUs "
+                        f"(e.g., {gpus_per_node}, {gpus_per_node*2}, {gpus_per_node*3}, etc.). "
+                        f"ParslBox automatically uses all GPUs on allocated nodes for multi-node jobs."
+                    )
     
     def setup_directories(self, gpu_counts: List[int]):
         """
@@ -130,9 +162,19 @@ class LammpsStrongScaleOrchestrator:
         print("🧪 Creating LAMMPS strong scaling jobs...")
         
         parent_job_ids = None
+        gpus_per_node = self._get_gpus_per_node()
         
         for i, gpu_count in enumerate(gpu_counts):
             job_dir = f"{gpu_count}gpu"
+            
+            # Calculate required nodes for this GPU count
+            required_nodes = math.ceil(gpu_count / gpus_per_node)
+            
+            # Determine job type for logging
+            if required_nodes > 1:
+                job_type = f"multi-node ({required_nodes} nodes)"
+            else:
+                job_type = "single-node"
             
             try:
                 # Use ParslBox API to add job
@@ -142,6 +184,7 @@ class LammpsStrongScaleOrchestrator:
                     config=self.config_name,
                     input_file=input_file,
                     ngpus=gpu_count,
+                    nnodes=required_nodes,
                     tag=self.tag,
                     parents=parent_job_ids
                 )
@@ -164,7 +207,7 @@ class LammpsStrongScaleOrchestrator:
                     self.created_jobs.append(job_id)
                     parent_job_ids = [job_id]  # This job becomes parent for next job
                     parent_info = f" (parent: {parent_job_ids[0]})" if i > 0 else ""
-                    print(f"    ✅ Added {job_dir} - {gpu_count} GPUs, Job ID: {job_id}{parent_info}")
+                    print(f"    ✅ Added {job_dir} - {gpu_count} GPUs, {job_type}, Job ID: {job_id}{parent_info}")
                 else:
                     raise RuntimeError(f"No job ID returned for {job_dir}")
                     
@@ -237,6 +280,9 @@ class LammpsStrongScaleOrchestrator:
         print(f"   Structure file: {struct_file}")
         print(f"   Force field file: {ff_file}")
         print()
+        
+        # Validate GPU counts are compatible with multi-node requirements
+        self._validate_gpu_counts(gpu_counts)
         
         # Setup directories
         self.setup_directories(gpu_counts)
