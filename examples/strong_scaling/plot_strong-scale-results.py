@@ -409,7 +409,7 @@ class LammpsStrongScaleAnalyzer:
             # Add timestep information
             baseline_timestep = performance_data[baseline_gpu].get('timestep')
             if baseline_timestep is not None:
-                f.write(f"Timestep: {baseline_timestep} ps\n")
+                f.write(f"Timestep: {baseline_timestep}\n")
             else:
                 f.write("Timestep: N/A\n")
             f.write("\n")
