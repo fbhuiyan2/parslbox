@@ -24,11 +24,11 @@ class AuroraGpuConfig(SystemConfig):
     CORES_PER_NODE = 208  # 104 physical cores with hyperthreading  [4 CPU sockets reserved for system services]
     EXCLUDE_CORES = [0, 104, 52, 156]   # aurora reserves these cores for system services
     GPUS_PER_NODE = 6     # 6 physical GPUs
-    CORES_PER_GPU = 32    # Each full GPU gets 32 cores (16+16 from combined tile affinity groups)
     SCHEDULER = "PBS"
     MPI_CMD_TO_USE = "mpiexec"
     MAX_WORKERS_PER_NODE = 6  # One worker per full GPU
     # Combined CPU affinity for full GPUs (combining pairs of tile groups)
+    # Each full GPU gets 32 cores (16+16 from combined tile affinity groups)
     WORKER_CPU_AFFINITY = "list:1-16,105-120:17-32,121-136:33-48,137-152:53-68,157-172:69-84,173-188:85-100,189-204"
     GPU_TYPE = 'intel'
     

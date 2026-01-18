@@ -95,7 +95,10 @@ class MPICommandBuilder:
         
         if job_type == "fullnode_cpu":
             # Full-node CPU job: Use MPI's built-in core distribution
-            cores_per_rank = system_config.CORES_PER_NODE // job_spec.ranks_per_node
+            # Account for excluded cores when calculating cores per rank
+            excluded_cores = getattr(system_config, 'EXCLUDE_CORES', None) or []
+            effective_cores_per_node = system_config.CORES_PER_NODE - len(excluded_cores)
+            cores_per_rank = effective_cores_per_node // job_spec.ranks_per_node
             flags.extend([f"--map-by", f"core:PE={cores_per_rank}"])
             flags.extend(["--bind-to", "core"])
         else:
@@ -127,7 +130,10 @@ class MPICommandBuilder:
             if job_type == "fullnode_cpu":
                 # Full-node CPU job: Use MPICH's built-in core distribution
                 ranks_per_node = job_spec.ranks_per_node
-                cores_per_rank = system_config.CORES_PER_NODE // ranks_per_node
+                # Account for excluded cores when calculating cores per rank
+                excluded_cores = getattr(system_config, 'EXCLUDE_CORES', None) or []
+                effective_cores_per_node = system_config.CORES_PER_NODE - len(excluded_cores)
+                cores_per_rank = effective_cores_per_node // ranks_per_node
                 flags.extend(["--ppn", str(ranks_per_node)])
                 flags.extend(["--depth", str(cores_per_rank)])
                 flags.extend(["--cpu-bind", "depth"])
@@ -159,7 +165,10 @@ class MPICommandBuilder:
             if job_type == "fullnode_cpu":
                 # Multi-node full-node CPU job
                 ranks_per_node = job_spec.ranks_per_node
-                cores_per_rank = system_config.CORES_PER_NODE // ranks_per_node
+                # Account for excluded cores when calculating cores per rank
+                excluded_cores = getattr(system_config, 'EXCLUDE_CORES', None) or []
+                effective_cores_per_node = system_config.CORES_PER_NODE - len(excluded_cores)
+                cores_per_rank = effective_cores_per_node // ranks_per_node
                 flags.extend(["-ppn", str(ranks_per_node)])
                 flags.extend(["--depth", str(cores_per_rank)])
                 flags.extend(["--cpu-bind", "depth"])

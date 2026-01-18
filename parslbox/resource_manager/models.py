@@ -117,8 +117,15 @@ class NodeResource:
             # No cores available = fully occupied (can't run anything)
             self.cpu_occupancy = 1.0
         else:
-            used_cores = self.total_cores - len(self.available_core_ids)
-            self.cpu_occupancy = used_cores / self.total_cores
+            # Calculate effective cores (total - excluded)
+            excluded_count = len(self.excluded_cores) if self.excluded_cores else 0
+            effective_cores = self.total_cores - excluded_count
+            
+            if effective_cores == 0:
+                self.cpu_occupancy = 1.0
+            else:
+                used_cores = effective_cores - len(self.available_core_ids)
+                self.cpu_occupancy = used_cores / effective_cores
     
 
     def assign_cpu_job(self, job_id: int, num_cores: int) -> List[int]:

@@ -70,7 +70,9 @@ class ResourceManager:
         try:
             total_nodes, total_gpus = self.system_config.detect_resources()
             gpus_per_node = total_gpus//total_nodes #self.system_config.GPUS_PER_NODE
-            
+                                                    # gpus_per_node is initialized this way to account for sub-node batch jobs like in ALCF Sophia
+            # Ideally total_cores should also be calculated here like gpus_per_node above
+            # But I decided to intiate total_cores using CORES_PER_NODE so that affinity cores can be assigned even to subnode gpu batchjobs 
             # Get node list from scheduler
             node_hostnames = self._get_node_hostnames(total_nodes)
             
@@ -302,14 +304,10 @@ class ResourceManager:
 
         """
         # Calculate cores per GPU for balanced allocation
-        cores_per_gpu_config = getattr(self.system_config, 'CORES_PER_GPU', None)
-        if cores_per_gpu_config:    # if CORES_PER_GPU is defined in system config, use that
-            cores_per_gpu = cores_per_gpu_config
-        else:
-            # Account for excluded cores when calculating cores per GPU
-            excluded_cores = getattr(self.system_config, 'EXCLUDE_CORES', None) or []
-            effective_cores_per_node = self.system_config.CORES_PER_NODE - len(excluded_cores)
-            cores_per_gpu = effective_cores_per_node // self.system_config.GPUS_PER_NODE
+        # Account for excluded cores when calculating cores per GPU
+        excluded_cores = getattr(self.system_config, 'EXCLUDE_CORES', None) or []
+        effective_cores_per_node = self.system_config.CORES_PER_NODE - len(excluded_cores)
+        cores_per_gpu = effective_cores_per_node // self.system_config.GPUS_PER_NODE
         
         # Find a healthy node with enough GPUs and CPU cores
         for node in self.nodes:
@@ -439,7 +437,10 @@ class ResourceManager:
         hostnames = []
         
         # Calculate cores per GPU for balanced allocation
-        cores_per_gpu = self.system_config.CORES_PER_NODE // self.system_config.GPUS_PER_NODE
+        # Account for excluded cores when calculating cores per GPU
+        excluded_cores = getattr(self.system_config, 'EXCLUDE_CORES', None) or []
+        effective_cores_per_node = self.system_config.CORES_PER_NODE - len(excluded_cores)
+        cores_per_gpu = effective_cores_per_node // self.system_config.GPUS_PER_NODE
         
         # For each node, assign all GPUs with affinity
         for node in assigned_nodes:
