@@ -539,7 +539,8 @@ def run(
                     status = resource_manager.get_resource_status()
                     dependency_ready_count = len(dependency_ready_jobs) if 'dependency_ready_jobs' in locals() else 0
                     logger.info(f"Run Status: jobs running {len(fut_to_item)}, jobs backlogged {status['backlogged_jobs']}, dependency ready jobs {dependency_ready_count}")
-                    logger.info(f"Resource Status: Total {status['available_gpus']} GPUs and {status['available_cpu_capacity']:.1f} cores available on {status['available_nodes']} nodes")
+                    available_cores_percnt = status['available_cpu_capacity'] / status['available_nodes'] if status['available_nodes'] > 0 else 0
+                    logger.info(f"Resource Status: Total {status['available_gpus']} GPUs and {available_cores_percnt:.2f} % of all cores available on {status['available_nodes']} nodes")
                             
                 except Exception as e:
                     logger.error(f"Job {job_id}: Failed to free resources or schedule backlog: {e}")

@@ -186,7 +186,7 @@ class LammpsStrongScaleOrchestrator:
                     ngpus=gpu_count,
                     nnodes=required_nodes,
                     tag=self.tag,
-                    parents=parent_job_ids
+                    #parents=parent_job_ids
                 )
                 
                 # Display any warnings or info messages

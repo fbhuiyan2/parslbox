@@ -16,7 +16,6 @@ Examples:
 """
 
 import argparse
-import subprocess
 import shutil
 import random
 import sys
@@ -25,6 +24,7 @@ from typing import List, Tuple, Optional
 
 # Import parslbox modules
 sys.path.append(str(Path(__file__).parent.parent))
+from parslbox.api import ParslBox
 from parslbox.utils.pbx_config_utils import load_app_config
 from parslbox.system_configs.loader import get_system_config
 
@@ -46,8 +46,11 @@ class TestJobCreator:
         self.tag = tag or "test"  # Default tag if none provided
         self.system_config = get_system_config(config_name)
         self.tests_dir = Path("tests")
-        self.created_jobs = []  # Track created jobs for parent assignment
+        self.created_jobs = []  # Track created job IDs for parent assignment
         self.PARENTS_MAX = 1
+        
+        # Initialize ParslBox API
+        self.pbx = ParslBox()
         
         # Resource configuration options
         self.gpu_options = [1, 2, 8]
@@ -244,7 +247,7 @@ class TestJobCreator:
         finally:
             os.chdir(original_cwd)
     
-    def _generate_resource_config(self, job_index: int, total_jobs: int) -> Tuple[List[str], str]:
+    def _generate_resource_config(self, job_index: int, total_jobs: int) -> Tuple[dict, str]:
         """
         Generate varied resource configurations for jobs.
         
@@ -253,7 +256,7 @@ class TestJobCreator:
             total_jobs: Total number of jobs
             
         Returns:
-            Tuple of (pbx_args, description)
+            Tuple of (api_kwargs, description)
         """
         # If CPU-only mode is enabled, only create CPU jobs
         if self.cpu_only:
@@ -262,14 +265,14 @@ class TestJobCreator:
             if config_type == 0:
                 # Partial node CPU job
                 occupancy = random.choice(self.cpu_occupancy_options)
-                return ["-o", str(occupancy)], f"Partial node CPU, {occupancy} occupancy"
+                return {"node_occupancy": occupancy}, f"Partial node CPU, {occupancy} occupancy"
             elif config_type == 1:
                 # Full node CPU job
-                return ["-o", "1.0"], "Full node CPU"
+                return {"node_occupancy": 1.0}, "Full node CPU"
             else:
                 # Multi-node CPU job
                 nnodes = random.choice(self.multinode_options)
-                return ["-n", str(nnodes), "-o", "1.0"], f"Multi-node CPU, {nnodes} nodes"
+                return {"nnodes": nnodes, "node_occupancy": 1.0}, f"Multi-node CPU, {nnodes} nodes"
         
         # If GPU mode is enabled, only create GPU jobs
         elif self.gpu_enabled:
@@ -278,37 +281,37 @@ class TestJobCreator:
             if config_type == 0:
                 # Single GPU job
                 ngpus = 1
-                return ["-g", str(ngpus)], f"Single GPU job, {ngpus} GPU"
+                return {"ngpus": ngpus}, f"Single GPU job, {ngpus} GPU"
             elif config_type == 1:
                 # Multi-GPU single node job
                 ngpus = random.choice(self.gpu_options)
                 if ngpus > self.system_config.GPUS_PER_NODE:
                     ngpus = self.system_config.GPUS_PER_NODE
-                return ["-g", str(ngpus)], f"Multi-GPU job, {ngpus} GPUs"
+                return {"ngpus": ngpus}, f"Multi-GPU job, {ngpus} GPUs"
             elif config_type == 2:
                 try:
                     # Multi-node GPU job (All GPUs per node)
                     nnodes = random.choice(self.multinode_options)
                     if nnodes > 1:
-                        return ["-n", str(nnodes)], f"Multi-node GPU, {nnodes} nodes"
+                        return {"nnodes": nnodes}, f"Multi-node GPU, {nnodes} nodes"
                     else:
                         # Full node GPU job (all GPUs on node)
                         ngpus = self.system_config.GPUS_PER_NODE
-                        return ["-g", str(ngpus)], f"Full node GPU, {ngpus} GPUs"
+                        return {"ngpus": ngpus}, f"Full node GPU, {ngpus} GPUs"
                 except:   # if the multinode_options is empty
                     # Single GPU job
                     ngpus = 1
-                    return ["-g", str(ngpus)], f"Single GPU job, {ngpus} GPU"
+                    return {"ngpus": ngpus}, f"Single GPU job, {ngpus} GPU"
             else:
                 # Full node GPU job (all GPUs on node)
                 ngpus = self.system_config.GPUS_PER_NODE
-                return ["-g", str(ngpus)], f"Full node GPU, {ngpus} GPUs"
+                return {"ngpus": ngpus}, f"Full node GPU, {ngpus} GPUs"
         
         # Fallback: if neither GPU nor CPU-only is set properly, default to single GPU
         else:
-            return ["-g", "1"], "Default single GPU job"
+            return {"ngpus": 1}, "Default single GPU job"
     
-    def _generate_parent_dependencies(self, current_job_count: int) -> List[str]:
+    def _generate_parent_dependencies(self, current_job_count: int) -> List[int]:
         """
         Generate random parent dependencies for a job.
         
@@ -316,12 +319,12 @@ class TestJobCreator:
             current_job_count: Number of jobs created so far
             
         Returns:
-            List of parent job IDs as strings
+            List of parent job IDs as integers
         """
         if current_job_count == 0:
             return []
         
-        # Randomly decide number of parents (0 to min(10, current_job_count))
+        # Randomly decide number of parents (0 to min(PARENTS_MAX, current_job_count))
         max_parents = min(self.PARENTS_MAX, current_job_count)
         num_parents = random.randint(0, max_parents)
         
@@ -329,109 +332,149 @@ class TestJobCreator:
             return []
         
         # Select random parent job IDs from existing jobs
-        available_parents = list(range(len(self.created_jobs) - current_job_count + 1, len(self.created_jobs) + 1))
+        if not self.created_jobs:
+            return []
+        
+        available_parents = self.created_jobs[-current_job_count:] if current_job_count <= len(self.created_jobs) else self.created_jobs
         if not available_parents:
             return []
         
         selected_parents = random.sample(available_parents, min(num_parents, len(available_parents)))
-        return [str(p) for p in selected_parents]
+        return selected_parents
     
     def _add_lammps_jobs_to_pbx(self, job_dirs: List[str]):
         """Add LAMMPS jobs to pbx with varied configurations."""
         print("  🔧 Adding LAMMPS jobs to pbx...")
         
         for i, job_dir in enumerate(job_dirs):
-            resource_args, resource_desc = self._generate_resource_config(i, len(job_dirs))
+            resource_kwargs, resource_desc = self._generate_resource_config(i, len(job_dirs))
             parent_ids = self._generate_parent_dependencies(len(self.created_jobs))
             
-            cmd = [
-                "pbx", "add", job_dir,
-                "-a", "lammps",
-                "-i", "in.friction",
-                "-c", self.config_name,
-                "-t", self.tag
-            ]
-            
-            # Add resource configuration
-            cmd.extend(resource_args)
-            
-            # Add parent dependencies if any
-            if parent_ids:
-                cmd.extend(["-P", " ".join(parent_ids)])
-            
             try:
-                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-                self.created_jobs.append(f"lammps_{job_dir}")
-                parent_info = f" (parents: {parent_ids})" if parent_ids else ""
-                print(f"    ✅ Added {job_dir} - {resource_desc}{parent_info}")
-            except subprocess.CalledProcessError as e:
-                print(f"    ❌ Failed to add {job_dir}: {e.stderr}")
+                # Use ParslBox API to add job
+                job_ids, failed_jobs, msg_log = self.pbx.add_jobs(
+                    paths=[job_dir],
+                    app="lammps",
+                    config=self.config_name,
+                    input_file="in.friction",
+                    tag=self.tag,
+                    parents=parent_ids if parent_ids else None,
+                    **resource_kwargs
+                )
+                
+                # Display any warnings or info messages
+                for warning in msg_log["warnings"]:
+                    print(f"    ⚠️  Warning: {warning}")
+                for info in msg_log["info"]:
+                    print(f"    ℹ️  Info: {info}")
+                
+                # Check for failures
+                if failed_jobs:
+                    for path, error in failed_jobs:
+                        print(f"    ❌ Failed to add {path}: {error}")
+                else:
+                    # Success - track the job ID
+                    if job_ids:
+                        job_id = job_ids[0]  # Should only be one job
+                        self.created_jobs.append(job_id)
+                        parent_info = f" (parents: {parent_ids})" if parent_ids else ""
+                        print(f"    ✅ Added {job_dir} - {resource_desc}, Job ID: {job_id}{parent_info}")
+                    else:
+                        print(f"    ❌ No job ID returned for {job_dir}")
+                        
+            except Exception as e:
+                print(f"    ❌ Failed to add {job_dir}: {e}")
     
     def _add_python_jobs_to_pbx(self, job_dirs: List[str], script_name: str, env_file: Optional[str]):
         """Add Python jobs to pbx with varied configurations."""
         print("  🔧 Adding Python jobs to pbx...")
         
         for i, job_dir in enumerate(job_dirs):
-            resource_args, resource_desc = self._generate_resource_config(i, len(job_dirs))
+            resource_kwargs, resource_desc = self._generate_resource_config(i, len(job_dirs))
             parent_ids = self._generate_parent_dependencies(len(self.created_jobs))
             
-            cmd = [
-                "pbx", "add", job_dir,
-                "-a", "python",
-                "-i", script_name,
-                "-c", self.config_name,
-                "-t", self.tag
-            ]
-            
-            # Add environment file if available
+            # Determine environment file path
+            env_file_path = None
             if env_file:
                 env_file_path = str((Path(job_dir) / env_file).resolve())
-                cmd.extend(["-e", env_file_path])
-            
-            # Add resource configuration
-            cmd.extend(resource_args)
-            
-            # Add parent dependencies if any
-            if parent_ids:
-                cmd.extend(["-P", " ".join(parent_ids)])
             
             try:
-                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-                self.created_jobs.append(f"python_{job_dir}")
-                parent_info = f" (parents: {parent_ids})" if parent_ids else ""
-                print(f"    ✅ Added {job_dir} - {resource_desc}{parent_info}")
-            except subprocess.CalledProcessError as e:
-                print(f"    ❌ Failed to add {job_dir}: {e.stderr}")
+                # Use ParslBox API to add job
+                job_ids, failed_jobs, msg_log = self.pbx.add_jobs(
+                    paths=[job_dir],
+                    app="python",
+                    config=self.config_name,
+                    input_file=script_name,
+                    tag=self.tag,
+                    env_file=env_file_path,
+                    parents=parent_ids if parent_ids else None,
+                    **resource_kwargs
+                )
+                
+                # Display any warnings or info messages
+                for warning in msg_log["warnings"]:
+                    print(f"    ⚠️  Warning: {warning}")
+                for info in msg_log["info"]:
+                    print(f"    ℹ️  Info: {info}")
+                
+                # Check for failures
+                if failed_jobs:
+                    for path, error in failed_jobs:
+                        print(f"    ❌ Failed to add {path}: {error}")
+                else:
+                    # Success - track the job ID
+                    if job_ids:
+                        job_id = job_ids[0]  # Should only be one job
+                        self.created_jobs.append(job_id)
+                        parent_info = f" (parents: {parent_ids})" if parent_ids else ""
+                        print(f"    ✅ Added {job_dir} - {resource_desc}, Job ID: {job_id}{parent_info}")
+                    else:
+                        print(f"    ❌ No job ID returned for {job_dir}")
+                        
+            except Exception as e:
+                print(f"    ❌ Failed to add {job_dir}: {e}")
     
     def _add_vasp_jobs_to_pbx(self, job_dirs: List[str]):
         """Add VASP jobs to pbx with varied configurations."""
         print("  🔧 Adding VASP jobs to pbx...")
         
         for i, job_dir in enumerate(job_dirs):
-            resource_args, resource_desc = self._generate_resource_config(i, len(job_dirs))
+            resource_kwargs, resource_desc = self._generate_resource_config(i, len(job_dirs))
             parent_ids = self._generate_parent_dependencies(len(self.created_jobs))
             
-            cmd = [
-                "pbx", "add", job_dir,
-                "-a", "vasp",
-                "-c", self.config_name,
-                "-t", self.tag
-            ]
-            
-            # Add resource configuration
-            cmd.extend(resource_args)
-            
-            # Add parent dependencies if any
-            if parent_ids:
-                cmd.extend(["-P", " ".join(parent_ids)])
-            
             try:
-                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-                self.created_jobs.append(f"vasp_{job_dir}")
-                parent_info = f" (parents: {parent_ids})" if parent_ids else ""
-                print(f"    ✅ Added {job_dir} - {resource_desc}{parent_info}")
-            except subprocess.CalledProcessError as e:
-                print(f"    ❌ Failed to add {job_dir}: {e.stderr}")
+                # Use ParslBox API to add job
+                job_ids, failed_jobs, msg_log = self.pbx.add_jobs(
+                    paths=[job_dir],
+                    app="vasp",
+                    config=self.config_name,
+                    tag=self.tag,
+                    parents=parent_ids if parent_ids else None,
+                    **resource_kwargs
+                )
+                
+                # Display any warnings or info messages
+                for warning in msg_log["warnings"]:
+                    print(f"    ⚠️  Warning: {warning}")
+                for info in msg_log["info"]:
+                    print(f"    ℹ️  Info: {info}")
+                
+                # Check for failures
+                if failed_jobs:
+                    for path, error in failed_jobs:
+                        print(f"    ❌ Failed to add {path}: {error}")
+                else:
+                    # Success - track the job ID
+                    if job_ids:
+                        job_id = job_ids[0]  # Should only be one job
+                        self.created_jobs.append(job_id)
+                        parent_info = f" (parents: {parent_ids})" if parent_ids else ""
+                        print(f"    ✅ Added {job_dir} - {resource_desc}, Job ID: {job_id}{parent_info}")
+                    else:
+                        print(f"    ❌ No job ID returned for {job_dir}")
+                        
+            except Exception as e:
+                print(f"    ❌ Failed to add {job_dir}: {e}")
 
 
 def main():
