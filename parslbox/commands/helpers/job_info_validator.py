@@ -191,10 +191,13 @@ def validate_resource_parameters(
             # GPU jobs: 1 rank per GPU
             final_ranks_per_node = 1
         else:
-            # CPU jobs: calculate based on cores_per_node * node_occupancy
-            calculated_ranks = int(system_config.CORES_PER_NODE * final_node_occupancy)
+            # CPU jobs: calculate based on effective cores per node * node_occupancy
+            # Account for excluded cores when calculating ranks
+            excluded_cores = getattr(system_config, 'EXCLUDE_CORES', None) or []
+            effective_cores_per_node = system_config.CORES_PER_NODE - len(excluded_cores)
+            calculated_ranks = int(effective_cores_per_node * final_node_occupancy)
             final_ranks_per_node = max(1, calculated_ranks)  # Ensure at least 1
-            info_messages.append(f"Using smart default: ranks_per_node = {final_ranks_per_node} (cores_per_node={system_config.CORES_PER_NODE} * node_occupancy={final_node_occupancy})")
+            info_messages.append(f"Using smart default: ranks_per_node = {final_ranks_per_node} (effective_cores_per_node={effective_cores_per_node} * node_occupancy={final_node_occupancy})")
     else:
         # User specified ranks_per_node
         if final_ngpus > 0:
