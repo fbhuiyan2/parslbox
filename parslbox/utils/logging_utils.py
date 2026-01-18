@@ -5,7 +5,35 @@ import sys
 # This allows any module to get this logger by name
 logger = logging.getLogger("parslbox")
 
-def setup_logging(log_file=None):
+
+def validate_log_level(log_level: str) -> int:
+    """
+    Convert string log level to logging constant.
+    
+    Args:
+        log_level: String log level (case-insensitive)
+        
+    Returns:
+        Logging level constant
+        
+    Raises:
+        ValueError: If log level is invalid
+    """
+    valid_levels = {
+        'debug': logging.DEBUG,
+        'info': logging.INFO, 
+        'warning': logging.WARNING,
+        'error': logging.ERROR,
+        'critical': logging.CRITICAL
+    }
+    
+    level_lower = log_level.lower()
+    if level_lower not in valid_levels:
+        raise ValueError(f"Invalid log level: {log_level}. Valid options: {', '.join(valid_levels.keys())}")
+    
+    return valid_levels[level_lower]
+
+def setup_logging(log_file=None, log_level=logging.INFO):
     """
     Configures a standardized logger for the application.
 
@@ -14,12 +42,16 @@ def setup_logging(log_file=None):
 
     - It always logs to the console (stdout).
     - If a log_file path is provided, it also logs to that file.
+    
+    Args:
+        log_file: Optional path to log file
+        log_level: Logging level (e.g., logging.DEBUG, logging.INFO)
     """
     # Prevent adding duplicate handlers if this is called multiple times
     if logger.hasHandlers():
         logger.handlers.clear()
 
-    logger.setLevel(logging.INFO)
+    logger.setLevel(log_level)
     
     # Create a standard formatter
     formatter = logging.Formatter(

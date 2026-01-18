@@ -425,6 +425,7 @@ class ParslBox:
         apps: Optional[List[str]] = None,
         tags: Optional[List[str]] = None,
         retries: int = 0,
+        loglevel: str = "info",
     ) -> Dict[str, Any]:
         """
         Generate and submit a PBS job script.
@@ -463,6 +464,7 @@ class ParslBox:
                 apps=apps,
                 tags=tags,
                 retries=retries,
+                loglevel=loglevel,
                 config_path=self.config_path,
             )
             return result

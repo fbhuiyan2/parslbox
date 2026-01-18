@@ -15,7 +15,7 @@ from concurrent.futures import as_completed
 
 from parslbox.system_configs.loader import load_config, get_system_config
 from parslbox.utils import path_utils
-from parslbox.utils.logging_utils import setup_logging
+from parslbox.utils.logging_utils import setup_logging, validate_log_level
 from parslbox.utils.pbx_config_utils import load_app_config, is_app_configured
 from parslbox.database import database
 from parslbox.resource_manager.mpi_launcher import compose_mpi_command
@@ -185,6 +185,10 @@ def run(
         int,
         typer.Option("--flush-interval", help="Interval in seconds for periodic status buffer flush (default: 150).")
     ] = 150,
+    loglevel: Annotated[
+        str,
+        typer.Option("--loglevel", help="Logging level (debug, info, warning, error, critical)")
+    ] = "info",
 ):
     """
     Run Parsl workflows by discovering and executing application plugins.
@@ -196,7 +200,15 @@ def run(
     
     run_dir.mkdir(parents=True, exist_ok=True)
     log_file = run_dir / "log.pbx"
-    setup_logging(log_file=log_file)
+    
+    # Validate and convert log level
+    try:
+        log_level_int = validate_log_level(loglevel)
+    except ValueError as e:
+        typer.secho(f"❌ Error: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    
+    setup_logging(log_file=log_file, log_level=log_level_int)
     logger = logging.getLogger(__name__)
     
     db_path = path_utils.DB_FILE

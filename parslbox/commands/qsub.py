@@ -33,6 +33,7 @@ def submit_to_scheduler(
     apps: Optional[List[str]] = None,
     tags: Optional[List[str]] = None,
     retries: int = 0,
+    loglevel: str = "info",
     config_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """
@@ -107,6 +108,8 @@ def submit_to_scheduler(
             run_options.append(f"--tags {tags}")
     if retries > 0:
         run_options.append(f"--retries {retries}")
+    if loglevel != "info":  # Only add if not default
+        run_options.append(f"--loglevel {loglevel}")
     
     run_options_str = " ".join(run_options)
     
@@ -227,6 +230,10 @@ def qsub(
         int,
         typer.Option("--retries", help="Number of retries for failed tasks.")
     ] = 0,
+    loglevel: Annotated[
+        str,
+        typer.Option("--loglevel", help="Logging level (debug, info, warning, error, critical)")
+    ] = "info",
 ):
     """
     Generate and submit a PBS job script for running parslbox workflows.
@@ -249,6 +256,7 @@ def qsub(
             apps=apps_list,
             tags=tags_list,
             retries=retries,
+            loglevel=loglevel,
         )
         
         # CLI-specific output formatting
