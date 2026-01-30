@@ -25,7 +25,7 @@ def submit_to_scheduler(
     config_name: str,
     job_name: str,
     queue: str,
-    select: int,
+    select: str,
     walltime: int,
     project: str,
     filesystems: Optional[str] = None,
@@ -43,7 +43,7 @@ def submit_to_scheduler(
         config_name: System configuration name
         job_name: PBS job name
         queue: PBS queue name
-        select: Number of nodes to request
+        select: PBS select specification (e.g., '4', '2:ncpus=32:ngpus=4', '1:ncpus=16+2:ncpus=32:ngpus=2')
         walltime: Wall time in minutes
         project: Project/account name
         filesystems: Comma-separated list of filesystems
@@ -199,8 +199,8 @@ def qsub(
         typer.Option("--queue", "-q", help="PBS queue name.")
     ],
     select: Annotated[
-        int,
-        typer.Option("--select", help="Number of nodes to request.")
+        str,
+        typer.Option("--select", help="PBS select specification (e.g., '4', '2:ncpus=32:ngpus=4', '1:ncpus=16+2:ncpus=32:ngpus=2').")
     ],
     walltime: Annotated[
         int,

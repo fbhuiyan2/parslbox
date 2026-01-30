@@ -417,7 +417,7 @@ class ParslBox:
         config: str,
         job_name: str,
         queue: str,
-        select: int,
+        select: str,
         walltime: int,
         project: str,
         filesystems: Optional[str] = None,
@@ -434,7 +434,7 @@ class ParslBox:
             config: System configuration name
             job_name: PBS job name
             queue: PBS queue name
-            select: Number of nodes to request
+            select: PBS select specification (e.g., '4', '2:ncpus=32:ngpus=4', '1:ncpus=16+2:ncpus=32:ngpus=2')
             walltime: Wall time in minutes
             project: Project/account name
             filesystems: Comma-separated list of filesystems
@@ -442,6 +442,7 @@ class ParslBox:
             apps: List of apps to run
             tags: List of tags to run
             retries: Number of retries for failed tasks
+            loglevel: Logging level
 
         Returns:
             Dictionary with submission details including job_id and run_dir
