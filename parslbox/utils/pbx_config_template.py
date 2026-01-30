@@ -75,6 +75,45 @@ polaris:
     module load conda
     conda activate parslbox
 
+
+# ---------------------------------------------------------------------------
+# Custom Application Registration
+#
+# Register your own custom applications here. Once registered, they work
+# just like built-in apps (lammps, vasp, python).
+#
+# How it works:
+# 1. Create a Python file with your app class (see EXAMPLE_NEW_APP.py)
+# 2. Your class must inherit from AppBase: class MyApp(AppBase):
+# 3. Register it here by specifying the file/module and class name
+#
+# Two methods are supported:
+# - File path: module: "/path/to/my_app.py"
+# - Python module: module: "my_package.my_module"
+#
+# Example:
+# custom_apps:
+#   my_app:
+#     module: "/path/to/my_app.py"     # Path to your Python file
+#     class: "MyApp"                   # Name of your class inside the file
+#   
+#   another_app:
+#     module: "~/my_apps/another.py"   # Supports ~ expansion
+#     class: "AnotherApp"              # Name of your class inside the file
+# ---------------------------------------------------------------------------
+
+custom_apps: {}
+  # Uncomment and modify to add your custom apps:
+  # my_custom_app:
+  #   module: "/path/to/my_app.py"     # Path to your Python file
+  #   class: "MyCustomApp"             # Your class name (must inherit from AppBase)
+  #
+  # simulation_app:
+  #   module: "my_simulation_package.apps"  # Or use installed Python package
+  #   class: "SimulationApp"                 # Class name within that module
+ 
+# ==========================================
+
 # Application configurations
 
 #===== Example APP =====#

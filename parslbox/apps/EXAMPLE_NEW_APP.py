@@ -215,17 +215,82 @@ class AdvancedMPIApp(AppBase):
 
 
 # ============================================================================
-# To register your new app, add it to parslbox/apps/app_registry.py:
+# HOW TO REGISTER YOUR CUSTOM APP
 # ============================================================================
-# 
-# from parslbox.apps.example_new_app import ExampleApp, MinimalApp, AdvancedMPIApp
-# 
-# APP_FACTORY = {
-#     "lammps": LammpsApp,
-#     "vasp": VaspApp,
-#     "python": PythonApp,
-#     "example": ExampleApp,        # <-- Add your apps here
-#     "minimal": MinimalApp,
-#     "advanced_mpi": AdvancedMPIApp,
-# }
+#
+# METHOD 1: Config-based Registration (RECOMMENDED)
+# ================================================
+#
+# After creating your app class, register it in ~/.parslbox/pbx_config.yaml:
+#
+# 1. Add to the custom_apps section:
+#
+#    custom_apps:
+#      my_app:
+#        module: "/path/to/this/file.py"    # Path to your Python file
+#        class: "ExampleApp"                # Name of your class (e.g., ExampleApp, MinimalApp)
+#
+# 2. Configure it like any built-in app:
+#
+#    my_app:
+#      polaris:
+#        executable_path: "/path/to/executable"
+#        environment_setup: |
+#          module load my_modules
+#
+# 3. Use it:
+#
+#    pbx add --app my_app --input input.txt
+#
+# That's it! No need to modify ParslBox source code.
+#
+# ============================================================================
+# COMPLETE EXAMPLE (Config-based)
+# ============================================================================
+#
+# Let's say you save this file as ~/my_custom_lammps.py and want to use
+# the MinimalApp class. Your config would look like:
+#
+# ~/.parslbox/pbx_config.yaml:
+# ---
+# custom_apps:
+#   my_lammps:
+#     module: "~/my_custom_lammps.py"
+#     class: "MinimalApp"
+#
+# my_lammps:
+#   polaris:
+#     executable_path: "/path/to/lammps"
+#     environment_setup: |
+#       module load lammps
+# ---
+#
+# Then use it:
+#   pbx add --app my_lammps --input in.lammps
+#
+# ============================================================================
+# METHOD 2: Source Code Registration (NOT RECOMMENDED)
+# ====================================================
+#
+# Alternative: Modify ParslBox source code (requires package modification):
+#
+# 1. Add import to parslbox/apps/app_registry.py:
+#
+#    from parslbox.apps.example_new_app import ExampleApp, MinimalApp, AdvancedMPIApp
+#
+# 2. Add to APP_FACTORY in parslbox/apps/app_registry.py:
+#
+#    APP_FACTORY = {
+#        "lammps": LammpsApp,
+#        "vasp": VaspApp,
+#        "python": PythonApp,
+#        "example": ExampleApp,        # <-- Add your apps here
+#        "minimal": MinimalApp,
+#        "advanced_mpi": AdvancedMPIApp,
+#    }
+#
+# WARNING: This method requires modifying the ParslBox package source code,
+# which makes it difficult to maintain when updating ParslBox versions.
+# Use METHOD 1 (config-based) instead!
+#
 # ============================================================================
