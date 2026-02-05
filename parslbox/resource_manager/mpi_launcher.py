@@ -62,17 +62,22 @@ class MPICommandBuilder:
             Complete MPI command string
         """
         flags = []
+        context = {}  # Template context for override substitution
         
         # Build each type of flag based on launcher type
         if self.launcher_type == "mpirun":
-            flags.extend(self._build_mpirun_flags(assignment, system_config, job_spec, job_path))
+            flags, context = self._build_mpirun_flags(assignment, system_config, job_spec, job_path)
         elif self.launcher_type == "mpiexec":
-            flags.extend(self._build_mpiexec_flags(assignment, system_config, job_spec, job_path))
+            flags, context = self._build_mpiexec_flags(assignment, system_config, job_spec, job_path)
         elif self.launcher_type == "srun":
-            flags.extend(self._build_srun_flags(assignment, system_config, job_spec))
+            flags = self._build_srun_flags(assignment, system_config, job_spec)
+            context = {
+                'hostlist': ",".join(assignment.hostnames),
+                'total_ranks': job_spec.get_total_ranks()
+            }
         
-        # Apply overrides
-        flags = self._apply_overrides(flags)
+        # Apply overrides with context for template substitution
+        flags = self._apply_overrides(flags, context)
         
         # Build final command
         command = f"{self.launcher_type} {' '.join(flags)}"
@@ -80,12 +85,24 @@ class MPICommandBuilder:
         return command
     
     def _build_mpirun_flags(self, assignment: 'ResourceAssignment', system_config: 'SystemConfig', 
-                           job_spec: 'JobResourceSpec', job_path: str = None) -> list[str]:
-        """Build mpirun-specific flags."""
+                           job_spec: 'JobResourceSpec', job_path: str = None) -> tuple[list[str], dict]:
+        """Build mpirun-specific flags.
+        
+        Returns:
+            Tuple of (flags_list, context_dict) where context contains template variables
+        """
         flags = []
         total_ranks = job_spec.get_total_ranks()
         hostlist = ",".join(assignment.hostnames)
         job_type = job_spec.detect_job_type(system_config)
+        
+        # Initialize context for template substitution in overrides
+        context = {
+            'hostlist': hostlist,
+            'total_ranks': total_ranks,
+            'rankfile_path': None,
+            'wrapper_path': None
+        }
         
         # Process count flags
         flags.extend(["-np", str(total_ranks)])
@@ -104,21 +121,36 @@ class MPICommandBuilder:
         else:
             # Sub-node jobs and GPU jobs: Use rankfile for precise binding
             rankfile_path = generate_openmpi_rankfile(assignment, system_config, job_spec, job_path)
+            context['rankfile_path'] = rankfile_path
             flags.extend(["--map-by", f"rankfile:file={rankfile_path}"])
             
             if job_spec.is_gpu_job():
                 # GPU job: add wrapper for GPU assignment
                 wrapper_path = generate_openmpi_gpu_wrapper(assignment, system_config, job_spec, job_path)
+                context['wrapper_path'] = wrapper_path
                 flags.append(wrapper_path)
         
-        return flags
+        return flags, context
     
     def _build_mpiexec_flags(self, assignment: 'ResourceAssignment', system_config: 'SystemConfig', 
-                            job_spec: 'JobResourceSpec', job_path: str = None) -> list[str]:
-        """Build mpiexec-specific flags."""
+                            job_spec: 'JobResourceSpec', job_path: str = None) -> tuple[list[str], dict]:
+        """Build mpiexec-specific flags.
+        
+        Returns:
+            Tuple of (flags_list, context_dict) where context contains template variables
+        """
         flags = []
         total_ranks = job_spec.get_total_ranks()
         job_type = job_spec.detect_job_type(system_config)
+        hostlist = ",".join(assignment.hostnames)
+        
+        # Initialize context for template substitution in overrides
+        context = {
+            'hostlist': hostlist,
+            'total_ranks': total_ranks,
+            'rankfile_path': None,
+            'wrapper_path': None
+        }
         
         # Process count flags
         flags.extend(["-n", str(total_ranks)])
@@ -156,10 +188,10 @@ class MPICommandBuilder:
                 
                 if job_spec.is_gpu_job():
                     wrapper_path = generate_mpiexec_gpu_wrapper(assignment, system_config, job_spec, job_path)
+                    context['wrapper_path'] = wrapper_path
                     flags.append(wrapper_path)
         else:
             # Multi-node
-            hostlist = ",".join(assignment.hostnames)
             flags.extend(["-hosts", hostlist])
             
             if job_type == "fullnode_cpu":
@@ -175,15 +207,17 @@ class MPICommandBuilder:
             else:
                 # Multi-node sub-node or GPU jobs: Use rankfile
                 rankfile_path = generate_mpiexec_rankfile(assignment, system_config, job_spec, job_path)
+                context['rankfile_path'] = rankfile_path
                 ranks_per_node = len(assignment.get_ranks_for_node(0)) if assignment.hostnames else total_ranks // len(assignment.hostnames)
                 flags.extend(["-ppn", str(ranks_per_node)])
                 flags.extend(["--rankfile", rankfile_path])
                 
                 if job_spec.is_gpu_job():
                     wrapper_path = generate_mpiexec_gpu_wrapper(assignment, system_config, job_spec, job_path)
+                    context['wrapper_path'] = wrapper_path
                     flags.append(wrapper_path)
         
-        return flags
+        return flags, context
     
     def _build_srun_flags(self, assignment: 'ResourceAssignment', system_config: 'SystemConfig', 
                          job_spec: 'JobResourceSpec') -> list[str]:
@@ -204,12 +238,18 @@ class MPICommandBuilder:
         
         return flags
     
-    def _apply_overrides(self, flags: list[str]) -> list[str]:
+    def _apply_overrides(self, flags: list[str], context: dict = None) -> list[str]:
         """
         Apply disable/add overrides to the flag list.
         
         Args:
             flags: List of command flags to modify
+            context: Optional dictionary of template variables for substitution.
+                     Supported variables:
+                     - {rankfile_path}: Path to the generated rankfile
+                     - {wrapper_path}: Path to the GPU wrapper script
+                     - {hostlist}: Comma-separated list of hostnames
+                     - {total_ranks}: Total number of MPI ranks
             
         Returns:
             Modified list of flags
@@ -217,20 +257,42 @@ class MPICommandBuilder:
         if not self.overrides:
             return flags
         
+        context = context or {}
+        
         # Apply disable rules
         disable_list = self.overrides.get('disable', [])
         filtered_flags = self._filter_disabled_flags(flags, disable_list)
         
-        # Apply add rules
+        # Apply add rules with template substitution
         add_list = self.overrides.get('add', [])
         if add_list:
             # Parse add_list to handle multi-word flags properly
             for add_item in add_list:
+                # Perform template substitution
+                substituted_item = self._substitute_templates(add_item, context)
                 # Split on spaces to handle flags with arguments
-                add_flags = add_item.split()
+                add_flags = substituted_item.split()
                 filtered_flags.extend(add_flags)
         
         return filtered_flags
+    
+    def _substitute_templates(self, template_str: str, context: dict) -> str:
+        """
+        Substitute template variables in a string.
+        
+        Args:
+            template_str: String containing template variables like {rankfile_path}
+            context: Dictionary mapping variable names to values
+            
+        Returns:
+            String with substituted values
+        """
+        result = template_str
+        for key, value in context.items():
+            placeholder = "{" + key + "}"
+            if placeholder in result:
+                result = result.replace(placeholder, str(value))
+        return result
     
     def _filter_disabled_flags(self, flags: list[str], disable_list: list[str]) -> list[str]:
         """

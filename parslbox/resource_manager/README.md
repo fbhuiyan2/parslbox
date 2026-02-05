@@ -107,8 +107,31 @@ vasp:
 
 Rules:
 - `disable`: accepts substrings (e.g., `"rankfile"`) or exact flags (e.g., `"--rankfile"`, `"-H"`). If matched, the flag and its argument (if present) are removed.
-- `add`: list of full flag strings to append; each item is split on spaces to preserve flag-argument pairs.
+- `add`: list of full flag strings to append; each item is split on spaces to preserve flag-argument pairs. Supports template variables (see below).
 - Absent or empty `mpi_overrides` means no changes to defaults.
+
+### Template Variables in `add`
+
+The `add` list supports template variables that are substituted at runtime:
+
+| Variable | Description |
+|----------|-------------|
+| `{rankfile_path}` | Path to the generated rankfile |
+| `{wrapper_path}` | Path to the GPU wrapper script |
+| `{hostlist}` | Comma-separated list of hostnames |
+| `{total_ranks}` | Total number of MPI ranks |
+
+Example: OpenMPI 4.x compatibility (uses `--rankfile` instead of `--map-by rankfile:file=...`):
+```yaml
+lammps:
+  lcrc-swing:
+    executable_path: "/path/to/lmp"
+    environment_setup: |
+      module load openmpi
+    mpi_overrides:
+      disable: ["--map-by"]                    # Remove OpenMPI 5.x style rankfile flag
+      add: ["--rankfile {rankfile_path}"]      # Add OpenMPI 4.x style rankfile flag
+```
 
 ## Environment Exports for GPU Jobs
 

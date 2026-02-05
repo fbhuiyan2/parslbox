@@ -186,4 +186,23 @@ lammps:
 #     mpi_overrides:
 #       disable: ["rankfile", "-H"]
 #       # add: ["--mca btl ^openib"]  # Optional: add custom MPI flags
+
+# --- Example for systems with older OpenMPI (4.x) ---
+# OpenMPI 4.x uses --rankfile instead of --map-by rankfile:file=...
+# Use mpi_overrides with template variables to fix this:
+#
+# lammps:
+#   lcrc-swing:
+#     executable_path: "/path/to/lmp"
+#     environment_setup: |
+#       module load openmpi
+#     mpi_overrides:
+#       disable: ["--map-by"]                    # Remove OpenMPI 5.x style flag
+#       add: ["--rankfile {rankfile_path}"]      # Add OpenMPI 4.x style flag
+#
+# Available template variables for mpi_overrides.add:
+#   {rankfile_path} - Path to the generated rankfile
+#   {wrapper_path}  - Path to the GPU wrapper script
+#   {hostlist}      - Comma-separated list of hostnames
+#   {total_ranks}   - Total number of MPI ranks
 """
