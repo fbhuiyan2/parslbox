@@ -205,4 +205,17 @@ lammps:
 #   {wrapper_path}  - Path to the GPU wrapper script
 #   {hostlist}      - Comma-separated list of hostnames
 #   {total_ranks}   - Total number of MPI ranks
+#
+# --- Example to disable GPU wrapper ---
+# If your application handles GPU assignment internally (e.g., via Kokkos),
+# you can disable the GPU wrapper script:
+#
+# lammps:
+#   lcrc-swing:
+#     executable_path: "/path/to/lmp"
+#     environment_setup: |
+#       module load openmpi
+#     mpi_overrides:
+#       disable: ["gpu-wrapper"]                 # Disable GPU wrapper script
+#       add: ["--map-by rankfile:file={rankfile_path}:OVERSUBSCRIBE"]
 """

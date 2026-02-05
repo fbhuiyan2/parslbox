@@ -87,9 +87,14 @@ class MPICommandBuilder:
         # This happens BEFORE the wrapper is appended
         flags = self._apply_overrides(flags, context)
         
+        # Check if GPU wrapper should be disabled via mpi_overrides
+        disable_list = self.overrides.get('disable', [])
+        wrapper_disabled = any('gpu-wrapper' in rule for rule in disable_list)
+        
         # Append wrapper script path AFTER overrides are applied
         # This ensures wrapper comes after all MPI flags (including those from 'add')
-        if context.get('wrapper_path'):
+        # Skip if 'gpu-wrapper' is in the disable list
+        if context.get('wrapper_path') and not wrapper_disabled:
             flags.append(context['wrapper_path'])
         
         # Build final command

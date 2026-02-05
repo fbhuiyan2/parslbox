@@ -107,6 +107,7 @@ vasp:
 
 Rules:
 - `disable`: accepts substrings (e.g., `"rankfile"`) or exact flags (e.g., `"--rankfile"`, `"-H"`). If matched, the flag and its argument (if present) are removed.
+  - Special value `"gpu-wrapper"`: disables the GPU wrapper script entirely (useful when the application handles GPU assignment internally).
 - `add`: list of full flag strings to append; each item is split on spaces to preserve flag-argument pairs. Supports template variables (see below).
 - Absent or empty `mpi_overrides` means no changes to defaults.
 
@@ -131,6 +132,18 @@ lammps:
     mpi_overrides:
       disable: ["--map-by"]                    # Remove OpenMPI 5.x style rankfile flag
       add: ["--rankfile {rankfile_path}"]      # Add OpenMPI 4.x style rankfile flag
+```
+
+Example: Disable GPU wrapper (let application handle GPU assignment internally):
+```yaml
+lammps:
+  lcrc-swing:
+    executable_path: "/path/to/lmp"
+    environment_setup: |
+      module load openmpi
+    mpi_overrides:
+      disable: ["gpu-wrapper"]                 # Disable GPU wrapper script
+      add: ["--map-by rankfile:file={rankfile_path}:OVERSUBSCRIBE"]
 ```
 
 ## Environment Exports for GPU Jobs
