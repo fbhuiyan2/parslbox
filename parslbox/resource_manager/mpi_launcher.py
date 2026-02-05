@@ -52,6 +52,11 @@ class MPICommandBuilder:
         """
         Build complete MPI command by calling individual flag builders and applying overrides.
         
+        The order of operations ensures that:
+        1. MPI flags are built (without wrapper/executable)
+        2. Overrides (disable/add) are applied to MPI flags
+        3. Wrapper script path is appended last (so it comes after all MPI flags)
+        
         Args:
             assignment: Resource assignment for the job
             system_config: System configuration
@@ -65,6 +70,7 @@ class MPICommandBuilder:
         context = {}  # Template context for override substitution
         
         # Build each type of flag based on launcher type
+        # Note: wrapper_path is stored in context, NOT appended to flags
         if self.launcher_type == "mpirun":
             flags, context = self._build_mpirun_flags(assignment, system_config, job_spec, job_path)
         elif self.launcher_type == "mpiexec":
@@ -73,11 +79,18 @@ class MPICommandBuilder:
             flags = self._build_srun_flags(assignment, system_config, job_spec)
             context = {
                 'hostlist': ",".join(assignment.hostnames),
-                'total_ranks': job_spec.get_total_ranks()
+                'total_ranks': job_spec.get_total_ranks(),
+                'wrapper_path': None
             }
         
         # Apply overrides with context for template substitution
+        # This happens BEFORE the wrapper is appended
         flags = self._apply_overrides(flags, context)
+        
+        # Append wrapper script path AFTER overrides are applied
+        # This ensures wrapper comes after all MPI flags (including those from 'add')
+        if context.get('wrapper_path'):
+            flags.append(context['wrapper_path'])
         
         # Build final command
         command = f"{self.launcher_type} {' '.join(flags)}"
@@ -125,10 +138,11 @@ class MPICommandBuilder:
             flags.extend(["--map-by", f"rankfile:file={rankfile_path}"])
             
             if job_spec.is_gpu_job():
-                # GPU job: add wrapper for GPU assignment
+                # GPU job: generate wrapper for GPU assignment
+                # Note: wrapper_path is stored in context and appended by build_command()
+                # AFTER overrides are applied, ensuring correct flag ordering
                 wrapper_path = generate_openmpi_gpu_wrapper(assignment, system_config, job_spec, job_path)
                 context['wrapper_path'] = wrapper_path
-                flags.append(wrapper_path)
         
         return flags, context
     
@@ -187,9 +201,11 @@ class MPICommandBuilder:
                     flags.extend(["--cpu-bind", f"list:{':'.join(cpu_bind_list)}"])
                 
                 if job_spec.is_gpu_job():
+                    # GPU job: generate wrapper for GPU assignment
+                    # Note: wrapper_path is stored in context and appended by build_command()
+                    # AFTER overrides are applied, ensuring correct flag ordering
                     wrapper_path = generate_mpiexec_gpu_wrapper(assignment, system_config, job_spec, job_path)
                     context['wrapper_path'] = wrapper_path
-                    flags.append(wrapper_path)
         else:
             # Multi-node
             flags.extend(["-hosts", hostlist])
@@ -213,9 +229,11 @@ class MPICommandBuilder:
                 flags.extend(["--rankfile", rankfile_path])
                 
                 if job_spec.is_gpu_job():
+                    # GPU job: generate wrapper for GPU assignment
+                    # Note: wrapper_path is stored in context and appended by build_command()
+                    # AFTER overrides are applied, ensuring correct flag ordering
                     wrapper_path = generate_mpiexec_gpu_wrapper(assignment, system_config, job_spec, job_path)
                     context['wrapper_path'] = wrapper_path
-                    flags.append(wrapper_path)
         
         return flags, context
     
