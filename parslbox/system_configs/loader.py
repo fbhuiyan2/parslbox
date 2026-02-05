@@ -8,6 +8,7 @@ from parslbox.system_configs.sophia import SophiaConfig
 from parslbox.system_configs.crux import CruxConfig
 from parslbox.system_configs.aurora_tile import AuroraTileConfig
 from parslbox.system_configs.aurora_gpu import AuroraGpuConfig
+from parslbox.system_configs.lcrc_swing import LcrcSwingConfig
 
 # Create a dictionary that maps the config name to its configuration class
 CONFIG_FACTORIES = {
@@ -16,6 +17,7 @@ CONFIG_FACTORIES = {
     "crux": CruxConfig,
     "aurora-tile": AuroraTileConfig,
     "aurora-gpu": AuroraGpuConfig,
+    "lcrc-swing": LcrcSwingConfig,
     # To add a new system, create its module and add it here.
 }
 
