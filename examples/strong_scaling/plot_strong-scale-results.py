@@ -18,12 +18,14 @@ Examples:
 """
 
 import argparse
+import math
 import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import matplotlib.pyplot as plt
 import matplotlib.style as mplstyle
+import matplotlib.ticker as ticker
 import numpy as np
 import pandas as pd
 
@@ -69,6 +71,120 @@ class LammpsStrongScaleAnalyzer:
             'axes.grid': False,
             'axes.axisbelow': True
         })
+    
+    def _calculate_x_axis_params(self, max_gpu: int) -> Tuple[float, float, float]:
+        """
+        Calculate x-axis limits and tick intervals based on max GPU count.
+        
+        Args:
+            max_gpu: Maximum GPU count in the data
+            
+        Returns:
+            Tuple of (xlim_max, major_tick_interval, minor_tick_interval)
+        """
+        if max_gpu <= 100:
+            xlim_max = 100
+            major_tick_interval = 10
+            minor_tick_interval = 2  # 4 minor ticks between majors (10/5 = 2)
+        elif max_gpu <= 1000:
+            xlim_max = math.ceil(max_gpu / 100) * 100
+            major_tick_interval = 50
+            minor_tick_interval = 10  # 4 minor ticks between majors (50/5 = 10)
+        else:
+            xlim_max = math.ceil(max_gpu / 500) * 500
+            major_tick_interval = 100
+            minor_tick_interval = 20  # 4 minor ticks between majors (100/5 = 20)
+        
+        return xlim_max, major_tick_interval, minor_tick_interval
+    
+    def _calculate_y_axis_params_performance(self, max_value: float, is_ns_per_day: bool = False) -> Tuple[float, float, float]:
+        """
+        Calculate y-axis limits and tick intervals for performance plots.
+        
+        Args:
+            max_value: Maximum value in the data
+            is_ns_per_day: True for ns/day plot, False for timesteps/s plot
+            
+        Returns:
+            Tuple of (ylim_max, major_tick_interval, minor_tick_interval)
+        """
+        if is_ns_per_day:
+            # Round to nearest 0.5
+            ylim_max = math.ceil(max_value * 2) / 2
+            if max_value < 0.5:
+                major_tick_interval = 0.1
+                minor_tick_interval = 0.05  # 1 minor tick between majors (0.1/2 = 0.05)
+            else:
+                major_tick_interval = 0.25
+                minor_tick_interval = 0.125  # 1 minor tick between majors (0.25/2 = 0.125)
+        else:
+            # Round to nearest 10
+            ylim_max = math.ceil(max_value / 10) * 10
+            if max_value < 50:
+                major_tick_interval = 5
+                minor_tick_interval = 1  # 4 minor ticks between majors (5/5 = 1)
+            else:
+                major_tick_interval = 10
+                minor_tick_interval = 2  # 4 minor ticks between majors (10/5 = 2)
+        
+        return ylim_max, major_tick_interval, minor_tick_interval
+    
+    def _calculate_y_axis_params_speedup(self, max_speedup: float) -> Tuple[float, float, float]:
+        """
+        Calculate y-axis limits and tick intervals for speedup plot.
+        
+        Args:
+            max_speedup: Maximum actual speedup value in the data
+            
+        Returns:
+            Tuple of (ylim_max, major_tick_interval, minor_tick_interval)
+        """
+        # Round to nearest ceiling 50s
+        ylim_max = math.ceil(max_speedup / 50) * 50
+        
+        # Determine tick intervals based on range
+        if ylim_max <= 100:
+            major_tick_interval = 10
+            minor_tick_interval = 2  # 4 minor ticks between majors (10/5 = 2)
+        else:
+            major_tick_interval = 25
+            minor_tick_interval = 5  # 4 minor ticks between majors (25/5 = 5)
+        
+        return ylim_max, major_tick_interval, minor_tick_interval
+    
+    def _setup_axis_ticks(self, ax, xlim_max: float, ylim_max: float, 
+                         x_major: float, x_minor: float, 
+                         y_major: float, y_minor: float):
+        """
+        Set up axis limits and tick formatting for a plot.
+        
+        Args:
+            ax: Matplotlib axis object
+            xlim_max: Maximum x-axis limit
+            ylim_max: Maximum y-axis limit
+            x_major: Major tick interval for x-axis
+            x_minor: Minor tick interval for x-axis
+            y_major: Major tick interval for y-axis
+            y_minor: Minor tick interval for y-axis
+        """
+        # Set axis limits
+        ax.set_xlim(0, xlim_max)
+        ax.set_ylim(0, ylim_max)
+        
+        # Set major and minor ticks
+        ax.xaxis.set_major_locator(ticker.MultipleLocator(x_major))
+        ax.xaxis.set_minor_locator(ticker.MultipleLocator(x_minor))
+        ax.yaxis.set_major_locator(ticker.MultipleLocator(y_major))
+        ax.yaxis.set_minor_locator(ticker.MultipleLocator(y_minor))
+        
+        # Enable ticks on all sides
+        ax.tick_params(which='both', top=True, right=True, bottom=True, left=True)
+        ax.tick_params(which='major', length=6, width=1.5)
+        ax.tick_params(which='minor', length=3, width=1)
+        
+        # Enable grid for major ticks only
+        ax.grid(True, which='major', alpha=0.3)
+        ax.grid(False, which='minor')
     
     def find_gpu_directories(self) -> List[int]:
         """
@@ -262,29 +378,36 @@ class LammpsStrongScaleAnalyzer:
         timesteps_per_s = [performance_data[gpu]['timesteps_per_s'] for gpu in gpu_counts]
         ns_per_day = [performance_data[gpu]['ns_per_day'] for gpu in gpu_counts]
         
+        # Calculate axis parameters
+        max_gpu = max(gpu_counts)
+        max_timesteps = max(timesteps_per_s)
+        max_ns_per_day = max(ns_per_day)
+        
+        x_lim_max, x_major, x_minor = self._calculate_x_axis_params(max_gpu)
+        y1_lim_max, y1_major, y1_minor = self._calculate_y_axis_params_performance(max_timesteps, is_ns_per_day=False)
+        y2_lim_max, y2_major, y2_minor = self._calculate_y_axis_params_performance(max_ns_per_day, is_ns_per_day=True)
+        
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 12))
         
         # Timesteps/s plot
         ax1.plot(gpu_counts, timesteps_per_s, 'o-', color='blue', label='Timesteps/s')
         ax1.set_xlabel('Number of GPUs')
         ax1.set_ylabel('Timesteps per Second')
-        ax1.set_title('LAMMPS Performance: Timesteps per Second vs GPU Count')
-        ax1.grid(True, alpha=0.3)
+        #ax1.set_title('LAMMPS Performance: Timesteps per Second vs GPU Count')
         ax1.legend()
         
-        # Set integer ticks for GPU count
-        ax1.set_xticks(gpu_counts)
+        # Set up axis formatting for timesteps/s plot
+        self._setup_axis_ticks(ax1, x_lim_max, y1_lim_max, x_major, x_minor, y1_major, y1_minor)
         
         # ns/day plot
         ax2.plot(gpu_counts, ns_per_day, 'o-', color='green', label='ns/day')
         ax2.set_xlabel('Number of GPUs')
         ax2.set_ylabel('Nanoseconds per Day')
-        ax2.set_title('LAMMPS Performance: ns/day vs GPU Count')
-        ax2.grid(True, alpha=0.3)
+        #ax2.set_title('LAMMPS Performance: ns/day vs GPU Count')
         ax2.legend()
         
-        # Set integer ticks for GPU count
-        ax2.set_xticks(gpu_counts)
+        # Set up axis formatting for ns/day plot
+        self._setup_axis_ticks(ax2, x_lim_max, y2_lim_max, x_major, x_minor, y2_major, y2_minor)
         
         plt.tight_layout()
         
@@ -308,6 +431,19 @@ class LammpsStrongScaleAnalyzer:
         speedup_timesteps = [efficiency_data[gpu]['speedup_timesteps'] for gpu in gpu_counts]
         efficiency_timesteps = [efficiency_data[gpu]['efficiency_timesteps'] for gpu in gpu_counts]
         
+        # Calculate axis parameters
+        max_gpu = max(gpu_counts)
+        max_actual_speedup = max(speedup_timesteps)  # Use actual speedup, not ideal
+        max_efficiency = max(efficiency_timesteps)
+        
+        x_lim_max, x_major, x_minor = self._calculate_x_axis_params(max_gpu)
+        y1_lim_max, y1_major, y1_minor = self._calculate_y_axis_params_speedup(max_actual_speedup)
+        
+        # For efficiency plot, use 0-110% or slightly above max efficiency
+        efficiency_ylim_max = max(110, math.ceil(max_efficiency / 10) * 10)
+        efficiency_major = 10 if efficiency_ylim_max <= 100 else 20
+        efficiency_minor = 2.5 if efficiency_ylim_max <= 100 else 5
+        
         # Ideal scaling line
         baseline_gpu = gpu_counts[0]
         ideal_speedup = [gpu / baseline_gpu for gpu in gpu_counts]
@@ -319,21 +455,22 @@ class LammpsStrongScaleAnalyzer:
         ax1.plot(gpu_counts, ideal_speedup, '--', color='gray', linewidth=2, label='Ideal Speedup')
         ax1.set_xlabel('Number of GPUs')
         ax1.set_ylabel('Speedup Factor')
-        ax1.set_title('LAMMPS Strong Scaling: Speedup vs GPU Count')
-        ax1.grid(True, alpha=0.3)
+        #ax1.set_title('LAMMPS Strong Scaling: Speedup vs GPU Count')
         ax1.legend()
-        ax1.set_xticks(gpu_counts)
+        
+        # Set up axis formatting for speedup plot
+        self._setup_axis_ticks(ax1, x_lim_max, y1_lim_max, x_major, x_minor, y1_major, y1_minor)
         
         # Efficiency plot
         ax2.plot(gpu_counts, efficiency_timesteps, 'o-', color='green', linewidth=2, label='Scaling Efficiency')
         ax2.axhline(y=100, color='gray', linestyle='--', linewidth=2, label='Ideal Efficiency (100%)')
         ax2.set_xlabel('Number of GPUs')
         ax2.set_ylabel('Scaling Efficiency (%)')
-        ax2.set_title('LAMMPS Strong Scaling: Efficiency vs GPU Count')
-        ax2.grid(True, alpha=0.3)
+        #ax2.set_title('LAMMPS Strong Scaling: Efficiency vs GPU Count')
         ax2.legend()
-        ax2.set_xticks(gpu_counts)
-        ax2.set_ylim(0, max(110, max(efficiency_timesteps) * 1.1))
+        
+        # Set up axis formatting for efficiency plot
+        self._setup_axis_ticks(ax2, x_lim_max, efficiency_ylim_max, x_major, x_minor, efficiency_major, efficiency_minor)
         
         plt.tight_layout()
         

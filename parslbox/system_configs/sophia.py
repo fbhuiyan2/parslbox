@@ -101,9 +101,9 @@ class SophiaConfig(SystemConfig):
         # Use provided max_workers or fall back to default calculation
         # Cap at system maximum to prevent oversubscription
         if max_workers is not None:
-            max_workers_per_node = min(max_workers, self.MAX_WORKERS_PER_NODE * nodes)
+            max_workers_per_node = min(max_workers, detected_gpus_per_node) # because Sophia allows sub-node GPU allocation #self.MAX_WORKERS_PER_NODE * nodes)
         else:
-            max_workers_per_node = self.MAX_WORKERS_PER_NODE * nodes    # Because LocalProvider does not launch workers on compute nodes.
+            max_workers_per_node = detected_gpus_per_node #self.MAX_WORKERS_PER_NODE * nodes    # Because LocalProvider does not launch workers on compute nodes.
                                                                         # It only launches workers on the first node where the Parsl manager is running.
 
         # Calculate how many physical cores each worker (mapped to a GPU) gets
