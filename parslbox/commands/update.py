@@ -120,6 +120,39 @@ def update_jobs(
             if current_ngpus > 0:
                 failed_jobs.append((job_id, f"Cannot set node_occupancy for job {job_id} which currently has {current_ngpus} GPUs. Set ngpus=0 first."))
     
+    # Handle GPU scaling when nnodes is updated without explicit ngpus
+    # This needs to be done per-job since each job may have different GPU configurations
+    per_job_gpu_updates = {}  # Maps job_id -> new_ngpus value
+    
+    if nnodes is not None and ngpus is None:
+        # Check if any jobs are GPU jobs that need GPU count adjustment
+        jobs = database.get_jobs_by_ids(db_path, job_ids)
+        for job in jobs:
+            job_id = job['job_id']
+            current_ngpus = job.get('ngpus', 0)
+            current_nnodes = job.get('num_nodes', 1)
+            
+            if current_ngpus > 0:  # This is a GPU job
+                if current_nnodes == 1 and nnodes > 1:
+                    # Case 2: Single-node → Multi-node
+                    failed_jobs.append((job_id, 
+                        f"Cannot automatically scale GPU job {job_id} from 1 to {nnodes} nodes. "
+                        f"Please use -g flag to specify total GPUs (total_gpus = nnodes * gpus_per_node)."))
+                elif current_nnodes > 1:
+                    # Case 1: Multi-node → different node count
+                    gpus_per_node = current_ngpus / current_nnodes
+                    if not gpus_per_node.is_integer():
+                        failed_jobs.append((job_id,
+                            f"Job {job_id} has {current_ngpus} GPUs across {current_nnodes} nodes "
+                            f"({gpus_per_node:.2f} GPUs per node - not an integer). "
+                            f"Cannot auto-scale. Please use -g flag to specify total GPUs."))
+                    else:
+                        # Auto-calculate new GPU count for this job
+                        new_ngpus = int(gpus_per_node * nnodes)
+                        per_job_gpu_updates[job_id] = new_ngpus
+                        info_messages.append(
+                            f"Auto-scaling job {job_id}: {current_ngpus} GPUs on {current_nnodes} nodes "
+                            f"→ {new_ngpus} GPUs on {nnodes} nodes ({int(gpus_per_node)} GPUs/node)")
         
     # Remove failed job IDs from the list to process
     if failed_jobs:
@@ -193,21 +226,44 @@ def update_jobs(
         existing_job_ids = [job['job_id'] for job in existing_jobs]
         
         if existing_job_ids:
-            updated_count = database.update_jobs(
-                db_path=db_path,
-                job_ids=existing_job_ids,
-                status=status,
-                tag=tag,
-                in_file=final_input_file,
-                ngpus=final_ngpus,
-                env_file=final_env_file,
-                num_nodes=nnodes,
-                node_occupancy=final_node_occupancy,
-                ranks_per_node=ranks_per_node
-            )
-            # If update was successful, all existing jobs were updated
-            if updated_count > 0:
-                non_dependency_updated_job_ids = existing_job_ids
+            # Check if we have per-job GPU updates (from auto-scaling)
+            if per_job_gpu_updates:
+                # Update jobs individually when they have different GPU counts
+                for job_id in existing_job_ids:
+                    # Use per-job GPU value if available, otherwise use the common value
+                    job_ngpus = per_job_gpu_updates.get(job_id, final_ngpus)
+                    
+                    updated_count = database.update_jobs(
+                        db_path=db_path,
+                        job_ids=[job_id],
+                        status=status,
+                        tag=tag,
+                        in_file=final_input_file,
+                        ngpus=job_ngpus,
+                        env_file=final_env_file,
+                        num_nodes=nnodes,
+                        node_occupancy=final_node_occupancy,
+                        ranks_per_node=ranks_per_node
+                    )
+                    if updated_count > 0:
+                        non_dependency_updated_job_ids.append(job_id)
+            else:
+                # No per-job GPU updates - update all jobs with same values
+                updated_count = database.update_jobs(
+                    db_path=db_path,
+                    job_ids=existing_job_ids,
+                    status=status,
+                    tag=tag,
+                    in_file=final_input_file,
+                    ngpus=final_ngpus,
+                    env_file=final_env_file,
+                    num_nodes=nnodes,
+                    node_occupancy=final_node_occupancy,
+                    ranks_per_node=ranks_per_node
+                )
+                # If update was successful, all existing jobs were updated
+                if updated_count > 0:
+                    non_dependency_updated_job_ids = existing_job_ids
     
     # Combine all updated job IDs and remove duplicates
     all_updated_job_ids = list(set(dependency_updated_job_ids + non_dependency_updated_job_ids))
