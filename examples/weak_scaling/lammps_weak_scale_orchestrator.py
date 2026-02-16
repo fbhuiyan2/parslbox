@@ -1,25 +1,28 @@
 #!/usr/bin/env python3
 """
-LAMMPS Strong Scaling Orchestrator for ParslBox
+LAMMPS Weak Scaling Orchestrator for ParslBox
 
-This script automates the creation of LAMMPS strong scaling test jobs.
-It creates directory structures for different GPU counts, copies necessary files,
-and adds jobs to pbx with proper dependencies for strong scaling analysis.
+This script automates the creation of LAMMPS weak scaling test jobs.
+It creates directory structures for different GPU/core counts, replicates the
+atomic structure to maintain constant atoms per compute unit, and adds jobs
+to pbx with proper dependencies for weak scaling analysis.
 
 Usage:
-    python lammps_strong_scale_orchestrator.py <config_name> --gpus 1 2 4 --fstruct model.lmp --ff forcefield.dat [--in in.lammps]
+    python lammps_weak_scale_orchestrator.py <config_name> --gpus 1 2 4 --fstruct small.lmp --ff forcefield.dat [options]
+    python lammps_weak_scale_orchestrator.py <config_name> --cores 1 8 64 --fstruct small.lmp --ff forcefield.dat [options]
 
 Examples:
-    python lammps_strong_scale_orchestrator.py polaris --gpus 1 2 4 --fstruct data.lmp --ff pair_coeff.dat
-    python lammps_strong_scale_orchestrator.py crux --gpus 1 2 --fstruct model.lmp --ff forcefield.dat --in in.friction
+    python lammps_weak_scale_orchestrator.py polaris --gpus 1 2 4 --fstruct data.lmp --ff pair_coeff.dat
+    python lammps_weak_scale_orchestrator.py sophia --cores 1 8 64 128 --fstruct small.lmp --ff forcefield.dat --natoms-per-unit 500
 """
 
 import argparse
 import math
+import re
 import shutil
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple, Dict
 
 # Import parslbox modules
 sys.path.append(str(Path(__file__).parent.parent.parent))
@@ -28,12 +31,12 @@ from parslbox.utils.pbx_config_utils import load_app_config
 from parslbox.system_configs.loader import get_system_config
 
 
-class LammpsStrongScaleOrchestrator:
-    """Main class for creating LAMMPS strong scaling test jobs."""
+class LammpsWeakScaleOrchestrator:
+    """Main class for creating LAMMPS weak scaling test jobs."""
     
-    def __init__(self, config_name: str, scaling_mode: str, tag: str = "strong_scale"):
+    def __init__(self, config_name: str, scaling_mode: str, tag: str = "weak_scale"):
         """
-        Initialize the strong scaling orchestrator.
+        Initialize the weak scaling orchestrator.
         
         Args:
             config_name: Name of the system configuration (e.g., 'polaris', 'crux')
@@ -44,9 +47,9 @@ class LammpsStrongScaleOrchestrator:
         self.scaling_mode = scaling_mode
         self.tag = tag
         self.system_config = get_system_config(config_name)
-        self.created_jobs = []  # Track created job IDs for parent assignment
+        self.created_jobs = []
         self.base_dir = Path.cwd()
-        self.pbx = ParslBox()  # Initialize ParslBox API
+        self.pbx = ParslBox()
         
         # Validate LAMMPS is configured
         self._validate_lammps_config()
@@ -72,9 +75,6 @@ class LammpsStrongScaleOrchestrator:
         """
         Validate that scale counts are compatible with multi-node requirements.
         
-        For multi-node jobs, ParslBox automatically uses all GPUs/cores on allocated nodes.
-        Therefore, counts must be multiples of units_per_node for multi-node cases.
-        
         Args:
             scale_counts: List of GPU/core counts to validate
             
@@ -95,9 +95,144 @@ class LammpsStrongScaleOrchestrator:
                         f"(e.g., {units_per_node}, {units_per_node*2}, {units_per_node*3}, etc.)."
                     )
     
+    def parse_lammps_data_file(self, file_path: Path) -> Dict[str, any]:
+        """
+        Parse LAMMPS data file to extract atom count and box information.
+        
+        Args:
+            file_path: Path to LAMMPS data file
+            
+        Returns:
+            Dictionary with 'natoms' and 'box_bounds' keys
+            
+        Raises:
+            ValueError: If file cannot be parsed or is invalid
+        """
+        if not file_path.exists():
+            raise FileNotFoundError(f"LAMMPS data file not found: {file_path}")
+        
+        natoms = None
+        box_bounds = {}
+        
+        try:
+            with open(file_path, 'r') as f:
+                lines = f.readlines()
+            
+            for line in lines:
+                line = line.strip()
+                
+                # Extract atom count
+                if 'atoms' in line and natoms is None:
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        natoms = int(parts[0])
+                
+                # Extract box bounds
+                if 'xlo xhi' in line:
+                    parts = line.split()
+                    box_bounds['x'] = (float(parts[0]), float(parts[1]))
+                elif 'ylo yhi' in line:
+                    parts = line.split()
+                    box_bounds['y'] = (float(parts[0]), float(parts[1]))
+                elif 'zlo zhi' in line:
+                    parts = line.split()
+                    box_bounds['z'] = (float(parts[0]), float(parts[1]))
+            
+            if natoms is None:
+                raise ValueError("Could not find atom count in LAMMPS data file")
+            
+            if len(box_bounds) != 3:
+                raise ValueError("Could not find complete box bounds in LAMMPS data file")
+            
+            # Calculate box volume
+            lx = box_bounds['x'][1] - box_bounds['x'][0]
+            ly = box_bounds['y'][1] - box_bounds['y'][0]
+            lz = box_bounds['z'][1] - box_bounds['z'][0]
+            volume = lx * ly * lz
+            
+            return {
+                'natoms': natoms,
+                'box_bounds': box_bounds,
+                'box_volume': volume,
+                'box_dimensions': (lx, ly, lz)
+            }
+            
+        except Exception as e:
+            raise ValueError(f"Error parsing LAMMPS data file: {e}")
+    
+    def calculate_replication_factors(self, initial_atoms: int, target_atoms: int) -> Tuple[int, int, int]:
+        """
+        Calculate optimal replication factors (nx, ny, nz) to get closest to target atoms.
+        
+        Uses non-cubic replication to minimize difference from target atom count.
+        
+        Args:
+            initial_atoms: Number of atoms in original structure
+            target_atoms: Target number of atoms
+            
+        Returns:
+            Tuple of (nx, ny, nz) replication factors
+        """
+        if target_atoms <= initial_atoms:
+            return (1, 1, 1)
+        
+        scale_factor = target_atoms / initial_atoms
+        
+        # Start with cubic replication as baseline
+        base = round(scale_factor ** (1/3))
+        
+        # Try different combinations to find closest match
+        best_factors = (base, base, base)
+        best_diff = abs(initial_atoms * base**3 - target_atoms)
+        
+        # Search range around base value
+        search_range = max(1, base // 2)
+        for nx in range(max(1, base - search_range), base + search_range + 1):
+            for ny in range(max(1, base - search_range), base + search_range + 1):
+                for nz in range(max(1, base - search_range), base + search_range + 1):
+                    actual_atoms = initial_atoms * nx * ny * nz
+                    diff = abs(actual_atoms - target_atoms)
+                    
+                    if diff < best_diff:
+                        best_diff = diff
+                        best_factors = (nx, ny, nz)
+        
+        return best_factors
+    
+    def create_modified_input_file(self, original_input: Path, replicate_factors: Tuple[int, int, int],
+                                   output_path: Path) -> None:
+        """
+        Create modified LAMMPS input file with replicate command inserted.
+        
+        Args:
+            original_input: Path to original input file
+            replicate_factors: Tuple of (nx, ny, nz) for replication
+            output_path: Path where modified input file should be written
+        """
+        with open(original_input, 'r') as f:
+            lines = f.readlines()
+        
+        # Find the line with read_data command
+        modified_lines = []
+        replicate_inserted = False
+        
+        for line in lines:
+            modified_lines.append(line)
+            
+            # Insert replicate command after read_data
+            if not replicate_inserted and line.strip().startswith('read_data'):
+                nx, ny, nz = replicate_factors
+                if nx > 1 or ny > 1 or nz > 1:
+                    modified_lines.append(f"replicate {nx} {ny} {nz}\n")
+                    replicate_inserted = True
+        
+        # Write modified input file
+        with open(output_path, 'w') as f:
+            f.writelines(modified_lines)
+    
     def setup_directories(self, scale_counts: List[int]):
         """
-        Create scale-specific directories for strong scaling tests.
+        Create scale-specific directories for weak scaling tests.
         
         Args:
             scale_counts: List of GPU/core counts to create directories for
@@ -111,18 +246,21 @@ class LammpsStrongScaleOrchestrator:
             dir_name.mkdir(exist_ok=True)
             print(f"  📁 Created {dir_name}")
     
-    def copy_input_files(self, scale_counts: List[int], input_file: str, 
-                        struct_file: str, ff_file: str):
+    def copy_and_modify_files(self, scale_counts: List[int], input_file: str,
+                             struct_file: str, ff_file: str, natoms_per_unit: int,
+                             initial_atoms: int):
         """
-        Copy input files to each scale directory.
+        Copy input files and create modified versions for each scale point.
         
         Args:
             scale_counts: List of GPU/core counts
             input_file: LAMMPS input file name
             struct_file: Structure/data file name
             ff_file: Force field file name
+            natoms_per_unit: Target atoms per GPU/core
+            initial_atoms: Number of atoms in original structure
         """
-        print("📋 Copying input files to directories...")
+        print("📋 Copying and modifying input files...")
         
         # Validate input files exist
         files_to_copy = [input_file, struct_file, ff_file]
@@ -131,34 +269,46 @@ class LammpsStrongScaleOrchestrator:
             if not file_path.exists():
                 raise FileNotFoundError(f"Required file not found: {file_name}")
         
-        # Validate analysis scripts exist in current directory
-        analysis_script = self.base_dir / "plot_strong-scale-results.py"
+        # Validate analysis scripts exist
+        analysis_script = self.base_dir / "plot_weak-scale-results.py"
         env_script = self.base_dir / "python_env-setup.sh"
         
         if not analysis_script.exists():
             raise FileNotFoundError(
-                "Analysis script 'plot_strong-scale-results.py' not found in current directory. "
-                "Please ensure both analysis scripts are present."
+                "Analysis script 'plot_weak-scale-results.py' not found in current directory."
             )
         
         if not env_script.exists():
             raise FileNotFoundError(
-                "Environment script 'python_env-setup.sh' not found in current directory. "
-                "Please ensure both analysis scripts are present."
+                "Environment script 'python_env-setup.sh' not found in current directory."
             )
         
-        # Copy files to each directory
         unit_suffix = "gpu" if self.scaling_mode == 'gpu' else "core"
         
+        # Process each scale point
         for count in scale_counts:
             dir_name = self.base_dir / f"{count}{unit_suffix}"
             
-            for file_name in files_to_copy:
-                src_file = self.base_dir / file_name
-                dst_file = dir_name / file_name
-                shutil.copy2(src_file, dst_file)
+            # Calculate target atoms and replication factors
+            target_atoms = natoms_per_unit * count
+            replicate_factors = self.calculate_replication_factors(initial_atoms, target_atoms)
+            actual_atoms = initial_atoms * replicate_factors[0] * replicate_factors[1] * replicate_factors[2]
             
-            print(f"  ✅ Copied files to {dir_name}")
+            # Copy structure file (original, will be replicated by LAMMPS)
+            shutil.copy2(self.base_dir / struct_file, dir_name / struct_file)
+            
+            # Copy force field file
+            shutil.copy2(self.base_dir / ff_file, dir_name / ff_file)
+            
+            # Create modified input file with replicate command
+            self.create_modified_input_file(
+                self.base_dir / input_file,
+                replicate_factors,
+                dir_name / input_file
+            )
+            
+            print(f"  ✅ {count}{unit_suffix}: replicate {replicate_factors[0]}x{replicate_factors[1]}x{replicate_factors[2]} "
+                  f"({actual_atoms} atoms, target: {target_atoms})")
     
     def create_lammps_jobs(self, scale_counts: List[int], input_file: str, rankspercore: int = 1):
         """
@@ -169,7 +319,7 @@ class LammpsStrongScaleOrchestrator:
             input_file: LAMMPS input file name
             rankspercore: Ranks per core (for CPU scaling)
         """
-        print("🧪 Creating LAMMPS strong scaling jobs...")
+        print("🧪 Creating LAMMPS weak scaling jobs...")
         
         parent_job_ids = None
         units_per_node = self._get_units_per_node()
@@ -178,7 +328,7 @@ class LammpsStrongScaleOrchestrator:
         for i, count in enumerate(scale_counts):
             job_dir = f"{count}{unit_suffix}"
             
-            # Calculate required nodes for this count
+            # Calculate required nodes
             required_nodes = math.ceil(count / units_per_node)
             
             # Determine job type for logging
@@ -228,9 +378,9 @@ class LammpsStrongScaleOrchestrator:
                 
                 # Success
                 if job_ids:
-                    job_id = job_ids[0]  # Should only be one job
+                    job_id = job_ids[0]
                     self.created_jobs.append(job_id)
-                    parent_job_ids = [job_id]  # This job becomes parent for next job
+                    parent_job_ids = [job_id]
                     parent_info = f" (parent: {parent_job_ids[0]})" if i > 0 else ""
                     print(f"    ✅ Added {job_dir} - {count} {unit_suffix}s, {job_type}, Job ID: {job_id}{parent_info}")
                 else:
@@ -240,7 +390,7 @@ class LammpsStrongScaleOrchestrator:
                 print(f"    ❌ Failed to add {job_dir}: {e}")
                 raise
         
-        return parent_job_ids[0] if parent_job_ids else None  # Return the last job ID for analysis job dependency
+        return parent_job_ids[0] if parent_job_ids else None
     
     def create_analysis_job(self, last_job_id: Optional[int]):
         """
@@ -252,15 +402,14 @@ class LammpsStrongScaleOrchestrator:
         print("📊 Creating analysis job...")
         
         try:
-            # Use ParslBox API to add analysis job
             job_ids, failed_jobs, msg_log = self.pbx.add_jobs(
-                paths=["."],  # Run in current directory
+                paths=["."],
                 app="python",
                 config=self.config_name,
-                input_file="plot_strong-scale-results.py",
+                input_file="plot_weak-scale-results.py",
                 env_file=str(self.base_dir / "python_env-setup.sh"),
                 tag=self.tag,
-                node_occupancy=0.1,  # Light CPU usage for analysis
+                node_occupancy=0.1,
                 parents=[last_job_id] if last_job_id is not None else None
             )
             
@@ -278,7 +427,7 @@ class LammpsStrongScaleOrchestrator:
             
             # Success
             if job_ids:
-                job_id = job_ids[0]  # Should only be one job
+                job_id = job_ids[0]
                 parent_info = f" (parent: {last_job_id})" if last_job_id else ""
                 print(f"    ✅ Added analysis job, Job ID: {job_id}{parent_info}")
             else:
@@ -288,8 +437,9 @@ class LammpsStrongScaleOrchestrator:
             print(f"    ❌ Failed to add analysis job: {e}")
             raise
     
-    def orchestrate(self, scale_counts: List[int], input_file: str, 
-                   struct_file: str, ff_file: str, rankspercore: int = 1):
+    def orchestrate(self, scale_counts: List[int], input_file: str,
+                   struct_file: str, ff_file: str, natoms_per_unit: int,
+                   rankspercore: int = 1):
         """
         Main orchestration method to set up and create all jobs.
         
@@ -298,13 +448,15 @@ class LammpsStrongScaleOrchestrator:
             input_file: LAMMPS input file name
             struct_file: Structure/data file name
             ff_file: Force field file name
+            natoms_per_unit: Target atoms per GPU/core
             rankspercore: Ranks per core (for CPU scaling)
         """
         unit_name = "GPU" if self.scaling_mode == 'gpu' else "core"
         
-        print(f"🚀 Starting LAMMPS strong scaling orchestration for {self.config_name}")
+        print(f"🚀 Starting LAMMPS weak scaling orchestration for {self.config_name}")
         print(f"   Scaling mode: {unit_name}")
         print(f"   {unit_name} counts: {scale_counts}")
+        print(f"   Atoms per {unit_name}: {natoms_per_unit}")
         print(f"   Input file: {input_file}")
         print(f"   Structure file: {struct_file}")
         print(f"   Force field file: {ff_file}")
@@ -312,14 +464,29 @@ class LammpsStrongScaleOrchestrator:
             print(f"   Ranks per core: {rankspercore}")
         print()
         
-        # Validate scale counts are compatible with multi-node requirements
+        # Validate scale counts
         self._validate_scale_counts(scale_counts)
+        
+        # Parse LAMMPS data file
+        print("📖 Parsing LAMMPS data file...")
+        data_info = self.parse_lammps_data_file(self.base_dir / struct_file)
+        initial_atoms = data_info['natoms']
+        box_volume = data_info['box_volume']
+        print(f"  ✅ Found {initial_atoms} atoms, box volume: {box_volume:.2f} Ų")
+        
+        # Validate initial structure size
+        if initial_atoms >= 100:
+            print(f"  ⚠️  Warning: Initial structure has {initial_atoms} atoms (recommended <100)")
+        if box_volume >= 1000000:  # 100³
+            print(f"  ⚠️  Warning: Box volume is {box_volume:.2f} Ų (recommended <100³)")
+        print()
         
         # Setup directories
         self.setup_directories(scale_counts)
         
-        # Copy input files
-        self.copy_input_files(scale_counts, input_file, struct_file, ff_file)
+        # Copy and modify input files
+        self.copy_and_modify_files(scale_counts, input_file, struct_file, ff_file,
+                                   natoms_per_unit, initial_atoms)
         
         # Create LAMMPS jobs with dependencies
         last_job_id = self.create_lammps_jobs(scale_counts, input_file, rankspercore)
@@ -327,7 +494,7 @@ class LammpsStrongScaleOrchestrator:
         # Create analysis job
         self.create_analysis_job(last_job_id)
         
-        print(f"\n🎉 Successfully created strong scaling test!")
+        print(f"\n🎉 Successfully created weak scaling test!")
         print(f"📁 Working directory: {self.base_dir.absolute()}")
         print(f"🏷️  Job tag: {self.tag}")
         print("\n💡 Next steps:")
@@ -338,18 +505,18 @@ class LammpsStrongScaleOrchestrator:
 
 
 def main():
-    """Main function to parse arguments and orchestrate strong scaling tests."""
+    """Main function to parse arguments and orchestrate weak scaling tests."""
     parser = argparse.ArgumentParser(
-        description="Create LAMMPS strong scaling test jobs for ParslBox",
+        description="Create LAMMPS weak scaling test jobs for ParslBox",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # GPU scaling
-  %(prog)s polaris --gpus 1 2 4 --fstruct data.lmp --ff pair_coeff.dat
-  %(prog)s polaris --gpus 1 2 4 8 --fstruct data.lmp --ff pair_coeff.dat --in in.lammps
+  %(prog)s polaris --gpus 1 2 4 --fstruct small.lmp --ff pair_coeff.dat
+  %(prog)s polaris --gpus 1 2 4 8 --fstruct data.lmp --ff forcefield.dat --natoms-per-unit 500
   
   # CPU scaling
-  %(prog)s sophia --cores 1 8 64 128 --fstruct data.lmp --ff pair_coeff.dat
+  %(prog)s sophia --cores 1 8 64 128 --fstruct small.lmp --ff pair_coeff.dat
   %(prog)s sophia --cores 1 8 64 --fstruct data.lmp --ff forcefield.dat --rankspercore 2
         """
     )
@@ -366,21 +533,21 @@ Examples:
         nargs="+",
         type=int,
         metavar="N",
-        help="GPU counts for strong scaling test (e.g., --gpus 1 2 4)"
+        help="GPU counts for weak scaling test (e.g., --gpus 1 2 4)"
     )
     scaling_group.add_argument(
         "--cores",
         nargs="+",
         type=int,
         metavar="N",
-        help="Core counts for strong scaling test (e.g., --cores 1 8 64)"
+        help="Core counts for weak scaling test (e.g., --cores 1 8 64)"
     )
     
     parser.add_argument(
         "--fstruct",
         required=True,
         metavar="FILE",
-        help="Structure/data file name (e.g., data.lmp, model.lmp)"
+        help="Structure/data file name (small structure <100 atoms, <100 Ų)"
     )
     
     parser.add_argument(
@@ -399,6 +566,14 @@ Examples:
     )
     
     parser.add_argument(
+        "--natoms-per-unit",
+        type=int,
+        default=250,
+        metavar="N",
+        help="Target atoms per GPU/core (default: 250)"
+    )
+    
+    parser.add_argument(
         "--rankspercore",
         type=int,
         default=1,
@@ -408,9 +583,9 @@ Examples:
     
     parser.add_argument(
         "--tag",
-        default="strong_scale",
+        default="weak_scale",
         metavar="TAG",
-        help="Tag to apply to all created jobs (default: 'strong_scale')"
+        help="Tag to apply to all created jobs (default: 'weak_scale')"
     )
     
     args = parser.parse_args()
@@ -425,14 +600,18 @@ Examples:
     
     # Validate scale counts
     if len(scale_counts) < 2:
-        parser.error("At least 2 scale points are required for strong scaling analysis")
+        parser.error("At least 2 scale points are required for weak scaling analysis")
     
     if any(count <= 0 for count in scale_counts):
         parser.error("All scale counts must be positive integers")
     
+    # Validate natoms_per_unit
+    if args.natoms_per_unit <= 0:
+        parser.error("--natoms-per-unit must be a positive integer")
+    
     try:
         # Create the orchestrator
-        orchestrator = LammpsStrongScaleOrchestrator(args.config_name, scaling_mode, args.tag)
+        orchestrator = LammpsWeakScaleOrchestrator(args.config_name, scaling_mode, args.tag)
         
         # Run the orchestration
         orchestrator.orchestrate(
@@ -440,6 +619,7 @@ Examples:
             input_file=args.input_file,
             struct_file=args.fstruct,
             ff_file=args.ff,
+            natoms_per_unit=args.natoms_per_unit,
             rankspercore=args.rankspercore
         )
         

@@ -5,16 +5,17 @@ LAMMPS Strong Scaling Results Analysis Script
 This script analyzes LAMMPS log files from strong scaling tests and generates
 publication-ready plots showing performance scaling and efficiency.
 
-The script looks for performance data in log.lammps files from GPU directories
+The script looks for performance data in log.lammps files from GPU/core directories
 and extracts metrics like timesteps/s and katom-step/s to calculate strong
 scaling efficiency.
 
 Usage:
-    python plot_strong-scale-results.py [--base-dir DIR] [--output-prefix PREFIX]
+    python plot_strong-scale-results.py [--base-dir DIR] [--output-prefix PREFIX] [--mode MODE]
 
 Examples:
     python plot_strong-scale-results.py
-    python plot_strong-scale-results.py --base-dir /path/to/results --output-prefix my_scaling
+    python plot_strong-scale-results.py --mode gpu
+    python plot_strong-scale-results.py --mode core --output-prefix my_scaling
 """
 
 import argparse
@@ -33,16 +34,18 @@ import pandas as pd
 class LammpsStrongScaleAnalyzer:
     """Analyzer for LAMMPS strong scaling performance data."""
     
-    def __init__(self, base_dir: Path = None, output_prefix: str = "strong_scaling"):
+    def __init__(self, base_dir: Path = None, output_prefix: str = "strong_scaling", mode: str = "auto"):
         """
         Initialize the analyzer.
         
         Args:
-            base_dir: Base directory containing GPU subdirectories
+            base_dir: Base directory containing GPU/core subdirectories
             output_prefix: Prefix for output files
+            mode: Scaling mode - 'gpu', 'core', or 'auto' (auto-detect)
         """
         self.base_dir = base_dir or Path.cwd()
         self.output_prefix = output_prefix
+        self.mode = mode
         
         # Set up matplotlib for publication-ready plots
         self._setup_matplotlib()
@@ -72,26 +75,26 @@ class LammpsStrongScaleAnalyzer:
             'axes.axisbelow': True
         })
     
-    def _calculate_x_axis_params(self, max_gpu: int) -> Tuple[float, float, float]:
+    def _calculate_x_axis_params(self, max_count: int) -> Tuple[float, float, float]:
         """
-        Calculate x-axis limits and tick intervals based on max GPU count.
+        Calculate x-axis limits and tick intervals based on max GPU/core count.
         
         Args:
-            max_gpu: Maximum GPU count in the data
+            max_count: Maximum GPU/core count in the data
             
         Returns:
             Tuple of (xlim_max, major_tick_interval, minor_tick_interval)
         """
-        if max_gpu <= 100:
+        if max_count <= 100:
             xlim_max = 100
             major_tick_interval = 10
             minor_tick_interval = 2  # 4 minor ticks between majors (10/5 = 2)
-        elif max_gpu <= 1000:
-            xlim_max = math.ceil(max_gpu / 100) * 100
+        elif max_count <= 1000:
+            xlim_max = math.ceil(max_count / 100) * 100
             major_tick_interval = 50
             minor_tick_interval = 10  # 4 minor ticks between majors (50/5 = 10)
         else:
-            xlim_max = math.ceil(max_gpu / 500) * 500
+            xlim_max = math.ceil(max_count / 500) * 500
             major_tick_interval = 100
             minor_tick_interval = 20  # 4 minor ticks between majors (100/5 = 20)
         
@@ -186,25 +189,44 @@ class LammpsStrongScaleAnalyzer:
         ax.grid(True, which='major', alpha=0.3)
         ax.grid(False, which='minor')
     
-    def find_gpu_directories(self) -> List[int]:
+    def detect_scaling_mode(self) -> str:
         """
-        Find all GPU directories in the base directory.
+        Auto-detect scaling mode by checking directory names.
         
         Returns:
-            List of GPU counts found (sorted)
+            'gpu' or 'core' based on directory naming
         """
-        gpu_dirs = []
+        for item in self.base_dir.iterdir():
+            if item.is_dir():
+                if item.name.endswith('gpu'):
+                    return 'gpu'
+                elif item.name.endswith('core'):
+                    return 'core'
+        
+        raise ValueError("Could not auto-detect scaling mode. No directories ending in 'gpu' or 'core' found.")
+    
+    def find_scale_directories(self) -> List[int]:
+        """
+        Find all GPU/core directories in the base directory.
+        
+        Returns:
+            List of GPU/core counts found (sorted)
+        """
+        if self.mode == 'auto':
+            self.mode = self.detect_scaling_mode()
+        
+        suffix = 'gpu' if self.mode == 'gpu' else 'core'
+        scale_dirs = []
         
         for item in self.base_dir.iterdir():
-            if item.is_dir() and item.name.endswith('gpu'):
+            if item.is_dir() and item.name.endswith(suffix):
                 try:
-                    # Extract GPU count from directory name (e.g., "4gpu" -> 4)
-                    gpu_count = int(item.name[:-3])
-                    gpu_dirs.append(gpu_count)
+                    count = int(item.name[:-len(suffix)])
+                    scale_dirs.append(count)
                 except ValueError:
                     continue
         
-        return sorted(gpu_dirs)
+        return sorted(scale_dirs)
     
     def extract_performance_data(self, log_file: Path) -> Optional[Dict[str, float]]:
         """
@@ -289,19 +311,20 @@ class LammpsStrongScaleAnalyzer:
         Parse all log files and extract performance and timestep data.
         
         Returns:
-            Dictionary mapping GPU count to performance metrics including timestep
+            Dictionary mapping GPU/core count to performance metrics including timestep
         """
         print("📊 Parsing LAMMPS log files...")
         
-        gpu_counts = self.find_gpu_directories()
-        if not gpu_counts:
-            raise ValueError("No GPU directories found. Expected directories like '1gpu', '2gpu', etc.")
+        scale_counts = self.find_scale_directories()
+        if not scale_counts:
+            raise ValueError(f"No {self.mode} directories found. Expected directories like '1{self.mode}', '2{self.mode}', etc.")
         
         performance_data = {}
+        suffix = 'gpu' if self.mode == 'gpu' else 'core'
         
-        for gpu_count in gpu_counts:
-            gpu_dir = self.base_dir / f"{gpu_count}gpu"
-            log_file = gpu_dir / "log.lammps"
+        for count in scale_counts:
+            dir_name = self.base_dir / f"{count}{suffix}"
+            log_file = dir_name / "log.lammps"
             
             print(f"  📄 Processing {log_file}")
             
@@ -311,7 +334,7 @@ class LammpsStrongScaleAnalyzer:
             if perf_data:
                 # Add timestep data to performance data
                 perf_data['timestep'] = timestep_data
-                performance_data[gpu_count] = perf_data
+                performance_data[count] = perf_data
                 timestep_info = f", timestep: {timestep_data}" if timestep_data else ", timestep: N/A"
                 print(f"    ✅ Found performance data: {perf_data['timesteps_per_s']:.2f} timesteps/s, {perf_data['ns_per_day']:.3f} ns/day{timestep_info}")
             else:
@@ -334,39 +357,39 @@ class LammpsStrongScaleAnalyzer:
         """
         print("📈 Calculating scaling efficiency...")
         
-        gpu_counts = sorted(performance_data.keys())
-        baseline_gpu = gpu_counts[0]
-        baseline_perf = performance_data[baseline_gpu]
+        scale_counts = sorted(performance_data.keys())
+        baseline_count = scale_counts[0]
+        baseline_perf = performance_data[baseline_count]
         
         efficiency_data = {}
         
-        for gpu_count in gpu_counts:
-            perf = performance_data[gpu_count]
+        for count in scale_counts:
+            perf = performance_data[count]
             
             # Calculate speedup (performance ratio)
             speedup_timesteps = perf['timesteps_per_s'] / baseline_perf['timesteps_per_s']
             speedup_katom = perf['katom_step_per_s'] / baseline_perf['katom_step_per_s']
             
-            # Calculate efficiency (speedup / GPU ratio)
-            gpu_ratio = gpu_count / baseline_gpu
-            efficiency_timesteps = (speedup_timesteps / gpu_ratio) * 100  # Percentage
-            efficiency_katom = (speedup_katom / gpu_ratio) * 100  # Percentage
+            # Calculate efficiency (speedup / scale ratio)
+            scale_ratio = count / baseline_count
+            efficiency_timesteps = (speedup_timesteps / scale_ratio) * 100  # Percentage
+            efficiency_katom = (speedup_katom / scale_ratio) * 100  # Percentage
             
-            efficiency_data[gpu_count] = {
+            efficiency_data[count] = {
                 'speedup_timesteps': speedup_timesteps,
                 'speedup_katom': speedup_katom,
                 'efficiency_timesteps': efficiency_timesteps,
                 'efficiency_katom': efficiency_katom,
-                'gpu_ratio': gpu_ratio
+                'scale_ratio': scale_ratio
             }
             
-            print(f"  🔢 {gpu_count} GPUs: {speedup_timesteps:.2f}x speedup, {efficiency_timesteps:.1f}% efficiency")
+            print(f"  🔢 {count} {self.mode}s: {speedup_timesteps:.2f}x speedup, {efficiency_timesteps:.1f}% efficiency")
         
         return efficiency_data
     
     def create_performance_plot(self, performance_data: Dict[int, Dict[str, float]]) -> Path:
         """
-        Create performance vs GPU count plot.
+        Create performance vs GPU/core count plot.
         
         Args:
             performance_data: Performance data from parse_log_files
@@ -374,36 +397,36 @@ class LammpsStrongScaleAnalyzer:
         Returns:
             Path to saved plot file
         """
-        gpu_counts = sorted(performance_data.keys())
-        timesteps_per_s = [performance_data[gpu]['timesteps_per_s'] for gpu in gpu_counts]
-        ns_per_day = [performance_data[gpu]['ns_per_day'] for gpu in gpu_counts]
+        scale_counts = sorted(performance_data.keys())
+        timesteps_per_s = [performance_data[c]['timesteps_per_s'] for c in scale_counts]
+        ns_per_day = [performance_data[c]['ns_per_day'] for c in scale_counts]
         
         # Calculate axis parameters
-        max_gpu = max(gpu_counts)
+        max_count = max(scale_counts)
         max_timesteps = max(timesteps_per_s)
         max_ns_per_day = max(ns_per_day)
         
-        x_lim_max, x_major, x_minor = self._calculate_x_axis_params(max_gpu)
+        x_lim_max, x_major, x_minor = self._calculate_x_axis_params(max_count)
         y1_lim_max, y1_major, y1_minor = self._calculate_y_axis_params_performance(max_timesteps, is_ns_per_day=False)
         y2_lim_max, y2_major, y2_minor = self._calculate_y_axis_params_performance(max_ns_per_day, is_ns_per_day=True)
         
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 12))
         
+        unit_label = "GPUs" if self.mode == 'gpu' else "Cores"
+        
         # Timesteps/s plot
-        ax1.plot(gpu_counts, timesteps_per_s, 'o-', color='blue', label='Timesteps/s')
-        ax1.set_xlabel('Number of GPUs')
+        ax1.plot(scale_counts, timesteps_per_s, 'o-', color='blue', label='Timesteps/s')
+        ax1.set_xlabel(f'Number of {unit_label}')
         ax1.set_ylabel('Timesteps per Second')
-        #ax1.set_title('LAMMPS Performance: Timesteps per Second vs GPU Count')
         ax1.legend()
         
         # Set up axis formatting for timesteps/s plot
         self._setup_axis_ticks(ax1, x_lim_max, y1_lim_max, x_major, x_minor, y1_major, y1_minor)
         
         # ns/day plot
-        ax2.plot(gpu_counts, ns_per_day, 'o-', color='green', label='ns/day')
-        ax2.set_xlabel('Number of GPUs')
+        ax2.plot(scale_counts, ns_per_day, 'o-', color='green', label='ns/day')
+        ax2.set_xlabel(f'Number of {unit_label}')
         ax2.set_ylabel('Nanoseconds per Day')
-        #ax2.set_title('LAMMPS Performance: ns/day vs GPU Count')
         ax2.legend()
         
         # Set up axis formatting for ns/day plot
@@ -427,16 +450,16 @@ class LammpsStrongScaleAnalyzer:
         Returns:
             Path to saved plot file
         """
-        gpu_counts = sorted(efficiency_data.keys())
-        speedup_timesteps = [efficiency_data[gpu]['speedup_timesteps'] for gpu in gpu_counts]
-        efficiency_timesteps = [efficiency_data[gpu]['efficiency_timesteps'] for gpu in gpu_counts]
+        scale_counts = sorted(efficiency_data.keys())
+        speedup_timesteps = [efficiency_data[c]['speedup_timesteps'] for c in scale_counts]
+        efficiency_timesteps = [efficiency_data[c]['efficiency_timesteps'] for c in scale_counts]
         
         # Calculate axis parameters
-        max_gpu = max(gpu_counts)
+        max_count = max(scale_counts)
         max_actual_speedup = max(speedup_timesteps)  # Use actual speedup, not ideal
         max_efficiency = max(efficiency_timesteps)
         
-        x_lim_max, x_major, x_minor = self._calculate_x_axis_params(max_gpu)
+        x_lim_max, x_major, x_minor = self._calculate_x_axis_params(max_count)
         y1_lim_max, y1_major, y1_minor = self._calculate_y_axis_params_speedup(max_actual_speedup)
         
         # For efficiency plot, use 0-110% or slightly above max efficiency
@@ -445,28 +468,28 @@ class LammpsStrongScaleAnalyzer:
         efficiency_minor = 2.5 if efficiency_ylim_max <= 100 else 5
         
         # Ideal scaling line
-        baseline_gpu = gpu_counts[0]
-        ideal_speedup = [gpu / baseline_gpu for gpu in gpu_counts]
+        baseline_count = scale_counts[0]
+        ideal_speedup = [c / baseline_count for c in scale_counts]
         
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 12))
         
+        unit_label = "GPUs" if self.mode == 'gpu' else "Cores"
+        
         # Speedup plot
-        ax1.plot(gpu_counts, speedup_timesteps, 'o-', color='blue', linewidth=2, label='Actual Speedup')
-        ax1.plot(gpu_counts, ideal_speedup, '--', color='gray', linewidth=2, label='Ideal Speedup')
-        ax1.set_xlabel('Number of GPUs')
+        ax1.plot(scale_counts, speedup_timesteps, 'o-', color='blue', linewidth=2, label='Actual Speedup')
+        ax1.plot(scale_counts, ideal_speedup, '--', color='gray', linewidth=2, label='Ideal Speedup')
+        ax1.set_xlabel(f'Number of {unit_label}')
         ax1.set_ylabel('Speedup Factor')
-        #ax1.set_title('LAMMPS Strong Scaling: Speedup vs GPU Count')
         ax1.legend()
         
         # Set up axis formatting for speedup plot
         self._setup_axis_ticks(ax1, x_lim_max, y1_lim_max, x_major, x_minor, y1_major, y1_minor)
         
         # Efficiency plot
-        ax2.plot(gpu_counts, efficiency_timesteps, 'o-', color='green', linewidth=2, label='Scaling Efficiency')
+        ax2.plot(scale_counts, efficiency_timesteps, 'o-', color='green', linewidth=2, label='Scaling Efficiency')
         ax2.axhline(y=100, color='gray', linestyle='--', linewidth=2, label='Ideal Efficiency (100%)')
-        ax2.set_xlabel('Number of GPUs')
+        ax2.set_xlabel(f'Number of {unit_label}')
         ax2.set_ylabel('Scaling Efficiency (%)')
-        #ax2.set_title('LAMMPS Strong Scaling: Efficiency vs GPU Count')
         ax2.legend()
         
         # Set up axis formatting for efficiency plot
@@ -492,15 +515,15 @@ class LammpsStrongScaleAnalyzer:
         Returns:
             Path to saved CSV file
         """
-        gpu_counts = sorted(performance_data.keys())
+        scale_counts = sorted(performance_data.keys())
         
         data_rows = []
-        for gpu_count in gpu_counts:
-            perf = performance_data[gpu_count]
-            eff = efficiency_data[gpu_count]
+        for count in scale_counts:
+            perf = performance_data[count]
+            eff = efficiency_data[count]
             
             row = {
-                'gpu_count': gpu_count,
+                f'{self.mode}_count': count,
                 'timestep': perf.get('timestep', None),
                 'ns_per_day': perf['ns_per_day'],
                 'hours_per_ns': perf['hours_per_ns'],
@@ -531,20 +554,23 @@ class LammpsStrongScaleAnalyzer:
         Returns:
             Path to saved summary file
         """
-        gpu_counts = sorted(performance_data.keys())
-        baseline_gpu = gpu_counts[0]
+        scale_counts = sorted(performance_data.keys())
+        baseline_count = scale_counts[0]
         
         output_file = self.base_dir / f"{self.output_prefix}_summary.txt"
+        
+        unit_label = "GPU" if self.mode == 'gpu' else "core"
         
         with open(output_file, 'w') as f:
             f.write("LAMMPS Strong Scaling Analysis Summary\n")
             f.write("=" * 50 + "\n\n")
             
-            f.write(f"Baseline: {baseline_gpu} GPU(s)\n")
-            f.write(f"GPU counts tested: {gpu_counts}\n")
+            f.write(f"Scaling mode: {unit_label.upper()}\n")
+            f.write(f"Baseline: {baseline_count} {unit_label}(s)\n")
+            f.write(f"{unit_label.upper()} counts tested: {scale_counts}\n")
             
             # Add timestep information
-            baseline_timestep = performance_data[baseline_gpu].get('timestep')
+            baseline_timestep = performance_data[baseline_count].get('timestep')
             if baseline_timestep is not None:
                 f.write(f"Timestep: {baseline_timestep}\n")
             else:
@@ -553,35 +579,35 @@ class LammpsStrongScaleAnalyzer:
             
             f.write("Performance Data:\n")
             f.write("-" * 20 + "\n")
-            for gpu_count in gpu_counts:
-                perf = performance_data[gpu_count]
-                f.write(f"{gpu_count:2d} GPUs: {perf['timesteps_per_s']:8.2f} timesteps/s, "
+            for count in scale_counts:
+                perf = performance_data[count]
+                f.write(f"{count:3d} {unit_label}s: {perf['timesteps_per_s']:8.2f} timesteps/s, "
                        f"{perf['ns_per_day']:8.3f} ns/day\n")
             
             f.write("\nScaling Efficiency:\n")
             f.write("-" * 20 + "\n")
-            for gpu_count in gpu_counts:
-                eff = efficiency_data[gpu_count]
-                f.write(f"{gpu_count:2d} GPUs: {eff['speedup_timesteps']:5.2f}x speedup, "
+            for count in scale_counts:
+                eff = efficiency_data[count]
+                f.write(f"{count:3d} {unit_label}s: {eff['speedup_timesteps']:5.2f}x speedup, "
                        f"{eff['efficiency_timesteps']:5.1f}% efficiency\n")
             
             # Calculate average efficiency (excluding baseline)
-            if len(gpu_counts) > 1:
-                avg_efficiency = np.mean([efficiency_data[gpu]['efficiency_timesteps'] 
-                                        for gpu in gpu_counts[1:]])
+            if len(scale_counts) > 1:
+                avg_efficiency = np.mean([efficiency_data[c]['efficiency_timesteps'] 
+                                        for c in scale_counts[1:]])
                 f.write(f"\nAverage scaling efficiency: {avg_efficiency:.1f}%\n")
             
             # Find best efficiency
-            best_gpu = max(gpu_counts, key=lambda x: efficiency_data[x]['efficiency_timesteps'])
-            best_eff = efficiency_data[best_gpu]['efficiency_timesteps']
-            f.write(f"Best efficiency: {best_eff:.1f}% at {best_gpu} GPUs\n")
+            best_count = max(scale_counts, key=lambda x: efficiency_data[x]['efficiency_timesteps'])
+            best_eff = efficiency_data[best_count]['efficiency_timesteps']
+            f.write(f"Best efficiency: {best_eff:.1f}% at {best_count} {unit_label}s\n")
             
             # Add ns/day performance summary
             f.write(f"\nSimulation Speed Summary:\n")
             f.write("-" * 25 + "\n")
-            for gpu_count in gpu_counts:
-                perf = performance_data[gpu_count]
-                f.write(f"{gpu_count:2d} GPUs: {perf['ns_per_day']:8.3f} ns/day\n")
+            for count in scale_counts:
+                perf = performance_data[count]
+                f.write(f"{count:3d} {unit_label}s: {perf['ns_per_day']:8.3f} ns/day\n")
         
         return output_file
     
@@ -597,6 +623,9 @@ class LammpsStrongScaleAnalyzer:
         
         # Parse log files
         performance_data = self.parse_log_files()
+        
+        unit_label = "GPU" if self.mode == 'gpu' else "core"
+        print(f"📊 Detected scaling mode: {unit_label.upper()}")
         
         # Calculate scaling efficiency
         efficiency_data = self.calculate_scaling_efficiency(performance_data)
@@ -630,8 +659,8 @@ def main():
         epilog="""
 Examples:
   %(prog)s
-  %(prog)s --base-dir /path/to/results
-  %(prog)s --output-prefix my_scaling_test
+  %(prog)s --mode gpu
+  %(prog)s --mode core --output-prefix my_scaling_test
         """
     )
     
@@ -639,7 +668,7 @@ Examples:
         "--base-dir",
         type=Path,
         default=Path.cwd(),
-        help="Base directory containing GPU subdirectories (default: current directory)"
+        help="Base directory containing GPU/core subdirectories (default: current directory)"
     )
     
     parser.add_argument(
@@ -648,13 +677,21 @@ Examples:
         help="Prefix for output files (default: 'strong_scaling')"
     )
     
+    parser.add_argument(
+        "--mode",
+        choices=['gpu', 'core', 'auto'],
+        default='auto',
+        help="Scaling mode: 'gpu', 'core', or 'auto' to detect (default: 'auto')"
+    )
+    
     args = parser.parse_args()
     
     try:
         # Create analyzer
         analyzer = LammpsStrongScaleAnalyzer(
             base_dir=args.base_dir,
-            output_prefix=args.output_prefix
+            output_prefix=args.output_prefix,
+            mode=args.mode
         )
         
         # Run analysis
