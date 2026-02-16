@@ -7,29 +7,20 @@ from parslbox.utils.pbx_config_template import DEFAULT_CONFIG_YAML
 
 def initialize_config_file():
     """
-    Checks if the config.yaml file exists, and creates a default
-    template if it does not.
-    """
-    config_path = path_utils.PBX_CONFIG_FILE
+    DEPRECATED: No longer used. Use 'pbx config' command instead.
     
-    if not config_path.exists():
-        typer.secho(
-            f"Note: Configuration file not found. Creating a new template...",
-            fg=typer.colors.YELLOW
-        )
-        
-        # Ensure the ~/.parslbox directory exists
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        with open(config_path, 'w') as f:
-            f.write(DEFAULT_CONFIG_YAML)
-
-        typer.secho(f"✅ Default configuration file created at: {config_path}", fg=typer.colors.GREEN)
-        typer.secho(
-            "👉 IMPORTANT: You must edit the config file to set the correct executable paths before running.",
-            bold=True,
-            fg=typer.colors.RED
-        )
+    This function was used to auto-create a default config template by dumping
+    the entire template file. This approach created overly complex config files
+    with many unused system configurations.
+    
+    Now users should run 'pbx config' for interactive, curated config creation
+    that only includes the systems and applications they actually need.
+    
+    This function is kept for backward compatibility but is no-op.
+    The main_callback in main.py now directs users to run 'pbx config' instead.
+    """
+    # No-op - deprecated
+    pass
 
 
 def load_app_config(app_name: str, system_name: str) -> dict:
@@ -130,3 +121,21 @@ def get_configured_systems_for_app(app_name: str) -> list[str]:
         
     except (FileNotFoundError, yaml.YAMLError):
         return []
+
+
+def load_full_config() -> dict:
+    """
+    Load the full YAML configuration file.
+    
+    Returns:
+        dict: Full configuration dictionary
+        
+    Raises:
+        FileNotFoundError: If the configuration file doesn't exist
+    """
+    config_path = path_utils.PBX_CONFIG_FILE
+    if not config_path.is_file():
+        raise FileNotFoundError(f"Configuration file not found at: {config_path}")
+
+    with open(config_path, 'r') as f:
+        return yaml.safe_load(f)

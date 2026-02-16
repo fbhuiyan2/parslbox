@@ -26,7 +26,8 @@ class AuroraTileConfig(SystemConfig):
     EXCLUDE_CORES = [0, 104, 52, 156]   # aurora reserves these cores for system services
     GPUS_PER_NODE = 12    # 6 physical GPUs × 2 tiles each = 12 tile units
     SCHEDULER = "PBS"
-    MPI_CMD_TO_USE = "mpiexec"
+    MPI_CMD_TO_USE = "mpiexec"  # Legacy
+    MPI_BACKEND = "pals"  # PALS on Aurora
     MAX_WORKERS_PER_NODE = 12  # One worker per tile
     # Aurora is set up weird, even though there are 17 cores per tile, worker_cpu_affinity has 16 cores. check aurora system design to learn why
     WORKER_CPU_AFFINITY = "list:1-8,105-112:9-16,113-120:17-24,121-128:25-32,129-136:33-40,137-144:41-48,145-152:53-60,157-164:61-68,165-172:69-76,173-180:77-84,181-188:85-92,189-196:93-100,197-204"
@@ -119,3 +120,11 @@ class AuroraTileConfig(SystemConfig):
             run_dir=str(run_dir), # run_dir must be a string
             retries=retries,
         )
+    
+    def get_default_mpi_config_yaml(self) -> dict:
+        """Aurora Tile MPI defaults for config generation."""
+        return {
+            "backend": self.MPI_BACKEND,
+            "use_gpu_wrapper": True,
+            "cpu_bind_method": "depth",
+        }

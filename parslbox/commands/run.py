@@ -16,9 +16,11 @@ from concurrent.futures import as_completed
 from parslbox.system_configs.loader import load_config, get_system_config
 from parslbox.utils import path_utils
 from parslbox.utils.logging_utils import setup_logging, validate_log_level
-from parslbox.utils.pbx_config_utils import load_app_config, is_app_configured
+from parslbox.utils.pbx_config_utils import load_app_config, is_app_configured, load_full_config
 from parslbox.database import database
-from parslbox.resource_manager.mpi_launcher import compose_mpi_command
+from parslbox.resource_manager.mpi_launcher import compose_mpi_command  # Legacy, kept for fallback
+from parslbox.resource_manager.mpi_config import load_mpi_config
+from parslbox.resource_manager.mpi_command_builder import build_mpi_command
 from parslbox.resource_manager.exceptions import InsufficientResources
 from parslbox.resource_manager.models import create_job_resource_spec
 from parslbox.resource_manager.job_tracker import JobTracker
@@ -29,6 +31,7 @@ from parslbox.commands.helpers.run_cmd_helpers import (
     parse_parents,
     get_default_run_dir,
     create_shutdown_handler,
+    create_alarm_handler,
     create_atexit_handler
 )
 from parslbox.database.status_buffer import StatusBuffer
@@ -49,7 +52,7 @@ def get_scheduler_job_id(scheduler):
         return f'local_{int(time.time())}'
 
 
-def create_parsl_future(job, app_instance, app_config, config_name, db_path, scheduler, resource_manager, futures, system_config, status_buffer):
+def create_parsl_future(job, app_instance, app_config, mpi_config, config_name, db_path, scheduler, resource_manager, futures, system_config, status_buffer):
     """
     Create a Parsl future for a job with proper preprocessing and error handling.
     
@@ -57,6 +60,7 @@ def create_parsl_future(job, app_instance, app_config, config_name, db_path, sch
         job: Job dictionary from database
         app_instance: Application instance
         app_config: Application configuration
+        mpi_config: MPI configuration for this app/system
         config_name: System configuration name
         db_path: Database path
         scheduler: Scheduler type (PBS, SLURM, etc.)
@@ -98,9 +102,14 @@ def create_parsl_future(job, app_instance, app_config, config_name, db_path, sch
         # Create JobResourceSpec from job data
         job_spec = create_job_resource_spec(job)
         
-        # Generate MPI commands with app-specific overrides
-        mpi_overrides = app_config.get('mpi_overrides')
-        mpi_commands = compose_mpi_command(assignment, system_config, job_spec, job_path, mpi_overrides)
+        # Generate MPI commands using new simplified MPI system
+        mpi_commands = build_mpi_command(
+            mpi_config=mpi_config,
+            system_config=system_config,
+            assignment=assignment,
+            job_spec=job_spec,
+            job_path=str(job_path)
+        )
         logger.info(f"Job {job_id}: Generated MPI command - {mpi_commands.get('PBX_MPI_PREFIX', 'None')}")
         
         # Run preprocessing
@@ -287,21 +296,45 @@ def run(
     signal.signal(signal.SIGINT, shutdown_handler)
     logger.info("Registered signal handlers for SIGTERM and SIGINT")
     
+    # Register alarm handler for timeout protection during shutdown
+    alarm_handler = create_alarm_handler(logger)
+    signal.signal(signal.SIGALRM, alarm_handler)
+    logger.info("Registered SIGALRM handler for shutdown timeout protection (10s)")
+    
     # Register atexit handler for normal termination
     atexit_handler = create_atexit_handler(status_buffer, logger)
     atexit.register(atexit_handler)
     logger.info(f"Registered cleanup handlers (periodic flush interval: {flush_interval}s)")
 
-    # Pre-load App Contexts
+    # Pre-load full YAML config for MPI settings
+    try:
+        full_yaml_config = load_full_config()
+    except FileNotFoundError:
+        full_yaml_config = {}
+        logger.warning("No config.yaml found, using default MPI settings")
+
+    # Pre-load App Contexts and MPI configs
     unique_app_names = list(set(job['app'] for job in filtered_jobs))
     app_instances = {}
     app_configs = {}
+    mpi_configs = {}
 
     for app_name in unique_app_names:
         try:
             from parslbox.apps.app_registry import get_app_instance
             app_instance = get_app_instance(app_name)
             app_config = load_app_config(app_name=app_name, system_name=config_name)
+            
+            # Load MPI config with hierarchy: system-level -> app-level
+            mpi_config = load_mpi_config(
+                system_name=config_name,
+                app_name=app_name,
+                system_config_class=system_config,
+                yaml_config=full_yaml_config
+            )
+            mpi_configs[app_name] = mpi_config
+            logger.info(f"App '{app_name}' MPI config: backend={mpi_config.backend.value}, "
+                       f"gpu_wrapper={mpi_config.use_gpu_wrapper}, cpu_bind={mpi_config.cpu_bind_method}")
             
             app_instances[app_name] = app_instance
             app_configs[app_name] = app_config
@@ -362,7 +395,7 @@ def run(
             
             # Create Parsl future with pre-loaded contexts
             success = create_parsl_future(
-                job, app_instances[app_name], app_configs[app_name], 
+                job, app_instances[app_name], app_configs[app_name], mpi_configs[app_name],
                 config_name, db_path, scheduler, resource_manager, futures, system_config, status_buffer
             )
             
@@ -515,6 +548,7 @@ def run(
                                 rescheduled_job, 
                                 app_instances[rescheduled_app_name], 
                                 app_configs[rescheduled_app_name],
+                                mpi_configs[rescheduled_app_name],
                                 config_name, db_path, scheduler, resource_manager, 
                                 new_futures, system_config, status_buffer
                             )

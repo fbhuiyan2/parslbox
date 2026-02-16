@@ -36,6 +36,15 @@ def write_gpu_wrapper(wrapper_content: str, assignment: 'ResourceAssignment', wr
     if job_path:
         # Write to job directory
         wrapper_path = os.path.join(job_path, filename)
+        # Delete existing file if it exists to avoid "file busy" errors on rerun
+        try:
+            os.remove(wrapper_path)
+        except FileNotFoundError:
+            pass  # File didn't exist, which is fine
+        except OSError as e:
+            logger.warning(f"Could not delete existing wrapper {wrapper_path}: {e}")
+            # Continue anyway - the open() call will attempt to overwrite
+        
         with open(wrapper_path, 'w') as f:
             f.write(wrapper_content)
         os.chmod(wrapper_path, 0o755)
@@ -44,6 +53,15 @@ def write_gpu_wrapper(wrapper_content: str, assignment: 'ResourceAssignment', wr
     else:
         # Fallback to temp location
         wrapper_path = os.path.join(tempfile.gettempdir(), filename)
+        # Delete existing file if it exists to avoid "file busy" errors on rerun
+        try:
+            os.remove(wrapper_path)
+        except FileNotFoundError:
+            pass  # File didn't exist, which is fine
+        except OSError as e:
+            logger.warning(f"Could not delete existing wrapper {wrapper_path}: {e}")
+            # Continue anyway - the open() call will attempt to overwrite
+        
         with open(wrapper_path, 'w') as f:
             f.write(wrapper_content)
         os.chmod(wrapper_path, 0o755)
@@ -70,6 +88,15 @@ def write_rankfile(rankfile_content: str, assignment: 'ResourceAssignment', laun
     if job_path:
         # Write to job directory
         rankfile_path = os.path.join(job_path, filename)
+        # Delete existing file if it exists to avoid "file busy" errors on rerun
+        try:
+            os.remove(rankfile_path)
+        except FileNotFoundError:
+            pass  # File didn't exist, which is fine
+        except OSError as e:
+            logger.warning(f"Could not delete existing rankfile {rankfile_path}: {e}")
+            # Continue anyway - the open() call will attempt to overwrite
+        
         with open(rankfile_path, 'w') as f:
             f.write(rankfile_content)
         logger.debug(f"Generated {launcher_type} rankfile: {rankfile_path}")
@@ -77,6 +104,15 @@ def write_rankfile(rankfile_content: str, assignment: 'ResourceAssignment', laun
     else:
         # Fallback to temp location
         rankfile_path = os.path.join(tempfile.gettempdir(), filename)
+        # Delete existing file if it exists to avoid "file busy" errors on rerun
+        try:
+            os.remove(rankfile_path)
+        except FileNotFoundError:
+            pass  # File didn't exist, which is fine
+        except OSError as e:
+            logger.warning(f"Could not delete existing rankfile {rankfile_path}: {e}")
+            # Continue anyway - the open() call will attempt to overwrite
+        
         with open(rankfile_path, 'w') as f:
             f.write(rankfile_content)
         logger.debug(f"Generated {launcher_type} rankfile: {rankfile_path}")

@@ -304,7 +304,8 @@ class TestAddCommand:
             ])
             
             assert result.exit_code == 1
-            assert "❌ Error: Unknown application: 'unknown_app'. Available applications are: lammps, vasp, python" in result.stdout
+            assert "❌ Error: Unknown application: 'unknown_app'." in result.stdout
+            assert "Available built-in apps:" in result.stdout
     
     def test_nonexistent_path(self, temp_db, mock_system_config):
         """Test handling of nonexistent path."""

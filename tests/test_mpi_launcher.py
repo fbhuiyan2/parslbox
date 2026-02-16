@@ -31,6 +31,7 @@ class TestMPICommandBuilder:
         self.mock_system_config = Mock()
         self.mock_system_config.CORES_PER_NODE = 64
         self.mock_system_config.MPI_CMD_TO_USE = "mpirun"
+        self.mock_system_config.EXCLUDE_CORES = []  # Empty list for excluded cores
         
         # Mock job spec
         self.mock_job_spec = Mock()

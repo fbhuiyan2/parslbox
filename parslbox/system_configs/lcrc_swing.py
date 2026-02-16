@@ -23,10 +23,11 @@ class LcrcSwingConfig(SystemConfig):
     
     # System specifications
     SYSTEM_NAME = 'lcrc-swing'
-    CORES_PER_NODE = 128  # 2 AMD EPYC 7742 64-core CPUs
+    CORES_PER_NODE = 64  # 2 AMD EPYC 7742 64-core CPUs
     GPUS_PER_NODE = 8     # 8 NVIDIA A100 GPUs per node
     SCHEDULER = "PBS"
-    MPI_CMD_TO_USE = "mpirun"
+    MPI_CMD_TO_USE = "mpirun"  # Legacy
+    MPI_BACKEND = "openmpi"  # OpenMPI on Swing
     MAX_WORKERS_PER_NODE = 8
     WORKER_CPU_AFFINITY = None  # Allow system to handle CPU affinity
     GPU_TYPE = 'cuda'
@@ -134,3 +135,11 @@ class LcrcSwingConfig(SystemConfig):
             run_dir=str(run_dir),
             retries=retries,
         )
+    
+    def get_default_mpi_config_yaml(self) -> dict:
+        """LCRC Swing MPI defaults for config generation."""
+        return {
+            "backend": self.MPI_BACKEND,
+            "use_short_hostnames": True,
+            "add": ["--oversubscribe"],
+        }

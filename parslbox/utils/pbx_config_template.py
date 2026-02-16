@@ -64,16 +64,41 @@ schedulers:
       
       pbx run --config {config} --run-dir {run_dir} {run_options}
 
+# ---------------------------------------------------------------------------
 # System-specific configurations
+#
+# Each system can define:
+#   - pbx_python_env_setup: Shell commands to set up ParslBox Python environment
+#   - mpi: MPI configuration defaults for this system (see MPI Configuration below)
+# ---------------------------------------------------------------------------
+
 sophia:
   pbx_python_env_setup: |
     module load conda
     conda activate parslbox
+  # MPI defaults for Sophia (OpenMPI)
+  mpi:
+    backend: openmpi
 
 polaris:
   pbx_python_env_setup: |
     module load conda
     conda activate parslbox
+  # MPI defaults for Polaris (PALS)
+  mpi:
+    backend: pals
+    use_gpu_wrapper: true
+    cpu_bind_method: depth
+
+lcrc-swing:
+  pbx_python_env_setup: |
+    module load conda
+    conda activate parslbox
+  # MPI defaults for LCRC Swing (OpenMPI)
+  mpi:
+    backend: openmpi
+    use_short_hostnames: true
+    add: ["--oversubscribe"]
 
 
 # ---------------------------------------------------------------------------
@@ -172,50 +197,94 @@ lammps:
     
 
       
+# ---------------------------------------------------------------------------
+# MPI Configuration
+#
+# The mpi: section can be defined at system-level (above) or app-level (below).
+# App-level settings override system-level settings.
+#
+# MPI Configuration Options:
+#   backend: openmpi | pals | srun
+#   mpi_cmd: Custom MPI command path (optional, overrides backend default)
+#   use_gpu_wrapper: true | false (generate GPU assignment wrapper script)
+#   use_hostlist: true | false (explicitly pass hostlist to MPI)
+#   use_short_hostnames: true | false (strip domain from hostnames)
+#   cpu_bind_method: none | rankfile | list | depth | depth <N>
+#   disable: [] (list of flags/substrings to remove, applied first)
+#   add: [] (list of flags to append, supports templates)
+#
+# CPU Binding Methods:
+#   none      - No CPU binding (simplest, default)
+#   rankfile  - Use rankfile for precise per-rank CPU binding
+#   list      - Use --cpu-bind list (PALS) or rankfile (OpenMPI)
+#   depth     - Auto-calculated cores per rank (--depth for PALS, --map-by core:PE= for OpenMPI)
+#   depth 8   - Explicit depth value (e.g., 8 cores per rank)
+#
+# Template Variables (for use in 'add'):
+#   {total_ranks}    - Total number of MPI ranks
+#   {ranks_per_node} - Ranks per node
+#   {cores_per_rank} - Auto-calculated cores per rank
+#   {hostlist}       - Comma-separated hostnames (short if use_short_hostnames: true)
+#   {rankfile_path}  - Path to generated rankfile (generated on-demand)
+#   {wrapper_path}   - Path to GPU wrapper script (generated on-demand)
+# ---------------------------------------------------------------------------
+
 # --- Add other applications below ---
+
 # vasp:
 #   polaris:
 #     executable_path: "/path/to/vasp_gpu"
 #     environment_setup: |
-#       # module load vasp_env
+#       module load vasp_env
+#     mpi:
+#       # Inherits from polaris system defaults (pals, gpu_wrapper, depth binding)
+#       # Can override if needed
+#
 #   sophia:
 #     executable_path: "/path/to/vasp_gpu"
 #     environment_setup: |
-#       # module load vasp_env
-#     # Example: VASP on Sophia has issues with rankfile and hostname flags
-#     mpi_overrides:
-#       disable: ["rankfile", "-H"]
-#       # add: ["--mca btl ^openib"]  # Optional: add custom MPI flags
+#       module load vasp_env
+#     mpi:
+#       backend: openmpi              # Override system default if needed
+#       use_gpu_wrapper: false        # VASP handles GPU internally
+#       disable: ["-H"]               # Remove hostlist flag if it causes issues
 
-# --- Example for systems with older OpenMPI (4.x) ---
-# OpenMPI 4.x uses --rankfile instead of --map-by rankfile:file=...
-# Use mpi_overrides with template variables to fix this:
-#
+# --- Example: LAMMPS on LCRC Swing (OpenMPI) ---
 # lammps:
 #   lcrc-swing:
 #     executable_path: "/path/to/lmp"
 #     environment_setup: |
-#       module load openmpi
-#     mpi_overrides:
-#       disable: ["--map-by"]                    # Remove OpenMPI 5.x style flag
-#       add: ["--rankfile {rankfile_path}"]      # Add OpenMPI 4.x style flag
-#
-# Available template variables for mpi_overrides.add:
-#   {rankfile_path} - Path to the generated rankfile
-#   {wrapper_path}  - Path to the GPU wrapper script
-#   {hostlist}      - Comma-separated list of hostnames
-#   {total_ranks}   - Total number of MPI ranks
-#
-# --- Example to disable GPU wrapper ---
-# If your application handles GPU assignment internally (e.g., via Kokkos),
-# you can disable the GPU wrapper script:
-#
-# lammps:
-#   lcrc-swing:
-#     executable_path: "/path/to/lmp"
+#       module load openmpi cuda
+#     mpi:
+#       # Inherits from lcrc-swing system defaults (openmpi, short_hostnames, oversubscribe)
+#       # Add CPU-GPU affinity if needed:
+#       cpu_bind_method: rankfile
+#       use_gpu_wrapper: true
+
+# --- Example: CPU-only job with depth binding ---
+# my_cpu_app:
+#   crux:
+#     executable_path: "/path/to/app"
 #     environment_setup: |
-#       module load openmpi
-#     mpi_overrides:
-#       disable: ["gpu-wrapper"]                 # Disable GPU wrapper script
-#       add: ["--map-by rankfile:file={rankfile_path}:OVERSUBSCRIBE"]
+#       module load intel
+#     mpi:
+#       cpu_bind_method: depth        # Auto-calculate cores per rank
+#       # Or specify explicit depth:
+#       # cpu_bind_method: depth 16   # 16 cores per rank
+
+# --- Example: Custom MPI command path ---
+# special_app:
+#   my_system:
+#     executable_path: "/path/to/app"
+#     mpi:
+#       backend: openmpi
+#       mpi_cmd: /opt/openmpi-4.1.6/bin/mpirun  # Use specific MPI version
+
+# --- Example: Power user with custom flags ---
+# advanced_app:
+#   sophia:
+#     executable_path: "/path/to/app"
+#     mpi:
+#       disable: ["--map-by"]
+#       add: ["--map-by rankfile:file={rankfile_path}:OVERSUBSCRIBE", "--mca btl ^openib"]
 """

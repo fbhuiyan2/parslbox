@@ -84,8 +84,11 @@ class ParslBox:
         Args:
             db_path: Optional path to database file. If None, uses default.
             config_path: Optional path to config file. If None, uses default.
+        
+        Raises:
+            FileNotFoundError: If config file does not exist.
         """
-        # Initialize database and config
+        # Set paths
         if db_path is None:
             db_path = path_utils.DB_FILE
         if config_path is None:
@@ -94,9 +97,16 @@ class ParslBox:
         self.db_path = db_path
         self.config_path = config_path
 
-        # Ensure database and config are initialized
+        # Initialize database (creates if doesn't exist, keeps if exists)
         database.initialize_database(self.db_path)
-        config_utils.initialize_config_file()
+        
+        # Check that config exists (API requires config to exist)
+        if not self.config_path.exists():
+            raise FileNotFoundError(
+                f"Config file not found at: {self.config_path}\n"
+                f"Please run 'pbx config' to create a configuration file, "
+                f"or provide config_path parameter to an existing config."
+            )
 
     # ==================== Job Management Methods ====================
 

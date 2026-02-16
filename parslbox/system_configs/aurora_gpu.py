@@ -25,7 +25,8 @@ class AuroraGpuConfig(SystemConfig):
     EXCLUDE_CORES = [0, 104, 52, 156]   # aurora reserves these cores for system services
     GPUS_PER_NODE = 6     # 6 physical GPUs
     SCHEDULER = "PBS"
-    MPI_CMD_TO_USE = "mpiexec"
+    MPI_CMD_TO_USE = "mpiexec"  # Legacy
+    MPI_BACKEND = "pals"  # PALS on Aurora
     MAX_WORKERS_PER_NODE = 6  # One worker per full GPU
     # Combined CPU affinity for full GPUs (combining pairs of tile groups)
     # Each full GPU gets 32 cores (16+16 from combined tile affinity groups)
@@ -119,3 +120,11 @@ class AuroraGpuConfig(SystemConfig):
             run_dir=str(run_dir), # run_dir must be a string
             retries=retries,
         )
+    
+    def get_default_mpi_config_yaml(self) -> dict:
+        """Aurora GPU MPI defaults for config generation."""
+        return {
+            "backend": self.MPI_BACKEND,
+            "use_gpu_wrapper": True,
+            "cpu_bind_method": "depth",
+        }

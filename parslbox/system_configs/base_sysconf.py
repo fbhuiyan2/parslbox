@@ -38,7 +38,8 @@ class SystemConfig(ABC):
     CORES_PER_NODE: int
     GPUS_PER_NODE: int
     SCHEDULER: str
-    MPI_CMD_TO_USE: str
+    MPI_CMD_TO_USE: str  # Legacy: kept for backward compatibility
+    MPI_BACKEND: str = "openmpi"  # New: MPI backend type (openmpi, pals, srun)
     MAX_WORKERS_PER_NODE: int
     WORKER_CPU_AFFINITY: Optional[str] = None
     EXCLUDE_CORES: Optional[List[int]] = None
@@ -196,3 +197,21 @@ class SystemConfig(ABC):
         """
         from parslbox.resource_manager import ResourceManager
         return ResourceManager(self, job_tracker)
+    
+    def get_default_mpi_config_yaml(self) -> dict:
+        """
+        Get default MPI configuration for this system's YAML config.
+        
+        Override this in subclasses to provide system-specific defaults.
+        Default implementation returns minimal config with just backend.
+        
+        This method is used by 'pbx config' to generate curated config files.
+        
+        Returns:
+            dict: MPI configuration to include in generated YAML.
+                  Keys can include: backend, use_gpu_wrapper, use_hostlist,
+                  use_short_hostnames, cpu_bind_method, add, disable
+        """
+        return {
+            "backend": self.MPI_BACKEND
+        }

@@ -19,6 +19,8 @@ class TestParslBoxInit:
     def test_init_custom_paths(self, temp_db):
         """Test initialization with custom paths."""
         config_path = temp_db.parent / "config.yaml"
+        # Create a minimal config file for the test
+        config_path.write_text("# Minimal test config\nsystems: {}\napps: {}")
         pbx = ParslBox(db_path=temp_db, config_path=config_path)
         assert pbx.db_path == temp_db
         assert pbx.config_path == config_path

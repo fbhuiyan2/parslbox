@@ -23,7 +23,8 @@ class PolarisConfig(SystemConfig):
     CORES_PER_NODE = 64 #32 --> 64 with hyperthreading
     GPUS_PER_NODE = 4
     SCHEDULER = "PBS"
-    MPI_CMD_TO_USE = "mpiexec"
+    MPI_CMD_TO_USE = "mpiexec"  # Legacy
+    MPI_BACKEND = "pals"  # PALS on Polaris
     MAX_WORKERS_PER_NODE = 4
     WORKER_CPU_AFFINITY = "list:24-31,56-63:16-23,48-55:8-15,40-47:0-7,32-39"
     GPU_TYPE = 'cuda'
@@ -115,3 +116,11 @@ class PolarisConfig(SystemConfig):
             run_dir=str(run_dir), # run_dir must be a string
             retries=retries,
         )
+    
+    def get_default_mpi_config_yaml(self) -> dict:
+        """Polaris MPI defaults for config generation."""
+        return {
+            "backend": self.MPI_BACKEND,
+            "use_gpu_wrapper": True,
+            "cpu_bind_method": "depth",
+        }

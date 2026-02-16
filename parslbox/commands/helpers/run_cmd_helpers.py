@@ -72,6 +72,8 @@ def create_shutdown_handler(status_buffer, logger, parsl_loaded_flag):
     walltime is exceeded) or SIGINT (manual interruption). It ensures that all
     buffered status updates are written to the database before the process exits.
     
+    Includes timeout protection via signal.alarm() to force exit if cleanup hangs.
+    
     Args:
         status_buffer: StatusBuffer instance to flush
         logger: Logger instance for logging
@@ -81,31 +83,94 @@ def create_shutdown_handler(status_buffer, logger, parsl_loaded_flag):
         Signal handler function
     """
     def handler(signum, frame):
+        import time
+        
         signal_name = signal.Signals(signum).name
+        start_time = time.time()
+        
+        logger.warning(f"=" * 80)
         logger.warning(f"Received {signal_name} signal - initiating emergency shutdown")
+        logger.warning(f"Handler START at timestamp {start_time}")
+        logger.warning(f"=" * 80)
+        
+        # Set 10-second alarm to force exit if cleanup hangs
+        # This prevents the process from being killed by SIGKILL before status updates are written
+        logger.info("Setting 10-second alarm for forced exit protection")
+        signal.alarm(10)
         
         try:
-            # Flush status buffer first (most critical operation)
-            logger.info("Emergency flush: Writing buffered job statuses to database...")
+            # STEP 1: Flush status buffer FIRST (MOST CRITICAL OPERATION)
+            # This must complete even if Parsl cleanup fails
+            logger.info(f"Emergency shutdown: Step 1/2 - Flushing status buffer...")
+            flush_start = time.time()
+            
             count = status_buffer.flush_all()
+            
+            flush_duration = time.time() - flush_start
             if count > 0:
-                logger.info(f"Emergency flush: Successfully updated {count} job(s)")
+                logger.info(f"Emergency shutdown: Step 1/2 - Successfully flushed {count} job(s) in {flush_duration:.3f}s")
             else:
-                logger.info("Emergency flush: No pending updates to write")
+                logger.info(f"Emergency shutdown: Step 1/2 - No pending updates to flush ({flush_duration:.3f}s)")
+                
         except Exception as e:
-            logger.error(f"Emergency flush: Failed to write status updates - {e}")
+            logger.error(f"Emergency shutdown: Step 1/2 - Status buffer flush FAILED: {e}")
+            logger.error(f"Emergency shutdown: Failed at timestamp {time.time()}")
+            # Continue to try Parsl cleanup even if flush failed
         
         try:
-            # Clean up Parsl if it was loaded
+            # STEP 2: Clean up Parsl resources (SECONDARY OPERATION)
             if parsl_loaded_flag.get('loaded', False):
-                logger.info("Emergency shutdown: Cleaning up Parsl resources...")
+                logger.info(f"Emergency shutdown: Step 2/2 - Cleaning up Parsl resources...")
+                cleanup_start = time.time()
+                
                 parsl.dfk().cleanup()
-                logger.info("Emergency shutdown: Parsl cleanup complete")
+                
+                cleanup_duration = time.time() - cleanup_start
+                logger.info(f"Emergency shutdown: Step 2/2 - Parsl cleanup complete in {cleanup_duration:.3f}s")
+            else:
+                logger.info("Emergency shutdown: Step 2/2 - Parsl not loaded, skipping cleanup")
+                
         except Exception as e:
-            logger.error(f"Emergency shutdown: Parsl cleanup failed - {e}")
+            logger.error(f"Emergency shutdown: Step 2/2 - Parsl cleanup FAILED: {e}")
+            logger.error(f"Emergency shutdown: Failed at timestamp {time.time()}")
+            # Don't re-raise - we want to exit cleanly even if Parsl cleanup fails
         
-        logger.warning(f"Emergency shutdown complete - exiting with code 130")
-        sys.exit(130)
+        finally:
+            # Cancel the alarm since we completed successfully
+            signal.alarm(0)
+            
+            total_duration = time.time() - start_time
+            logger.warning(f"=" * 80)
+            logger.warning(f"Emergency shutdown complete in {total_duration:.3f}s - exiting with code 130")
+            logger.warning(f"Exit timestamp: {time.time()}")
+            logger.warning(f"=" * 80)
+            sys.exit(130)
+    
+    return handler
+
+
+def create_alarm_handler(logger):
+    """
+    Create a handler for SIGALRM that forces immediate exit.
+    
+    This handler is triggered by signal.alarm() if the shutdown sequence
+    takes longer than the specified timeout (10 seconds). It forces an
+    immediate exit to prevent the process from being killed by SIGKILL.
+    
+    Args:
+        logger: Logger instance for logging
+    
+    Returns:
+        SIGALRM handler function
+    """
+    def handler(signum, frame):
+        import time
+        logger.error("!" * 80)
+        logger.error(f"ALARM TRIGGERED: Shutdown timeout exceeded (10 seconds)")
+        logger.error(f"Forcing immediate exit at timestamp {time.time()}")
+        logger.error("This prevents SIGKILL from terminating the process uncleanly")
+        logger.error("!" * 80)
+        sys.exit(143)  # Exit code 143 = 128 + 15 (SIGTERM timeout)
     
     return handler
 

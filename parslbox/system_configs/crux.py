@@ -25,7 +25,8 @@ class CruxConfig(SystemConfig):
     CORES_PER_NODE = 256    #128 --> 256 with hyperthreading
     GPUS_PER_NODE = 0  # CPU-only system
     SCHEDULER = "PBS"
-    MPI_CMD_TO_USE = "mpiexec"
+    MPI_CMD_TO_USE = "mpiexec"  # Legacy
+    MPI_BACKEND = "pals"  # PALS on Crux
     MAX_WORKERS_PER_NODE = 4    # There are 8 NUMA domains so 8 can be assigned - Although PBX resource_manager does not implement NUMA domains
                                 # But that is an overkill and spwans too many workers when using 100s of nodes, so, 2 or 4 is better
                                 # 4 will allow node_occupancy down to 0.25
@@ -124,3 +125,10 @@ class CruxConfig(SystemConfig):
             run_dir=str(run_dir), # run_dir must be a string
             retries=retries,
         )
+    
+    def get_default_mpi_config_yaml(self) -> dict:
+        """Crux MPI defaults for config generation (CPU-only system)."""
+        return {
+            "backend": self.MPI_BACKEND,
+            "cpu_bind_method": "depth",
+        }
