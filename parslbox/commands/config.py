@@ -361,7 +361,7 @@ def _select_systems() -> List[str]:
     
     while True:
         try:
-            input_str = typer.prompt("\nSelect systems (space or comma-separated numbers, e.g., 1 3 5)")
+            input_str = typer.prompt("\nSelect systems (e.g., 1 3 5 or 'all')")
             selected = _parse_selection(input_str, available_systems)
             
             if not selected:
@@ -390,7 +390,7 @@ def _select_apps() -> List[str]:
     while True:
         try:
             input_str = typer.prompt(
-                "\nSelect applications (space or comma-separated numbers, e.g., 1 2) or press Enter to skip",
+                "\nSelect applications (e.g., 1 2, 'all', or Enter to skip)",
                 default=""
             )
             
@@ -410,6 +410,10 @@ def _select_apps() -> List[str]:
 def _parse_selection(input_str: str, options: List[str]) -> List[str]:
     """Parse space-separated or comma-separated input and return selected items."""
     try:
+        # Handle "all" keyword
+        if input_str.strip().lower() == "all":
+            return list(options)
+
         # First try to split by whitespace (space, tab, etc.)
         # This handles: "1 3 5", "1  3   5", "1\t3\t5"
         parts = input_str.split()
