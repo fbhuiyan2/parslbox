@@ -61,6 +61,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Auto-runs `pbx config` setup if user agrees
   - No longer calls deprecated `initialize_config_file()`
 
+### Added
+
+#### Application Arguments (`--args`)
+- **New `--args` flag for `pbx add` and `pbx update`** - Pass custom arguments to job executables
+  - Arguments are appended to `in_file` before storage (e.g., `python script.py --file afile -o 8 bfile`)
+  - `pbx add ... -i script.py --args "--file afile -o 8 bfile"` stores `in_file = "script.py --file afile -o 8 bfile"`
+  - `pbx update 1 --args "--new-flag"` reconstructs `in_file` by extracting base script name and appending new args
+  - `pbx update 1 -i new_script.py --args "--flag value"` uses new script as base
+
+#### Single-Node GPU Auto-Assignment
+- **Auto-assign GPUs for single-node jobs on GPU systems** - `pbx add -n 1` on a GPU system now auto-assigns all GPUs on the node, matching multi-node behavior
+  - Previously, `-n 1` without `-g` silently created a CPU-only job even on GPU systems
+  - Use `-o` flag to explicitly opt into CPU-only mode on GPU systems
+
 ### Fixed
 
 #### MPI Configuration Merging

@@ -25,11 +25,12 @@ def update_jobs(
     ranks_per_node: Optional[int] = None,
     add_deps: Optional[List[int]] = None,
     rm_deps: Optional[List[int]] = None,
+    app_args: Optional[str] = None,
     db_path: Optional[Path] = None,
 ) -> tuple[List[int], List[tuple[int, str]], dict]:
     """
     Core job update logic - used by both CLI and API.
-    
+
     Args:
         job_ids: List of job IDs to update
         status: New status
@@ -42,6 +43,7 @@ def update_jobs(
         ranks_per_node: New ranks per node
         add_deps: Parent job IDs to add
         rm_deps: Parent job IDs to remove
+        app_args: Additional arguments to append to the application command
         db_path: Database path (uses default if None)
     
     Returns:
@@ -61,8 +63,27 @@ def update_jobs(
     warning_messages = []
     
     # Validate that at least one update option was provided
-    if all(opt is None for opt in [status, tag, input_file, ngpus, env_file, nnodes, node_occupancy, ranks_per_node, add_deps, rm_deps]):
+    if all(opt is None for opt in [status, tag, input_file, ngpus, env_file, nnodes, node_occupancy, ranks_per_node, add_deps, rm_deps, app_args]):
         raise ValidationError("You must provide at least one field to update")
+
+    # Handle app_args: reconstruct in_file by appending args
+    if app_args is not None:
+        if input_file is not None:
+            # User provided both -i and --args: use the new input_file as base
+            input_file = f"{input_file} {app_args}".strip()
+        else:
+            # Only --args provided: extract base script name from current in_file per job
+            jobs = database.get_jobs_by_ids(db_path, job_ids)
+            for job in jobs:
+                base = job['in_file'].split()[0] if job.get('in_file') else None
+                if base:
+                    new_in_file = f"{base} {app_args}".strip()
+                    database.update_jobs(
+                        db_path=db_path,
+                        job_ids=[job['job_id']],
+                        in_file=new_in_file
+                    )
+                    info_messages.append(f"Job {job['job_id']}: updated args → {new_in_file}")
 
     # Basic parameter validation
     if nnodes is not None and nnodes < 1:
@@ -322,6 +343,10 @@ def update(
         Optional[str],
         typer.Option("--rm_deps", "--parm", help="Space-separated job IDs to remove from parents (e.g., '1 2 3')")
     ] = None,
+    app_args: Annotated[
+        Optional[str],
+        typer.Option("--args", help="Update the arguments appended to the application command (e.g., '--file afile -o 8 bfile')."),
+    ] = None,
 ):
     """
     Updates one or more fields for a given set of jobs.
@@ -382,6 +407,7 @@ def update(
             ranks_per_node=ranks_per_node,
             add_deps=parsed_add_deps,
             rm_deps=parsed_rm_deps,
+            app_args=app_args,
         )
         
         # Display messages from core function

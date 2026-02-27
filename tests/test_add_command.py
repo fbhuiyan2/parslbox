@@ -457,12 +457,52 @@ class TestAddCommand:
             ])
             
             assert result.exit_code == 0
-            assert "Resource specification: n:1-r:64-g:0-nocc:1.0" in result.stdout
-            
-            # Verify default values
+            assert "Single-node job on GPU system: auto-assigned 4 GPUs" in result.stdout
+            assert "Resource specification: n:1-r:4-g:4-nocc:NA" in result.stdout
+
+            # Verify default values - GPU system auto-assigns GPUs
             jobs = database.get_jobs(temp_db)
             job = jobs[0]
             assert job['num_nodes'] == 1
-            assert job['ngpus'] == 0
+            assert job['ngpus'] == 4
             assert job['node_occupancy'] == 1.0
             assert job['status'] == 'Ready'
+
+    def test_add_with_app_args(self, temp_db, temp_job_dirs, mock_system_config):
+        """Test adding a job with --args appends to in_file."""
+        runner = CliRunner()
+
+        env_file = temp_job_dirs["temp_dir"] / "test_env.sh"
+        env_file.write_text("#!/bin/bash\necho 'test environment'")
+
+        with patch('parslbox.commands.add.path_utils.DB_FILE', temp_db), \
+             patch('parslbox.commands.add.get_system_config', return_value=mock_system_config), \
+             patch('parslbox.commands.add.is_app_registered', return_value=True), \
+             patch('parslbox.commands.add.get_app_config', return_value={
+                 'INPUT_REQUIRED': True,
+                 'DFLT_INPUT': None
+             }), \
+             patch('parslbox.commands.helpers.job_info_validator.get_system_config', return_value=mock_system_config), \
+             patch('parslbox.commands.helpers.job_info_validator.is_app_registered', return_value=True), \
+             patch('parslbox.commands.helpers.job_info_validator.get_app_config', return_value={
+                 'INPUT_REQUIRED': True,
+                 'DFLT_INPUT': None
+             }), \
+             patch('typer.confirm', return_value=True):
+
+            result = runner.invoke(add_app, [
+                str(temp_job_dirs["job1"]),
+                "--config", "polaris",
+                "--app", "python",
+                "--input", "script.py",
+                "--args", "--file afile -o 8 bfile",
+                "--envfile", str(env_file)
+            ])
+
+            assert result.exit_code == 0
+            assert "✅ Added 1 job(s) with IDs:" in result.stdout
+
+            # Verify in_file contains script name + args
+            jobs = database.get_jobs(temp_db)
+            assert len(jobs) == 1
+            assert jobs[0]['in_file'] == "script.py --file afile -o 8 bfile"

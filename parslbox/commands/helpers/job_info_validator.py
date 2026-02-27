@@ -172,15 +172,21 @@ def validate_resource_parameters(
         handle_gpu_cpu_conflict(ngpus, node_occupancy)  # raises ResourceConflictError if both > 0
         
         if ngpus > 0:
-            # Single-node GPU job
+            # Single-node GPU job (explicit -g flag)
             if ngpus > gpus_per_node:
                 raise ValidationError(f"Requested {ngpus} GPUs but only {gpus_per_node} available per node")
-            
+
             final_num_nodes = 1
             final_ngpus = ngpus
             final_node_occupancy = 1.0
+        elif gpus_per_node > 0 and node_occupancy is None:
+            # GPU system, no explicit -g or -o: auto-assign all GPUs (match multi-node behavior)
+            final_num_nodes = 1
+            final_ngpus = gpus_per_node
+            final_node_occupancy = 1.0
+            info_messages.append(f"Single-node job on GPU system: auto-assigned {gpus_per_node} GPUs")
         else:
-            # Single-node CPU-only job
+            # CPU-only job (CPU system, or user explicitly set -o for CPU mode)
             final_num_nodes = 1
             final_ngpus = 0
             final_node_occupancy = node_occupancy if node_occupancy is not None else 1.0

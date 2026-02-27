@@ -39,11 +39,12 @@ def add_jobs(
     parents: Optional[List[int]] = None,
     parent_tag: Optional[str] = None,
     status: str = "Ready",
+    app_args: Optional[str] = None,
     db_path: Optional[Path] = None,
 ) -> tuple[List[int], List[tuple[str, str]], dict]:
     """
     Core job addition logic - used by both CLI and API.
-    
+
     Args:
         paths: List of paths to job directories, or ['all'] for all subdirectories
         app: Application type (e.g., 'lammps', 'vasp')
@@ -59,6 +60,7 @@ def add_jobs(
         parents: List of parent job IDs
         parent_tag: Tag to wait for (all jobs with this tag must be Done)
         status: Initial job status (default: 'Ready')
+        app_args: Additional arguments to append to the application command
         db_path: Database path (uses default if None)
     
     Returns:
@@ -110,6 +112,10 @@ def add_jobs(
     info_messages.extend(parent_info)
     warning_messages.extend(parent_warnings)
     
+    # Append app_args to input file if provided
+    if app_args and final_input_file:
+        final_input_file = f"{final_input_file} {app_args}"
+
     # Determine the list of paths to process
     paths_to_add, failed_jobs = validate_paths(paths)
 
@@ -205,6 +211,10 @@ def add(
         Optional[str],
         typer.Option("--parent-tag", help="Wait for all jobs with this tag to complete"),
     ] = None,
+    app_args: Annotated[
+        Optional[str],
+        typer.Option("--args", help="Additional arguments to append to the application command (e.g., '--file afile -o 8 bfile')."),
+    ] = None,
     status: Annotated[
         str,
         typer.Option("--status", "-s", help="Initial status for the job(s)."),
@@ -286,6 +296,7 @@ def add(
             parents=final_parents,
             parent_tag=parent_tag,
             status=status,
+            app_args=app_args,
         )
         
         # Display messages from core function
