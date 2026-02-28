@@ -26,7 +26,7 @@ class CruxConfig(SystemConfig):
     GPUS_PER_NODE = 0  # CPU-only system
     SCHEDULER = "PBS"
     MPI_CMD_TO_USE = "mpiexec"  # Legacy
-    MPI_BACKEND = "pals"  # PALS on Crux
+    MPI_BACKEND = "mpich"  # MPICH on Crux
     MAX_WORKERS_PER_NODE = 4    # There are 8 NUMA domains so 8 can be assigned - Although PBX resource_manager does not implement NUMA domains
                                 # But that is an overkill and spwans too many workers when using 100s of nodes, so, 2 or 4 is better
                                 # 4 will allow node_occupancy down to 0.25

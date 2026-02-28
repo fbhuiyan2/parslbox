@@ -213,8 +213,8 @@ class SimpleMPICommandBuilder:
             
             return args
         
-        elif backend == MPIBackend.PALS:
-            # PALS minimal: -n N --ppn M
+        elif backend == MPIBackend.MPICH:
+            # MPICH minimal: -n N --ppn M
             return [
                 "-n", str(total_ranks),
                 "--ppn", str(ranks_per_node)
@@ -249,7 +249,7 @@ class SimpleMPICommandBuilder:
             hostlist = context["hostlist"]
             if backend == MPIBackend.OPENMPI:
                 extra.extend(["-H", hostlist])
-            elif backend == MPIBackend.PALS:
+            elif backend == MPIBackend.MPICH:
                 extra.extend(["-hosts", hostlist])
             elif backend == MPIBackend.SRUN:
                 extra.extend(["--nodelist", hostlist])
@@ -298,7 +298,7 @@ class SimpleMPICommandBuilder:
             rankfile_path = self._generate_rankfile_if_needed({})
             return ["--map-by", f"rankfile:file={rankfile_path}"]
         
-        elif backend == MPIBackend.PALS:
+        elif backend == MPIBackend.MPICH:
             rankfile_path = self._generate_rankfile_if_needed({})
             return ["--rankfile", rankfile_path]
         
@@ -323,7 +323,7 @@ class SimpleMPICommandBuilder:
             rankfile_path = self._generate_rankfile_if_needed({})
             return ["--map-by", f"rankfile:file={rankfile_path}"]
         
-        elif backend == MPIBackend.PALS:
+        elif backend == MPIBackend.MPICH:
             # Build cpu-bind list from assignment
             cpu_bind_list = []
             for node_idx in range(len(assignment.node_ids)):
@@ -368,8 +368,8 @@ class SimpleMPICommandBuilder:
             # OpenMPI: use --map-by core:PE=N
             return ["--map-by", f"core:PE={depth}", "--bind-to", "core"]
         
-        elif backend == MPIBackend.PALS:
-            # PALS: use --cpu-bind depth --depth N
+        elif backend == MPIBackend.MPICH:
+            # MPICH: use --cpu-bind depth --depth N
             return ["--cpu-bind", "depth", "--depth", str(depth)]
         
         elif backend == MPIBackend.SRUN:

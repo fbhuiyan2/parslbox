@@ -706,7 +706,7 @@ class TestRankfileGeneration:
         os.unlink(rankfile_path)
     
     def test_mpiexec_rankfile_generation(self, resource_manager):
-        """Test MPICH/PALS rankfile generation."""
+        """Test MPICH rankfile generation."""
         job = {'job_id': 2, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0}
         assignment = resource_manager.assign_resources(job)
         spec = create_job_resource_spec(job)

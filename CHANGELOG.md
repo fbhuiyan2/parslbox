@@ -29,11 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### MPI Configuration System
 - **System-level MPI defaults** - Each system config defines its own MPI defaults via `get_default_mpi_config_yaml()` method
-  - `polaris`: PALS backend with GPU wrapper and depth binding
+  - `polaris`: MPICH backend with GPU wrapper and depth binding
   - `lcrc-swing`: OpenMPI with short hostnames and oversubscribe flag
-  - `aurora-gpu`: PALS backend with GPU wrapper and depth binding
-  - `aurora-tile`: PALS backend with GPU wrapper and depth binding
-  - `crux`: PALS backend with depth binding (CPU-only)
+  - `aurora-gpu`: MPICH backend with GPU wrapper and depth binding
+  - `aurora-tile`: MPICH backend with GPU wrapper and depth binding
+  - `crux`: MPICH backend with depth binding (CPU-only)
   - `sophia`: Minimal OpenMPI defaults (base class)
   - Scalable design: new systems automatically define their own defaults
 

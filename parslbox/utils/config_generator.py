@@ -317,7 +317,7 @@ custom_apps: {}
 # ---------------------------------------------------------------------------
 #
 # MPI Configuration Options:
-#   backend: openmpi | pals | srun
+#   backend: openmpi | mpich | srun
 #   mpi_cmd: Custom MPI command path (optional)
 #   use_gpu_wrapper: true | false
 #   use_hostlist: true | false

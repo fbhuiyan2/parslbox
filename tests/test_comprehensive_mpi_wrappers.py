@@ -98,7 +98,7 @@ class TestRankfileGeneration:
         os.unlink(rankfile_path)
     
     def test_mpiexec_rankfile_subnode_gpu(self):
-        """Test MPICH/PALS rankfile generation for subnode GPU job."""
+        """Test MPICH rankfile generation for subnode GPU job."""
         assignment = self.create_assignment("subnode", num_nodes=1, ranks_per_node=2, gpus_per_rank=1)
         job_spec = JobResourceSpec(job_id=12345, ngpus=2, num_nodes=1, ranks_per_node=2)
         
@@ -114,7 +114,7 @@ class TestRankfileGeneration:
         os.unlink(rankfile_path)
     
     def test_mpiexec_rankfile_multinode_cpu(self):
-        """Test MPICH/PALS rankfile generation for multinode CPU job."""
+        """Test MPICH rankfile generation for multinode CPU job."""
         assignment = self.create_assignment("multinode", num_nodes=2, ranks_per_node=3, gpus_per_rank=0)
         job_spec = JobResourceSpec(job_id=12345, ngpus=0, num_nodes=2, ranks_per_node=3)
         

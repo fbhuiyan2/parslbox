@@ -84,9 +84,9 @@ polaris:
   pbx_python_env_setup: |
     module load conda
     conda activate parslbox
-  # MPI defaults for Polaris (PALS)
+  # MPI defaults for Polaris (MPICH)
   mpi:
-    backend: pals
+    backend: mpich
     use_gpu_wrapper: true
     cpu_bind_method: depth
 
@@ -204,7 +204,7 @@ lammps:
 # App-level settings override system-level settings.
 #
 # MPI Configuration Options:
-#   backend: openmpi | pals | srun
+#   backend: openmpi | mpich | srun
 #   mpi_cmd: Custom MPI command path (optional, overrides backend default)
 #   use_gpu_wrapper: true | false (generate GPU assignment wrapper script)
 #   use_hostlist: true | false (explicitly pass hostlist to MPI)
@@ -216,8 +216,8 @@ lammps:
 # CPU Binding Methods:
 #   none      - No CPU binding (simplest, default)
 #   rankfile  - Use rankfile for precise per-rank CPU binding
-#   list      - Use --cpu-bind list (PALS) or rankfile (OpenMPI)
-#   depth     - Auto-calculated cores per rank (--depth for PALS, --map-by core:PE= for OpenMPI)
+#   list      - Use --cpu-bind list (MPICH) or rankfile (OpenMPI)
+#   depth     - Auto-calculated cores per rank (--depth for MPICH, --map-by core:PE= for OpenMPI)
 #   depth 8   - Explicit depth value (e.g., 8 cores per rank)
 #
 # Template Variables (for use in 'add'):
@@ -237,7 +237,7 @@ lammps:
 #     environment_setup: |
 #       module load vasp_env
 #     mpi:
-#       # Inherits from polaris system defaults (pals, gpu_wrapper, depth binding)
+#       # Inherits from polaris system defaults (mpich, gpu_wrapper, depth binding)
 #       # Can override if needed
 #
 #   sophia:

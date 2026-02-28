@@ -39,7 +39,7 @@ class SystemConfig(ABC):
     GPUS_PER_NODE: int
     SCHEDULER: str
     MPI_CMD_TO_USE: str  # Legacy: kept for backward compatibility
-    MPI_BACKEND: str = "openmpi"  # New: MPI backend type (openmpi, pals, srun)
+    MPI_BACKEND: str = "openmpi"  # New: MPI backend type (openmpi, mpich, srun)
     MAX_WORKERS_PER_NODE: int
     WORKER_CPU_AFFINITY: Optional[str] = None
     EXCLUDE_CORES: Optional[List[int]] = None

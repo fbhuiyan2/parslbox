@@ -99,7 +99,7 @@ class TestConfigGenerator:
         with patch('parslbox.utils.config_generator.get_system_config') as mock_get_sys:
             mock_sys = Mock()
             mock_sys.get_default_mpi_config_yaml.return_value = {
-                "backend": "pals",
+                "backend": "mpich",
                 "use_gpu_wrapper": True,
                 "cpu_bind_method": "depth"
             }
@@ -111,7 +111,7 @@ class TestConfigGenerator:
             assert "polaris:" in systems
             assert "pbx_python_env_setup:" in systems
             assert "mpi:" in systems
-            assert "backend: pals" in systems
+            assert "backend: mpich" in systems
             assert "use_gpu_wrapper: true" in systems
             assert "cpu_bind_method: depth" in systems
     
@@ -121,7 +121,7 @@ class TestConfigGenerator:
             mock = Mock()
             if name == "polaris":
                 mock.get_default_mpi_config_yaml.return_value = {
-                    "backend": "pals",
+                    "backend": "mpich",
                     "use_gpu_wrapper": True
                 }
             else:  # sophia
@@ -137,7 +137,7 @@ class TestConfigGenerator:
             
             assert "polaris:" in systems
             assert "sophia:" in systems
-            assert "backend: pals" in systems
+            assert "backend: mpich" in systems
             assert "backend: openmpi" in systems
             assert "use_gpu_wrapper: true" in systems
             assert "use_short_hostnames: true" in systems
@@ -150,15 +150,15 @@ class TestConfigGenerator:
         formatted = generator._format_mpi_config(mpi_config)
         
         assert "backend: openmpi" in formatted
-        assert "use_gpu_wrapper" not in formatted
-        assert "cpu_bind_method" not in formatted
+        assert "# use_gpu_wrapper: false" in formatted
+        assert "# cpu_bind_method: none" in formatted
     
     def test_format_mpi_config_full(self):
         """Test MPI config formatting with all options."""
         generator = ConfigGenerator(["polaris"], ["python"])
         
         mpi_config = {
-            "backend": "pals",
+            "backend": "mpich",
             "use_gpu_wrapper": True,
             "use_hostlist": True,
             "use_short_hostnames": True,
@@ -168,7 +168,7 @@ class TestConfigGenerator:
         }
         formatted = generator._format_mpi_config(mpi_config)
         
-        assert "backend: pals" in formatted
+        assert "backend: mpich" in formatted
         assert "use_gpu_wrapper: true" in formatted
         assert "use_hostlist: true" in formatted
         assert "use_short_hostnames: true" in formatted
@@ -181,7 +181,7 @@ class TestConfigGenerator:
         generator = ConfigGenerator(["polaris"], ["python"])
         
         mpi_config = {
-            "backend": "pals",
+            "backend": "mpich",
             "use_gpu_wrapper": True,
             "cpu_bind_method": "depth"
         }
@@ -264,7 +264,7 @@ class TestConfigGenerator:
         
         assert "Additional Information" in footer
         assert "MPI Configuration Options:" in footer
-        assert "backend: openmpi | pals | srun" in footer
+        assert "backend: openmpi | mpich | srun" in footer
         assert "cpu_bind_method:" in footer
         assert "Template Variables" in footer
         assert "{total_ranks}" in footer
@@ -276,7 +276,7 @@ class TestConfigGenerator:
             mock_sys = Mock()
             mock_sys.SCHEDULER = "pbs"
             mock_sys.get_default_mpi_config_yaml.return_value = {
-                "backend": "pals",
+                "backend": "mpich",
                 "use_gpu_wrapper": True
             }
             mock_get_sys.return_value = mock_sys
@@ -300,7 +300,7 @@ class TestConfigGenerator:
         with patch('parslbox.utils.config_generator.get_system_config') as mock_get_sys:
             mock_sys = Mock()
             mock_sys.SCHEDULER = "pbs"
-            mock_sys.get_default_mpi_config_yaml.return_value = {"backend": "pals"}
+            mock_sys.get_default_mpi_config_yaml.return_value = {"backend": "mpich"}
             mock_get_sys.return_value = mock_sys
             
             generator = ConfigGenerator(["polaris"], ["python"])
@@ -336,7 +336,7 @@ class TestConfigGenerator:
         with patch('parslbox.utils.config_generator.get_system_config') as mock_get_sys:
             mock_sys = Mock()
             mock_sys.SCHEDULER = "pbs"
-            mock_sys.get_default_mpi_config_yaml.return_value = {"backend": "pals"}
+            mock_sys.get_default_mpi_config_yaml.return_value = {"backend": "mpich"}
             mock_get_sys.return_value = mock_sys
             
             generator = ConfigGenerator(["polaris"], [])
@@ -392,7 +392,7 @@ class TestIntegrationScenarios:
             mock_sys = Mock()
             mock_sys.SCHEDULER = "pbs"
             mock_sys.get_default_mpi_config_yaml.return_value = {
-                "backend": "pals",
+                "backend": "mpich",
                 "use_gpu_wrapper": True,
                 "cpu_bind_method": "depth"
             }
@@ -407,7 +407,7 @@ class TestIntegrationScenarios:
             
             # Verify Polaris system config
             assert "polaris" in config
-            assert config["polaris"]["mpi"]["backend"] == "pals"
+            assert config["polaris"]["mpi"]["backend"] == "mpich"
             assert config["polaris"]["mpi"]["use_gpu_wrapper"] is True
             
             # Verify LAMMPS app config
@@ -421,7 +421,7 @@ class TestIntegrationScenarios:
             if name == "polaris":
                 mock.SCHEDULER = "pbs"
                 mock.get_default_mpi_config_yaml.return_value = {
-                    "backend": "pals",
+                    "backend": "mpich",
                     "use_gpu_wrapper": True
                 }
             else:  # sophia

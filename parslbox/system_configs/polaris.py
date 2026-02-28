@@ -24,7 +24,7 @@ class PolarisConfig(SystemConfig):
     GPUS_PER_NODE = 4
     SCHEDULER = "PBS"
     MPI_CMD_TO_USE = "mpiexec"  # Legacy
-    MPI_BACKEND = "pals"  # PALS on Polaris
+    MPI_BACKEND = "mpich"  # MPICH on Polaris
     MAX_WORKERS_PER_NODE = 4
     WORKER_CPU_AFFINITY = "list:24-31,56-63:16-23,48-55:8-15,40-47:0-7,32-39"
     GPU_TYPE = 'cuda'

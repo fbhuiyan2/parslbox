@@ -26,7 +26,7 @@ class AuroraGpuConfig(SystemConfig):
     GPUS_PER_NODE = 6     # 6 physical GPUs
     SCHEDULER = "PBS"
     MPI_CMD_TO_USE = "mpiexec"  # Legacy
-    MPI_BACKEND = "pals"  # PALS on Aurora
+    MPI_BACKEND = "mpich"  # MPICH on Aurora
     MAX_WORKERS_PER_NODE = 6  # One worker per full GPU
     # Combined CPU affinity for full GPUs (combining pairs of tile groups)
     # Each full GPU gets 32 cores (16+16 from combined tile affinity groups)

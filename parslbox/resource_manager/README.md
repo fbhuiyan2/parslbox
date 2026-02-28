@@ -33,7 +33,7 @@ Concise reference to the Resource Manager architecture, key concepts, and MPI co
   - `MPICommandBuilder`: modular MPI flag construction for `mpirun`, `mpiexec`, `srun`.
   - Rankfile generation:
     - OpenMPI: `rank <global_rank>=<hostname> slot=<cpu_cores>`
-    - MPICH/PALS: `<rank> <host_index> <cpu_cores>`
+    - MPICH: `<rank> <host_index> <cpu_cores>`
   - GPU wrappers export `CUDA_VISIBLE_DEVICES` and `ZE_AFFINITY_MASK` (and related env) per rank.
 
 ## Key Assumptions
@@ -71,7 +71,7 @@ MPI flags are built modularly and then optionally filtered/extended by overrides
     - `CUDA_VISIBLE_DEVICES=<gpu_id>`
     - `ZE_AFFINITY_MASK="<gpu_id>.0"` and related Intel GPU env
 
-### mpiexec (MPICH/PALS)
+### mpiexec (MPICH)
 - Common flags:
   - Process count: `-n <total_ranks>`
 - Single-node jobs:

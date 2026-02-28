@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 class MPIBackend(Enum):
     """Supported MPI backends."""
     OPENMPI = "openmpi"
-    PALS = "pals"
+    MPICH = "mpich"
     SRUN = "srun"
 
 
@@ -38,7 +38,7 @@ class MPIConfig:
     app-level overrides, or job-level overrides.
     
     Attributes:
-        backend: MPI backend type (openmpi, pals, srun)
+        backend: MPI backend type (openmpi, mpich, srun)
         mpi_cmd: Custom MPI command path (overrides default for backend)
         use_gpu_wrapper: Whether to generate GPU assignment wrapper script
         use_hostlist: Whether to explicitly pass hostlist to MPI command
@@ -64,7 +64,7 @@ class MPIConfig:
         # Default commands per backend
         defaults = {
             MPIBackend.OPENMPI: "mpirun",
-            MPIBackend.PALS: "mpiexec",
+            MPIBackend.MPICH: "mpiexec",
             MPIBackend.SRUN: "srun",
         }
         return defaults.get(self.backend, "mpirun")
@@ -106,7 +106,7 @@ class MPIConfig:
 # Default MPI configurations per backend
 DEFAULT_MPI_CONFIGS = {
     MPIBackend.OPENMPI: MPIConfig(backend=MPIBackend.OPENMPI),
-    MPIBackend.PALS: MPIConfig(backend=MPIBackend.PALS),
+    MPIBackend.MPICH: MPIConfig(backend=MPIBackend.MPICH),
     MPIBackend.SRUN: MPIConfig(backend=MPIBackend.SRUN),
 }
 
@@ -116,7 +116,7 @@ def parse_backend(backend_str: str) -> MPIBackend:
     Parse backend string to MPIBackend enum.
     
     Args:
-        backend_str: Backend name (openmpi, pals, srun)
+        backend_str: Backend name (openmpi, mpich, srun)
         
     Returns:
         MPIBackend enum value
@@ -226,7 +226,7 @@ def load_mpi_config(
         # Legacy support: infer backend from MPI_CMD_TO_USE
         cmd = system_config_class.MPI_CMD_TO_USE.lower()
         if cmd == "mpiexec":
-            backend_str = "pals"
+            backend_str = "mpich"
         elif cmd == "srun":
             backend_str = "srun"
         else:

@@ -23,20 +23,37 @@ Requirements:
 - Python >= 3.11, < 3.14
 - Parsl >= 2025.9.8
 
-Using Conda + Poetry:
+### Using Poetry (recommended for development)
 ```bash
 conda create --name parslbox python=3.11.9
 conda activate parslbox
-pip install poetry    # without any optional packages
+pip install poetry
 
-# Clone and install
 git clone https://github.com/fbhuiyan2/parslbox.git
 cd parslbox
-poetry install
-# poetry install --extras "simulation"   # optional simulation packages installed
-# poetry install --extras "agentic"   # optional agentic packages installed for using agents+PBX
-# poetry install --all-extras   # all optional packages installed
+poetry install                          # core dependencies only
+# poetry install --extras "simulation"  # + ase, pymatgen
+# poetry install --extras "agentic"    # + uvicorn, mcp, pydantic
+# poetry install --extras "simulation agentic"  # both extras
+# poetry install --all-extras          # all optional packages
+```
 
+### Using pip
+```bash
+conda create --name parslbox python=3.11.9
+conda activate parslbox
+
+git clone https://github.com/fbhuiyan2/parslbox.git
+cd parslbox
+pip install .                           # core dependencies only
+# pip install ".[simulation]"           # + ase, pymatgen
+# pip install ".[agentic]"             # + uvicorn, mcp, pydantic
+# pip install ".[simulation,agentic]"  # both extras
+# pip install ".[all]"                 # all optional packages
+```
+
+### Verify
+```bash
 # First call initializes ~/.parslbox/config_pbx.yaml and the job database
 # (or custom locations via PBX_CONFIG_PATH / PBX_DB_PATH)
 pbx ls
