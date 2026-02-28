@@ -241,7 +241,7 @@ def _determine_config_path(path: Optional[str]) -> Path:
         else:
             config_dir = Path(path).expanduser().resolve()
     
-    config_path = config_dir / "config_pbx.yaml"
+    config_path = config_dir / "config.yaml"
     
     if _is_interactive and path is not None:
         typer.secho(f"\n✓ Config will be created at: {config_path}", fg=typer.colors.CYAN)

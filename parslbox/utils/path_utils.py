@@ -22,7 +22,7 @@ def get_config_path():
     """Get the config file path from environment variable or default location.
     
     Environment variable PBX_CONFIG_PATH can point to either:
-    - A directory (e.g., '/custom/path/') - will append 'config_pbx.yaml'
+    - A directory (e.g., '/custom/path/') - will append 'config.yaml'
     - A full file path (e.g., '/custom/path/my_config.yaml') - will use as-is
     """
     env_path = os.getenv("PBX_CONFIG_PATH")
@@ -32,8 +32,8 @@ def get_config_path():
         if path.suffix in [".yaml", ".yml"]:
             return path
         # Otherwise treat it as a directory
-        return path / "config_pbx.yaml"
-    return Path.home() / ".parslbox" / "config_pbx.yaml"
+        return path / "config.yaml"
+    return Path.home() / ".parslbox" / "config.yaml"
 
 # Define the path to the SQLite database file
 DB_FILE = get_db_path()

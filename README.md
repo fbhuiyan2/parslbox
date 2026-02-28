@@ -54,12 +54,12 @@ pip install .                           # core dependencies only
 
 ### Verify
 ```bash
-# First call initializes ~/.parslbox/config_pbx.yaml and the job database
+# First call initializes ~/.parslbox/config.yaml and the job database
 # (or custom locations via PBX_CONFIG_PATH / PBX_DB_PATH)
 pbx ls
 ```
 
-On first run, a default config is created at ~/.parslbox/config_pbx.yaml (unless PBX_CONFIG_PATH overrides it). Edit this file to set correct executable paths, environment setup, and system settings before running jobs.
+On first run, a default config is created at ~/.parslbox/config.yaml (unless PBX_CONFIG_PATH overrides it). Edit this file to set correct executable paths, environment setup, and system settings before running jobs.
 
 
 ## Quick Start
@@ -245,17 +245,17 @@ Environment variables:
   - If a directory is provided, ParslBox uses `<dir>/job_database_pbx.db`
 - PBX_CONFIG_PATH
   - Can be a directory or a full `.yaml`/`.yml` file path
-  - If a directory is provided, ParslBox uses `<dir>/config_pbx.yaml`
+  - If a directory is provided, ParslBox uses `<dir>/config.yaml`
 
 Defaults (when env vars are not set):
 - Database: `~/.parslbox/job_database_pbx.db`
-- Config file: `~/.parslbox/config_pbx.yaml`
+- Config file: `~/.parslbox/config.yaml`
 - Runs: `~/.parslbox/runs/<timestamp>/`
 
 Both CLI and API honor these paths. Set them per session, for example:
 ```bash
 export PBX_DB_PATH=/scratch/mydbs/pbx.db          # full file path
-export PBX_CONFIG_PATH=/scratch/mycfgs             # directory, becomes /scratch/mycfgs/config_pbx.yaml
+export PBX_CONFIG_PATH=/scratch/mycfgs             # directory, becomes /scratch/mycfgs/config.yaml
 ```
 
 Using PBX_DB_PATH and/or PBX_CONFIG_PATH to set the paths allow users to use multiple (and isolated) job databases and/or config files with PBX.

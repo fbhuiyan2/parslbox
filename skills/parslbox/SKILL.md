@@ -53,10 +53,10 @@ pbx.update_job(job_id, status="Submitted")
 ## Configuration and paths
 - Env vars:
   - `PBX_DB_PATH`: dir or full `.db` path (dir => `<dir>/job_database_pbx.db`)
-  - `PBX_CONFIG_PATH`: dir or full `.yml/.yaml` path (dir => `<dir>/config_pbx.yaml`)
+  - `PBX_CONFIG_PATH`: dir or full `.yml/.yaml` path (dir => `<dir>/config.yaml`)
 - Defaults:
   - `~/.parslbox/job_database_pbx.db`
-  - `~/.parslbox/config_pbx.yaml`
+  - `~/.parslbox/config.yaml`
   - `~/.parslbox/runs/<timestamp>/`
 
 ## Resource semantics (important)
