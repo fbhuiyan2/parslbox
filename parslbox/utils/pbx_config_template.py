@@ -97,8 +97,8 @@ lcrc-swing:
   # MPI defaults for LCRC Swing (OpenMPI)
   mpi:
     backend: openmpi
-    use_short_hostnames: true
-    add: ["--oversubscribe"]
+    # use_short_hostnames: true
+    # add: ["--oversubscribe"]
 
 
 # ---------------------------------------------------------------------------
@@ -144,57 +144,36 @@ custom_apps: {}
 #===== Example APP =====#
 
 app_name: # e.g., lammps, vasp
-  # Settings for running LAMMPS on ALCF Polaris
-  system_name: # e.g., polaris, aurora-tile
-    # Full, absolute path to the software executable on the system.
-    executable_path: "/path/to/your/software/executable/on/polaris" 
-
-    # Shell commands to set up the environment on a compute node.
-    # This block will be executed before the main mpirun command.
-    # Use '|' to define a multi-line string in YAML.
+  system_name: # e.g., polaris, sophia
+    executable_path: "/path/to/your/software/executable/on/system"
     environment_setup: |
-      # Add all necessary `module load` and `export` commands here.
-      # Example:
-      # module load PrgEnv-gnu
-      # module load ...
-      module restore   # Always restore modules first in apps
+      module restore
+    # Optional: override system-level MPI settings for this app
+    # mpi:
+    #   use_gpu_wrapper: true
+    #   cpu_bind_method: depth
 
 
 #===== LAMMPS APP =====#
 
 lammps:
-  # Settings for running LAMMPS on ALCF Polaris
   polaris:
-    # Full, absolute path to the LAMMPS executable on the system.
-    executable_path: "/path/to/your/lammps/executable/on/polaris" 
-
-    # Shell commands to set up the environment on a compute node.
-    # This block will be executed before the main mpirun command.
-    # Use '|' to define a multi-line string in YAML.
+    executable_path: "/path/to/your/lammps/executable/on/polaris"
     environment_setup: |
-      # Add all necessary `module load` and `export` commands here.
-      # Example:
-      # module load PrgEnv-gnu
-      # module load ...
-      module purge  # # Always purge modules first in apps
-      module restore   # Then restore modules if you want
+      module purge
+      module restore
+    # Optional: override system-level MPI settings
+    # mpi:
+    #   cpu_bind_method: rankfile
 
-  # Settings for running LAMMPS on ALCF Sophia
   sophia:
-    # Full, absolute path to the LAMMPS executable on the system.
     executable_path: "/path/to/your/lammps/executable/on/sophia"
-
-    # Additional mpi tags
-    mpi_extra: 
-
     environment_setup: |
-      # Add all necessary `module load` and `export` commands here.
-      # Example:
-      # module load compilers/openmpi/5.0.3
-      # export LD_LIBRARY_PATH=...
-      module purge  # # Always purge modules first in apps
-      module restore   # Then restore modules if you want
-    
+      module purge
+      module restore
+    # Optional: override system-level MPI settings
+    # mpi:
+    #   add: ["--mca btl ^openib"]
 
       
 # ---------------------------------------------------------------------------
