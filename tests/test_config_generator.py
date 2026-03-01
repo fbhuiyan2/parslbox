@@ -107,14 +107,47 @@ class TestConfigGenerator:
             
             generator = ConfigGenerator(["polaris"], ["python"])
             systems = generator._generate_systems()
-            
+
             assert "polaris:" in systems
             assert "pbx_python_env_setup:" in systems
+            assert "sched_opts" in systems
             assert "mpi:" in systems
             assert "backend: mpich" in systems
             assert "use_gpu_wrapper: true" in systems
             assert "cpu_bind_method: depth" in systems
     
+    def test_generate_systems_sched_opts_pbs(self):
+        """Test that PBS systems get PBS sched_opts placeholder."""
+        with patch('parslbox.utils.config_generator.get_system_config') as mock_get_sys:
+            mock_sys = Mock()
+            mock_sys.SCHEDULER = "pbs"
+            mock_sys.get_default_mpi_config_yaml.return_value = {"backend": "mpich"}
+            mock_get_sys.return_value = mock_sys
+
+            generator = ConfigGenerator(["polaris"], ["python"])
+            systems = generator._generate_systems()
+
+            assert "# sched_opts: |" in systems
+            assert "#PBS -l filesystems=home:eagle" in systems
+            assert "#PBS -l place=scatter" in systems
+            assert "#SBATCH" not in systems
+
+    def test_generate_systems_sched_opts_slurm(self):
+        """Test that SLURM systems get SLURM sched_opts placeholder."""
+        with patch('parslbox.utils.config_generator.get_system_config') as mock_get_sys:
+            mock_sys = Mock()
+            mock_sys.SCHEDULER = "slurm"
+            mock_sys.get_default_mpi_config_yaml.return_value = {"backend": "openmpi"}
+            mock_get_sys.return_value = mock_sys
+
+            generator = ConfigGenerator(["sophia"], ["python"])
+            systems = generator._generate_systems()
+
+            assert "# sched_opts: |" in systems
+            assert "#SBATCH --mem=128G" in systems
+            assert "#SBATCH --gres=gpu:4" in systems
+            assert "#PBS" not in systems
+
     def test_generate_systems_multiple(self):
         """Test system configuration generation for multiple systems."""
         def mock_get_sys(name):

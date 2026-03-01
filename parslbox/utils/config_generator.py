@@ -117,6 +117,17 @@ class ConfigGenerator:
                 output += "    # Example:\n"
                 output += "    # module load conda\n"
                 output += "    # conda activate your_env\n"
+
+                # sched_opts placeholder
+                scheduler = sys_config.SCHEDULER.upper()
+                output += "  # sched_opts: |\n"
+                if scheduler == "PBS":
+                    output += "  #   #PBS -l filesystems=home:eagle\n"
+                    output += "  #   #PBS -l place=scatter\n"
+                else:
+                    output += "  #   #SBATCH --mem=128G\n"
+                    output += "  #   #SBATCH --gres=gpu:4\n"
+
                 output += "  mpi:\n"
 
                 # Generate MPI config with comments
