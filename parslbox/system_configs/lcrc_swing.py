@@ -140,6 +140,6 @@ class LcrcSwingConfig(SystemConfig):
         """LCRC Swing MPI defaults for config generation."""
         return {
             "backend": self.MPI_BACKEND,
-            "use_short_hostnames": True,
-            "add": ["--oversubscribe"],
+            #"use_short_hostnames": True,
+            #"add": ["--oversubscribe"],
         }
