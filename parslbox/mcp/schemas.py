@@ -146,11 +146,6 @@ class QSubSchema(BaseModel):
         description="Project/account name.",
     )
 
-    filesystems: Optional[str] = Field(
-        default=None,
-        description="Comma-separated list of filesystems (e.g., 'home:eagle').",
-    )
-
     run_dir: Optional[Path] = Field(
         default=None,
         description="Custom run directory (default: timestamped directory under ~/.parslbox/runs).",
@@ -174,6 +169,73 @@ class QSubSchema(BaseModel):
         default=0,
         ge=0,
         description="Number of retries for failed tasks (must be >= 0).",
+    )
+
+    sched_opts: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "List of extra PBS scheduler directives (e.g., ['#PBS -l filesystems=home:eagle', '#PBS -l place=scatter']). "
+            "Directives matching a template key override it; new directives are appended."
+        ),
+    )
+
+
+class SBatchSchema(BaseModel):
+    """Schema for generating and submitting a SLURM job via ParslBox."""
+
+    config: str = Field(
+        description="The name of the configuration to use.",
+    )
+
+    job_name: str = Field(
+        description="SLURM job name.",
+    )
+
+    queue: str = Field(
+        description="SLURM partition name.",
+    )
+
+    select: int = Field(
+        ge=1,
+        description="Number of nodes to request (must be >= 1).",
+    )
+
+    walltime: int = Field(
+        gt=0,
+        description="Wall time in minutes (e.g., 90 for 1.5 hours).",
+    )
+
+    project: str = Field(
+        description="Project/account name.",
+    )
+
+    run_dir: Optional[Path] = Field(
+        default=None,
+        description="Custom run directory (default: timestamped directory under ~/.parslbox/runs).",
+    )
+
+    apps: Optional[List[str]] = Field(
+        default=None,
+        description="List of apps to run.",
+    )
+
+    tags: Optional[List[str]] = Field(
+        default=None,
+        description="List of tags to run.",
+    )
+
+    retries: int = Field(
+        default=0,
+        ge=0,
+        description="Number of retries for failed tasks (must be >= 0).",
+    )
+
+    sched_opts: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "List of extra SLURM scheduler directives (e.g., ['#SBATCH --mem=64G', '#SBATCH --gres=gpu:4']). "
+            "Directives matching a template key override it; new directives are appended."
+        ),
     )
 
 

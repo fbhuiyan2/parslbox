@@ -33,6 +33,7 @@ from parslbox.utils.logging_utils import setup_logging
 from parslbox.commands.add import add_jobs
 from parslbox.commands.update import update_jobs
 from parslbox.commands.qsub import submit_to_scheduler
+from parslbox.commands.sbatch import submit_to_slurm
 import parsl
 
 
@@ -430,12 +431,12 @@ class ParslBox:
         select: str,
         walltime: int,
         project: str,
-        filesystems: Optional[str] = None,
         run_dir: Optional[Path] = None,
         apps: Optional[List[str]] = None,
         tags: Optional[List[str]] = None,
         retries: int = 0,
         loglevel: str = "info",
+        sched_opts: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Generate and submit a PBS job script.
@@ -447,12 +448,12 @@ class ParslBox:
             select: PBS select specification (e.g., '4', '2:ncpus=32:ngpus=4', '1:ncpus=16+2:ncpus=32:ngpus=2')
             walltime: Wall time in minutes
             project: Project/account name
-            filesystems: Comma-separated list of filesystems
             run_dir: Custom run directory (default: timestamped)
             apps: List of apps to run
             tags: List of tags to run
             retries: Number of retries for failed tasks
             loglevel: Logging level
+            sched_opts: List of extra PBS directive strings
 
         Returns:
             Dictionary with submission details including job_id and run_dir
@@ -470,17 +471,79 @@ class ParslBox:
                 select=select,
                 walltime=walltime,
                 project=project,
-                filesystems=filesystems,
                 run_dir=run_dir,
                 apps=apps,
                 tags=tags,
                 retries=retries,
                 loglevel=loglevel,
                 config_path=self.config_path,
+                sched_opts=sched_opts,
             )
             return result
         except Exception as e:
             # Convert command ValidationError to API ValidationError if needed
+            if "ValidationError" in str(type(e)):
+                raise ValidationError(str(e))
+            else:
+                raise
+
+    def sbatch(
+        self,
+        config: str,
+        job_name: str,
+        queue: str,
+        select: str,
+        walltime: int,
+        project: str,
+        run_dir: Optional[Path] = None,
+        apps: Optional[List[str]] = None,
+        tags: Optional[List[str]] = None,
+        retries: int = 0,
+        loglevel: str = "info",
+        sched_opts: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Generate and submit a SLURM job script.
+
+        Args:
+            config: System configuration name
+            job_name: SLURM job name
+            queue: SLURM partition name
+            select: Number of nodes
+            walltime: Wall time in minutes
+            project: Project/account name
+            run_dir: Custom run directory (default: timestamped)
+            apps: List of apps to run
+            tags: List of tags to run
+            retries: Number of retries for failed tasks
+            loglevel: Logging level
+            sched_opts: List of extra SLURM directive strings
+
+        Returns:
+            Dictionary with submission details including job_id and run_dir
+
+        Raises:
+            ValidationError: If configuration is invalid
+            FileNotFoundError: If sbatch command is not found
+        """
+        try:
+            result = submit_to_slurm(
+                config_name=config,
+                job_name=job_name,
+                queue=queue,
+                select=select,
+                walltime=walltime,
+                project=project,
+                run_dir=run_dir,
+                apps=apps,
+                tags=tags,
+                retries=retries,
+                loglevel=loglevel,
+                config_path=self.config_path,
+                sched_opts=sched_opts,
+            )
+            return result
+        except Exception as e:
             if "ValidationError" in str(type(e)):
                 raise ValidationError(str(e))
             else:

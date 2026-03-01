@@ -195,10 +195,11 @@ class TestConfigGenerator:
         """Test custom apps section generation."""
         generator = ConfigGenerator(["polaris"], ["python"])
         custom_apps = generator._generate_custom_apps_section()
-        
+
         assert "Custom Application Registration" in custom_apps
         assert "custom_apps: {}" in custom_apps
-        assert "Example:" in custom_apps
+        assert "How it works:" in custom_apps
+        assert "Two methods are supported:" in custom_apps
         assert "module:" in custom_apps
         assert "class:" in custom_apps
     
@@ -258,18 +259,52 @@ class TestConfigGenerator:
         assert "Optional: Override system MPI settings" in template
     
     def test_generate_footer(self):
-        """Test footer generation."""
+        """Test footer generation contains full MPI reference."""
         generator = ConfigGenerator(["polaris"], ["python"])
         footer = generator._generate_footer()
-        
-        assert "Additional Information" in footer
+
+        assert "MPI Configuration" in footer
         assert "MPI Configuration Options:" in footer
         assert "backend: openmpi | mpich | srun" in footer
         assert "cpu_bind_method:" in footer
+        assert "CPU Binding Methods:" in footer
         assert "Template Variables" in footer
         assert "{total_ranks}" in footer
         assert "{hostlist}" in footer
+        assert "{rankfile_path}" in footer
     
+    def test_sched_opts_section_present(self):
+        """Test that generated config includes sched_opts documentation."""
+        with patch('parslbox.utils.config_generator.get_system_config') as mock_get_sys:
+            mock_sys = Mock()
+            mock_sys.SCHEDULER = "pbs"
+            mock_sys.get_default_mpi_config_yaml.return_value = {"backend": "mpich"}
+            mock_get_sys.return_value = mock_sys
+
+            generator = ConfigGenerator(["polaris"], ["python"])
+            config_str = generator.generate()
+
+            assert "Scheduler Options (sched_opts)" in config_str
+            assert "three-layer override chain" in config_str
+            assert "--sched-opts" in config_str
+
+    def test_mpi_config_notes_in_footer(self):
+        """Test that full MPI reference block appears in generated config."""
+        with patch('parslbox.utils.config_generator.get_system_config') as mock_get_sys:
+            mock_sys = Mock()
+            mock_sys.SCHEDULER = "pbs"
+            mock_sys.get_default_mpi_config_yaml.return_value = {"backend": "mpich"}
+            mock_get_sys.return_value = mock_sys
+
+            generator = ConfigGenerator(["polaris"], ["python"])
+            config_str = generator.generate()
+
+            assert "MPI Configuration" in config_str
+            assert "CPU Binding Methods:" in config_str
+            assert "rankfile  - Precise per-rank CPU binding" in config_str
+            assert "Template Variables" in config_str
+            assert "{total_ranks}" in config_str
+
     def test_full_config_is_valid_yaml(self):
         """Test that full generated config is valid YAML."""
         with patch('parslbox.utils.config_generator.get_system_config') as mock_get_sys:

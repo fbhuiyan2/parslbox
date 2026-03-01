@@ -1,46 +1,40 @@
-DEFAULT_CONFIG_YAML = """
 # ---------------------------------------------------------------------------
-# parslbox Application Configuration
+# ParslBox Configuration Template — Single Source of Truth
 #
-# This file defines settings for different applications (e.g., lammps)
-# on different systems (e.g., polaris, sophia).
-#
-# IMPORTANT: You must edit this file and provide the correct, absolute
-#            path to the executables for your environment.
+# Named constants are imported by ConfigGenerator so that `pbx config`
+# produces output consistent with this master template.
 # ---------------------------------------------------------------------------
 
-# Scheduler submission templates
-schedulers:
-  pbs:
+# Scheduler templates (used by ConfigGenerator)
+PBS_TEMPLATE = '''  pbs:
     template: |
       #!/bin/bash
       #PBS -N {job_name}
       #PBS -q {queue}
       #PBS -l select={select}
       #PBS -l walltime={walltime}
-      #PBS -l filesystems={filesystems}
       #PBS -A {project}
       #PBS -o pbx_scheduler.out
       #PBS -j oe
-      #PBS -m be
-      #PBS -M your@email.com
-      
+      {sched_opts}
+
       cd $PBS_O_WORKDIR
       > pbx_scheduler.out
-      
+
       NNODES=$(wc -l < $PBS_NODEFILE)
       echo "NNODES = $NNODES"
       echo "Job ID: $PBS_JOBID"
       echo "Job Name: $PBS_JOBNAME"
-      
+
       {pbx_python_env_setup}
-      
+
       # Set ParslBox environment variables if provided
       {pbx_env_vars}
-      
-      pbx run --config {config} --run-dir {run_dir} {run_options}
 
-  slurm:
+      pbx run --config {config} --run-dir {run_dir} {run_options}
+'''
+
+SLURM_TEMPLATE = '''  slurm:
     template: |
       #!/bin/bash
       #SBATCH --job-name={job_name}
@@ -50,21 +44,50 @@ schedulers:
       #SBATCH --account={project}
       #SBATCH --output=pbx_scheduler.out
       #SBATCH --error=pbx_scheduler.out
-      
+      {sched_opts}
+
       > pbx_scheduler.out
-      
+
       echo "NNODES = $SLURM_JOB_NUM_NODES"
       echo "Job ID: $SLURM_JOB_ID"
       echo "Job Name: $SLURM_JOB_NAME"
-      
+
       {pbx_python_env_setup}
-      
+
       # Set ParslBox environment variables if provided
       {pbx_env_vars}
-      
-      pbx run --config {config} --run-dir {run_dir} {run_options}
 
+      pbx run --config {config} --run-dir {run_dir} {run_options}
+'''
+
+# Documentation blocks (used by ConfigGenerator to include in generated configs)
+SCHED_OPTS_NOTES = '''# ---------------------------------------------------------------------------
+# Scheduler Options (sched_opts)
+#
+# Use sched_opts to add extra scheduler directives per system.
+# These are merged into the template using a three-layer override chain:
+#   Template (base) → config sched_opts (below) → CLI/API --sched-opts (per-run)
+#
+# Directives with matching keys override the template; new ones are appended.
+#
+# Example:
+# polaris:
+#   pbx_python_env_setup: |
+#     module load conda
+#     conda activate myenv
+#   sched_opts: |
+#     #PBS -l filesystems=home:eagle
+#     #PBS -l place=scatter
+#     #PBS -m be
+#     #PBS -M user@example.com
+#
+# You can also pass per-run overrides via the CLI:
+#   pbx qsub ... --sched-opts "#PBS -l filesystems=home:grand"
+#   pbx sbatch ... --sched-opts "#SBATCH --mem=128G"
 # ---------------------------------------------------------------------------
+'''
+
+MPI_CONFIG_NOTES = '''# ---------------------------------------------------------------------------
 # MPI Configuration
 #
 # The mpi: section can be defined at the app-level for each system.
@@ -102,8 +125,9 @@ schedulers:
 #   {rankfile_path}  - Path to generated rankfile (generated on-demand)
 #   {wrapper_path}   - Path to GPU wrapper script (generated on-demand)
 # ---------------------------------------------------------------------------
+'''
 
-# ---------------------------------------------------------------------------
+CUSTOM_APPS_NOTES = '''# ---------------------------------------------------------------------------
 # Custom Application Registration
 #
 # Register your own custom applications here. Once registered, they work
@@ -123,7 +147,7 @@ schedulers:
 #   my_app:
 #     module: "/path/to/my_app.py"     # Path to your Python file
 #     class: "MyApp"                   # Name of your class inside the file
-#   
+#
 #   another_app:
 #     module: "~/my_apps/another.py"   # Supports ~ expansion
 #     class: "AnotherApp"              # Name of your class inside the file
@@ -138,7 +162,57 @@ custom_apps: {}
   # simulation_app:
   #   module: "my_simulation_package.apps"  # Or use installed Python package
   #   class: "SimulationApp"                 # Class name within that module
- 
+'''
+
+EXAMPLE_APP_TEMPLATE = '''#===== Example APP Template =====#
+# Copy this template to add your own applications
+
+# app_name:  # e.g., lammps, vasp, my_simulation
+#   system_name:  # e.g., polaris, aurora-tile, sophia
+#     # Full, absolute path to the software executable on the system.
+#     executable_path: "/path/to/your/software/executable/on/system"
+#
+#     # Shell commands to set up the environment on a compute node.
+#     # This block will be executed before the main mpirun command.
+#     # Use '|' to define a multi-line string in YAML.
+#     environment_setup: |
+#       # Add all necessary `module load` and `export` commands here.
+#       # Example:
+#       # module purge      # Always purge modules first in apps
+#       # module restore    # Then restore modules if you want
+#       # module load PrgEnv-gnu
+#       # module load ...
+#
+#     # Optional: Override system MPI settings for this app
+#     # mpi:
+#     #   cpu_bind_method: rankfile
+#     #   use_gpu_wrapper: true
+
+# ============================================
+
+'''
+
+# ---------------------------------------------------------------------------
+# DEFAULT_CONFIG_YAML — assembled from the constants above
+# ---------------------------------------------------------------------------
+DEFAULT_CONFIG_YAML = f"""
+# ---------------------------------------------------------------------------
+# parslbox Application Configuration
+#
+# This file defines settings for different applications (e.g., lammps)
+# on different systems (e.g., polaris, sophia).
+#
+# IMPORTANT: You must edit this file and provide the correct, absolute
+#            path to the executables for your environment.
+# ---------------------------------------------------------------------------
+
+# Scheduler submission templates
+schedulers:
+{PBS_TEMPLATE}
+{SLURM_TEMPLATE}
+{SCHED_OPTS_NOTES}
+{MPI_CONFIG_NOTES}
+{CUSTOM_APPS_NOTES}
 # ==========================================
 
 # Application configurations
@@ -234,5 +308,5 @@ lammps:
 #     executable_path: "/path/to/app"
 #     mpi:
 #       disable: ["--map-by"]
-#       add: ["--map-by rankfile:file={rankfile_path}:OVERSUBSCRIBE", "--mca btl ^openib"]
+#       add: ["--map-by rankfile:file={{rankfile_path}}:OVERSUBSCRIBE", "--mca btl ^openib"]
 """

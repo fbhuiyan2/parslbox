@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.8.1] - 2026-03-01
+
+### Added
+
+#### General-purpose `sched_opts` (Scheduler Options) Support
+- **Three-layer override chain** for scheduler directives: template → config `sched_opts` → CLI `--sched-opts`
+  - Template directives serve as the base layer
+  - Per-system persistent overrides via `sched_opts` key in config YAML
+  - Per-run overrides via repeatable `--sched-opts` CLI flag
+  - Matching keys are replaced in-place; new directives are appended at the `{sched_opts}` placeholder
+
+- **`parslbox/commands/helpers/sched_opts_helpers.py`** — Directive parsing & merging
+  - `extract_directive_key()` — Parses `#PBS` and `#SBATCH` directive lines, returns canonical key
+  - `merge_sched_opts()` — Merges directives from template, config, and CLI layers
+
+- **`parslbox/commands/helpers/submit_helpers.py`** — Shared submission logic
+  - `submit_job()` — Unified function for PBS/SLURM submission with `sched_opts` support
+  - `ValidationError` — Shared exception class used by both qsub and sbatch commands
+
+#### New `pbx sbatch` Command
+- **SLURM job submission** via `pbx sbatch` — Mirrors `pbx qsub` for SLURM-based systems
+  - `submit_to_slurm()` — Thin wrapper calling `submit_job(scheduler_type="slurm")`
+  - CLI with SLURM-appropriate terminology (partition, sbatch, squeue)
+  - Supports `--sched-opts` for extra `#SBATCH` directives
+
+#### MCP & API
+- **`sbatch()` method** added to `ParslBox` API class
+- **`SBatchSchema`** added to MCP schemas for SLURM job submission
+- **`submit_slurm_job` MCP tool** for submitting SLURM jobs
+
+### Changed
+
+#### PBS Template Cleanup
+- **Removed `filesystems` parameter** from `qsub` CLI, API, and MCP schema
+  - Filesystems are now handled via `--sched-opts "#PBS -l filesystems=home:eagle"` instead of a dedicated flag
+- **Removed special filesystems line-removal logic** from `qsub.py`
+- **Removed `#PBS -m be` and `#PBS -M your@email.com`** from default PBS templates
+  - Mail notifications can be added via `sched_opts` if needed
+- **Added `{sched_opts}` placeholder** to both PBS and SLURM templates in `pbx_config_template.py` and `config_generator.py`
+
+#### Refactored Submission Logic
+- **`qsub.py` refactored** — `submit_to_scheduler()` now delegates to `submit_helpers.submit_job()`
+- **`--sched-opts` CLI option** added to `pbx qsub` (repeatable flag for extra `#PBS` directives)
+- **Generic `job_id` key** in submission results, with backward-compatible `pbs_job_id`/`slurm_job_id` keys
+
+### New Files
+- `parslbox/commands/helpers/sched_opts_helpers.py`
+- `parslbox/commands/helpers/submit_helpers.py`
+- `parslbox/commands/sbatch.py`
+- `tests/test_sched_opts.py` (49 tests)
+
+### Modified Files
+- `parslbox/commands/qsub.py`
+- `parslbox/utils/pbx_config_template.py`
+- `parslbox/utils/config_generator.py`
+- `parslbox/main.py`
+- `parslbox/api.py`
+- `parslbox/mcp/schemas.py`
+- `parslbox/mcp/mcp_server.py`
+
+---
+
 ## [0.7.1] - 2025-02-07
 
 

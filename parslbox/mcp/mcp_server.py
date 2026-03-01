@@ -7,6 +7,7 @@ from parslbox.mcp.schemas import (
     AddJobSchema,
     FilterJobsSchema,
     QSubSchema,
+    SBatchSchema,
     RemoveJobsSchema,
     UpdateJobSchema,
 )
@@ -20,7 +21,8 @@ mcp = FastMCP(
         "You expose tools for managing and running ParslBox jobs.\n\n"
         "Available capabilities:\n"
         "- add_jobs: create new jobs and add them to the ParslBox database.\n"
-        "- submit_job: submit PBS jobs to the queue using a qsub-style configuration.\n"
+        "- submit_pbs_job: submit PBS jobs to the queue using a qsub-style configuration.\n"
+        "- submit_slurm_job: submit SLURM jobs to the queue using an sbatch-style configuration.\n"
         "- remove_jobs: remove one or more jobs from the database.\n"
         "- update_job: modify fields of an existing job (status, tag, input file, resources, dependencies, etc.). Note: app cannot be changed after job creation.\n"
         "- filter_jobs: filter jobs by status, app, tag, path, or input file and return their IDs.\n\n"
@@ -65,15 +67,15 @@ def add_jobs(params: AddJobSchema) -> str:
 
 
 @mcp.tool(
-    name="submit_job",
+    name="submit_pbs_job",
     description=(
         "Submit a PBS job via ParslBox.qsub.\n\n"
         "Takes configuration (system config name, job name, queue, select, walltime, project) "
-        "plus optional filesystems, run directory, apps, tags, and retries. "
+        "plus optional run directory, apps, tags, retries, and sched_opts for extra PBS directives. "
         "Returns a short message describing whether submission succeeded."
     ),
 )
-def submit_job(params: QSubSchema) -> str:
+def submit_pbs_job(params: QSubSchema) -> str:
     input_dict = params.model_dump()
 
     try:
@@ -82,7 +84,7 @@ def submit_job(params: QSubSchema) -> str:
         return f"Exception occurred when submitting job. Exception: {e}"
 
     if status.get("success") is True:
-        job_id = status.get("pbs_job_id", "UNKNOWN")
+        job_id = status.get("job_id", status.get("pbs_job_id", "UNKNOWN"))
         run_dir = status.get("run_dir", "UNKNOWN")
         return (
             f"Job was submitted successfully.\n"
@@ -94,6 +96,41 @@ def submit_job(params: QSubSchema) -> str:
         run_dir = status.get("run_dir", "UNKNOWN")
         return (
             "Failed to submit job.\n"
+            f"Error: {error_msg}\n"
+            f"Run directory (if created): {run_dir}"
+        )
+
+
+@mcp.tool(
+    name="submit_slurm_job",
+    description=(
+        "Submit a SLURM job via ParslBox.sbatch.\n\n"
+        "Takes configuration (system config name, job name, partition, nodes, walltime, project) "
+        "plus optional run directory, apps, tags, retries, and sched_opts for extra SLURM directives. "
+        "Returns a short message describing whether submission succeeded."
+    ),
+)
+def submit_slurm_job(params: SBatchSchema) -> str:
+    input_dict = params.model_dump()
+
+    try:
+        status = pbx.sbatch(**input_dict)
+    except Exception as e:
+        return f"Exception occurred when submitting SLURM job. Exception: {e}"
+
+    if status.get("success") is True:
+        job_id = status.get("job_id", status.get("slurm_job_id", "UNKNOWN"))
+        run_dir = status.get("run_dir", "UNKNOWN")
+        return (
+            f"SLURM job was submitted successfully.\n"
+            f"SLURM job ID: {job_id}\n"
+            f"Run directory: {run_dir}"
+        )
+    else:
+        error_msg = status.get("error", "Unknown error")
+        run_dir = status.get("run_dir", "UNKNOWN")
+        return (
+            "Failed to submit SLURM job.\n"
             f"Error: {error_msg}\n"
             f"Run directory (if created): {run_dir}"
         )

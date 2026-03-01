@@ -8,7 +8,7 @@ from parslbox.commands.helpers.submit_helpers import submit_job, ValidationError
 app = typer.Typer()
 
 
-def submit_to_scheduler(
+def submit_to_slurm(
     config_name: str,
     job_name: str,
     queue: str,
@@ -24,7 +24,7 @@ def submit_to_scheduler(
     sched_opts: Optional[List[str]] = None,
 ):
     """
-    Submit a PBS job via qsub. Thin wrapper around submit_job().
+    Submit a SLURM job via sbatch. Thin wrapper around submit_job().
     """
     return submit_job(
         config_name=config_name,
@@ -40,30 +40,28 @@ def submit_to_scheduler(
         loglevel=loglevel,
         config_path=config_path,
         sched_opts=sched_opts,
-        scheduler_type="pbs",
-        submit_command="qsub",
+        scheduler_type="slurm",
+        submit_command="sbatch",
     )
 
 
-# Main CLI command
-
 @app.command()
-def qsub(
+def sbatch(
     config_name: Annotated[
         str,
         typer.Option("--config", "-c", help="The name of the configuration to use (e.g., 'sophia').")
     ],
     job_name: Annotated[
         str,
-        typer.Option("--job-name", "-N", help="PBS job name.")
+        typer.Option("--job-name", "-N", help="SLURM job name.")
     ],
     queue: Annotated[
         str,
-        typer.Option("--queue", "-q", help="PBS queue name.")
+        typer.Option("--queue", "-q", help="SLURM partition name.")
     ],
     select: Annotated[
         str,
-        typer.Option("--select", help="PBS select specification (e.g., '4', '2:ncpus=32:ngpus=4', '1:ncpus=16+2:ncpus=32:ngpus=2').")
+        typer.Option("--select", help="Number of nodes to request.")
     ],
     walltime: Annotated[
         int,
@@ -95,13 +93,13 @@ def qsub(
     ] = "info",
     sched_opts: Annotated[
         Optional[List[str]],
-        typer.Option("--sched-opts", help="Extra PBS directives (repeatable, e.g., --sched-opts '#PBS -l filesystems=home:eagle').")
+        typer.Option("--sched-opts", help="Extra SLURM directives (repeatable, e.g., --sched-opts '#SBATCH --mem=64G').")
     ] = None,
 ):
     """
-    Generate and submit a PBS job script for running parslbox workflows.
+    Generate and submit a SLURM job script for running parslbox workflows.
 
-    Use --sched-opts to pass extra #PBS directives. This flag can be repeated.
+    Use --sched-opts to pass extra #SBATCH directives. This flag can be repeated.
     Directives that match a key already in the template will override it;
     new directives are appended.
     """
@@ -110,8 +108,7 @@ def qsub(
         apps_list = apps.split(',') if apps else None
         tags_list = tags.split(',') if tags else None
 
-        # Call core function
-        result = submit_to_scheduler(
+        result = submit_to_slurm(
             config_name=config_name,
             job_name=job_name,
             queue=queue,
@@ -131,9 +128,9 @@ def qsub(
         typer.secho(f"\U0001f4dd Generated submit script: {result['submit_file']}", fg=typer.colors.GREEN)
 
         if result["success"]:
-            job_id = result.get("pbs_job_id", result.get("job_id", "UNKNOWN"))
+            job_id = result.get("slurm_job_id", result.get("job_id", "UNKNOWN"))
             typer.secho(f"\U0001f680 Job submitted successfully! Job ID: {job_id}", fg=typer.colors.GREEN)
-            typer.secho(f"\U0001f4ca Monitor with: qstat {job_id}", fg=typer.colors.BLUE)
+            typer.secho(f"\U0001f4ca Monitor with: squeue -j {job_id}", fg=typer.colors.BLUE)
             typer.secho(f"\U0001f4c1 Run directory: {result['run_dir']}", fg=typer.colors.BLUE)
         else:
             typer.secho(f"\u274c Error submitting job: {result['error']}", fg=typer.colors.RED)
