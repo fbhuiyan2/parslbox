@@ -43,8 +43,13 @@ class LammpsKokkosApp(AppBase):
             # Wrapper script is being used - each rank sees 1 GPU
             lammps_gpu_count = 1
         else:
-            # No wrapper script - use total GPU count
-            lammps_gpu_count = total_gpus
+            # No wrapper script - use per-node GPU count for Kokkos
+            # In multi-node jobs, total_gpus > gpus_per_node, but LAMMPS Kokkos
+            # -k on g N expects the per-node GPU count, not the total.
+            from parslbox.system_configs.loader import get_system_config
+            config_name = kwargs['config_name']
+            gpus_per_node = get_system_config(config_name).GPUS_PER_NODE
+            lammps_gpu_count = min(total_gpus, gpus_per_node)
         
         # LAMMPS-specific: GPU vs CPU arguments
         if total_gpus > 0:
