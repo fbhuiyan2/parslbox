@@ -243,19 +243,127 @@ class TestMPICommandBuilder:
     
     def test_build_srun_command(self):
         """Test building srun command."""
+        self.mock_job_spec.detect_job_type.return_value = "fullnode_cpu"
         builder = MPICommandBuilder("srun")
         command = builder.build_command(
-            self.mock_assignment, 
-            self.mock_system_config, 
+            self.mock_assignment,
+            self.mock_system_config,
             self.mock_job_spec
         )
-        
+
         # Should include SLURM-specific flags
         assert "srun" in command
         assert "--ntasks 4" in command
         assert "--ntasks-per-node 2" in command
         assert "--nodelist node1,node2" in command
         assert "--nodes 2" in command
+
+    @patch('parslbox.resource_manager.mpi_launcher.generate_mpiexec_gpu_wrapper')
+    def test_build_srun_fullnode_cpu(self, mock_wrapper):
+        """Test building srun command for fullnode CPU job."""
+        self.mock_job_spec.detect_job_type.return_value = "fullnode_cpu"
+
+        builder = MPICommandBuilder("srun")
+        command = builder.build_command(
+            self.mock_assignment,
+            self.mock_system_config,
+            self.mock_job_spec
+        )
+
+        # Should include CPU binding flags
+        assert "--ntasks 4" in command
+        assert "--nodes 2" in command
+        assert "--ntasks-per-node 2" in command
+        assert "--cpus-per-task 32" in command  # 64 cores / 2 ranks_per_node
+        assert "--cpu-bind=cores" in command
+        # No wrapper for CPU-only job
+        mock_wrapper.assert_not_called()
+        assert "wrapper" not in command
+
+    @patch('parslbox.resource_manager.mpi_launcher.generate_mpiexec_gpu_wrapper')
+    def test_build_srun_subnode_gpu(self, mock_wrapper):
+        """Test building srun command for subnode GPU job."""
+        mock_wrapper.return_value = "/tmp/gpu_wrapper.sh"
+        self.mock_assignment.is_single_node.return_value = True
+        self.mock_assignment.hostnames = ["node1"]
+        self.mock_assignment.node_ids = [1]
+        self.mock_assignment.get_ranks_for_node.return_value = [0, 1]
+        self.mock_assignment.get_cpu_assignments_for_rank.return_value = [0, 1, 2, 3]
+        self.mock_job_spec.detect_job_type.return_value = "subnode_gpu"
+        self.mock_job_spec.is_gpu_job.return_value = True
+        self.mock_job_spec.get_total_ranks.return_value = 2
+        self.mock_job_spec.ngpus = 2
+
+        builder = MPICommandBuilder("srun")
+        command = builder.build_command(
+            self.mock_assignment,
+            self.mock_system_config,
+            self.mock_job_spec
+        )
+
+        # Should have subnode CPU flags + GPU wrapper
+        assert "--ntasks 2" in command
+        assert "--nodes 1" in command
+        assert "--cpus-per-task 4" in command
+        assert "--cpu-bind=cores" in command
+        assert "--exact" in command
+        mock_wrapper.assert_called_once()
+        assert "gpu_wrapper.sh" in command
+
+    @patch('parslbox.resource_manager.mpi_launcher.generate_mpiexec_gpu_wrapper')
+    def test_build_srun_fullnode_gpu(self, mock_wrapper):
+        """Test building srun command for fullnode GPU job."""
+        mock_wrapper.return_value = "/tmp/gpu_wrapper.sh"
+        self.mock_job_spec.detect_job_type.return_value = "fullnode_gpu"
+        self.mock_job_spec.is_gpu_job.return_value = True
+        self.mock_job_spec.ngpus = 2
+        self.mock_job_spec.ranks_per_node = 2
+
+        builder = MPICommandBuilder("srun")
+        command = builder.build_command(
+            self.mock_assignment,
+            self.mock_system_config,
+            self.mock_job_spec
+        )
+
+        # Should have fullnode CPU flags + GPU wrapper
+        assert "--ntasks 4" in command
+        assert "--nodes 2" in command
+        assert "--ntasks-per-node 2" in command
+        assert "--cpus-per-task 32" in command  # 64 cores / 2 gpus_per_node
+        assert "--cpu-bind=cores" in command
+        mock_wrapper.assert_called_once()
+        assert "gpu_wrapper.sh" in command
+        # No --exact for fullnode
+        assert "--exact" not in command
+
+    @patch('parslbox.resource_manager.mpi_launcher.generate_mpiexec_gpu_wrapper')
+    def test_build_srun_multinode_gpu(self, mock_wrapper):
+        """Test building srun command for multinode GPU job."""
+        mock_wrapper.return_value = "/tmp/gpu_wrapper.sh"
+        self.mock_assignment.hostnames = ["node1", "node2"]
+        self.mock_assignment.node_ids = [1, 2]
+        self.mock_job_spec.detect_job_type.return_value = "fullnode_gpu"
+        self.mock_job_spec.is_gpu_job.return_value = True
+        self.mock_job_spec.get_total_ranks.return_value = 8
+        self.mock_job_spec.ngpus = 4
+        self.mock_job_spec.ranks_per_node = 4
+
+        builder = MPICommandBuilder("srun")
+        command = builder.build_command(
+            self.mock_assignment,
+            self.mock_system_config,
+            self.mock_job_spec
+        )
+
+        # Should have multinode flags
+        assert "--ntasks 8" in command
+        assert "--nodes 2" in command
+        assert "--ntasks-per-node 4" in command
+        assert "--cpus-per-task 16" in command  # 64 cores / 4 gpus_per_node
+        assert "--cpu-bind=cores" in command
+        mock_wrapper.assert_called_once()
+        assert "gpu_wrapper.sh" in command
     
     def test_filter_disabled_flags_exact_match(self):
         """Test filtering flags with exact flag matching."""

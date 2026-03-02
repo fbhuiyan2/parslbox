@@ -300,7 +300,7 @@ class TestConfigGenerator:
         assert "MPI Configuration Options:" in footer
         assert "backend: openmpi | mpich | srun" in footer
         assert "cpu_bind_method:" in footer
-        assert "CPU Binding Methods:" in footer
+        assert "CPU Binding Methods (OpenMPI & MPICH):" in footer
         assert "Template Variables" in footer
         assert "{total_ranks}" in footer
         assert "{hostlist}" in footer
@@ -333,7 +333,7 @@ class TestConfigGenerator:
             config_str = generator.generate()
 
             assert "MPI Configuration" in config_str
-            assert "CPU Binding Methods:" in config_str
+            assert "CPU Binding Methods (OpenMPI & MPICH):" in config_str
             assert "rankfile  - Precise per-rank CPU binding" in config_str
             assert "Template Variables" in config_str
             assert "{total_ranks}" in config_str

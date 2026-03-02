@@ -76,12 +76,7 @@ class MPICommandBuilder:
         elif self.launcher_type == "mpiexec":
             flags, context = self._build_mpiexec_flags(assignment, system_config, job_spec, job_path)
         elif self.launcher_type == "srun":
-            flags = self._build_srun_flags(assignment, system_config, job_spec)
-            context = {
-                'hostlist': ",".join(assignment.hostnames),
-                'total_ranks': job_spec.get_total_ranks(),
-                'wrapper_path': None
-            }
+            flags, context = self._build_srun_flags(assignment, system_config, job_spec, job_path)
         
         # Apply overrides with context for template substitution
         # This happens BEFORE the wrapper is appended
@@ -242,24 +237,76 @@ class MPICommandBuilder:
         
         return flags, context
     
-    def _build_srun_flags(self, assignment: 'ResourceAssignment', system_config: 'SystemConfig', 
-                         job_spec: 'JobResourceSpec') -> list[str]:
-        """Build srun-specific flags."""
+    def _build_srun_flags(self, assignment: 'ResourceAssignment', system_config: 'SystemConfig',
+                         job_spec: 'JobResourceSpec', job_path: str = None) -> tuple[list[str], dict]:
+        """Build srun-specific flags with job-type-aware CPU binding and GPU wrapper support.
+
+        Returns:
+            Tuple of (flags_list, context_dict) where context contains template variables
+        """
         flags = []
         num_nodes = len(assignment.node_ids)
         total_ranks = job_spec.get_total_ranks()
-        
-        if assignment.is_single_node():
-            ranks_per_node = total_ranks
-        else:
-            ranks_per_node = job_spec.ranks_per_node if not job_spec.is_gpu_job() else job_spec.ngpus
-        
+        hostlist = ",".join(assignment.hostnames)
+        job_type = job_spec.detect_job_type(system_config)
+
+        # Initialize context for template substitution in overrides
+        context = {
+            'hostlist': hostlist,
+            'total_ranks': total_ranks,
+            'wrapper_path': None
+        }
+
+        # Common flags for all job types
         flags.extend(["--ntasks", str(total_ranks)])
-        flags.extend(["--ntasks-per-node", str(ranks_per_node)])
-        flags.extend(["--nodelist", ",".join(assignment.hostnames)])
         flags.extend(["--nodes", str(num_nodes)])
-        
-        return flags
+        flags.extend(["--nodelist", hostlist])
+
+        if job_type == "fullnode_cpu":
+            ranks_per_node = job_spec.ranks_per_node
+            excluded_cores = getattr(system_config, 'EXCLUDE_CORES', None) or []
+            effective_cores_per_node = system_config.CORES_PER_NODE - len(excluded_cores)
+            cpus_per_task = effective_cores_per_node // ranks_per_node
+            flags.extend(["--ntasks-per-node", str(ranks_per_node)])
+            flags.extend(["--cpus-per-task", str(cpus_per_task)])
+            flags.extend(["--cpu-bind=cores"])
+
+        elif job_type == "subnode_cpu":
+            # Determine cpus_per_task from resource manager assignments
+            first_rank = assignment.get_ranks_for_node(0)[0]
+            cpu_cores = assignment.get_cpu_assignments_for_rank(first_rank)
+            cpus_per_task = len(cpu_cores) if cpu_cores else 1
+            flags.extend(["--ntasks-per-node", str(total_ranks)])
+            flags.extend(["--cpus-per-task", str(cpus_per_task)])
+            flags.extend(["--cpu-bind=cores"])
+            flags.extend(["--exact"])
+
+        elif job_type == "subnode_gpu":
+            # CPU flags same as subnode_cpu
+            first_rank = assignment.get_ranks_for_node(0)[0]
+            cpu_cores = assignment.get_cpu_assignments_for_rank(first_rank)
+            cpus_per_task = len(cpu_cores) if cpu_cores else 1
+            flags.extend(["--ntasks-per-node", str(total_ranks)])
+            flags.extend(["--cpus-per-task", str(cpus_per_task)])
+            flags.extend(["--cpu-bind=cores"])
+            flags.extend(["--exact"])
+            # GPU wrapper
+            wrapper_path = generate_mpiexec_gpu_wrapper(assignment, system_config, job_spec, job_path)
+            context['wrapper_path'] = wrapper_path
+
+        elif job_type == "fullnode_gpu":
+            ranks_per_node = job_spec.ranks_per_node if not job_spec.is_gpu_job() else job_spec.ngpus
+            excluded_cores = getattr(system_config, 'EXCLUDE_CORES', None) or []
+            effective_cores_per_node = system_config.CORES_PER_NODE - len(excluded_cores)
+            cpus_per_task = effective_cores_per_node // ranks_per_node
+            flags.extend(["--ntasks-per-node", str(ranks_per_node)])
+            flags.extend(["--cpus-per-task", str(cpus_per_task)])
+            flags.extend(["--cpu-bind=cores"])
+            # GPU wrapper
+            wrapper_path = generate_mpiexec_gpu_wrapper(assignment, system_config, job_spec, job_path)
+            context['wrapper_path'] = wrapper_path
+
+        return flags, context
     
     def _apply_overrides(self, flags: list[str], context: dict = None) -> list[str]:
         """

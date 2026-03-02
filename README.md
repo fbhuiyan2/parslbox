@@ -267,6 +267,13 @@ Using PBX_DB_PATH and/or PBX_CONFIG_PATH to set the paths allow users to use mul
 - Multi‑node jobs: require exclusive free nodes; MPI hostlist is generated.
 - Backlog and scheduling when resources are temporarily unavailable; dependency‑aware rescheduling after resources free up.
 
+### MPI CPU Binding
+
+ParslBox generates MPI launch commands with CPU binding flags appropriate for each job type (subnode, fullnode, multinode) and scheduler:
+
+- **PBS systems (mpiexec/MPICH, mpirun/OpenMPI):** Configurable via `cpu_bind_method` in the `mpi:` config section. Options include `none`, `rankfile`, `list`, and `depth`. The `rankfile` and `list` methods provide GPU-affinity-aware core assignments using the resource manager's per-rank CPU maps.
+- **SLURM systems (srun):** CPU binding is handled automatically. ParslBox generates `--cpus-per-task=D --cpu-bind=cores` for all job types, plus `--exact` for subnode jobs to prevent over-allocation. GPU jobs use the same wrapper scripts as PBS backends (the wrappers detect SLURM rank via `SLURM_PROCID`/`SLURM_LOCALID` environment variables).
+
 Details and examples: parslbox/resource_manager/README.md
 
 ## Job Lifecycle

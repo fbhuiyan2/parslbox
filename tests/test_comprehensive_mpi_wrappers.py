@@ -518,5 +518,44 @@ class TestJobTypeScenarios:
         os.unlink(wrapper_path)
 
 
+class TestSLURMWrapperSupport:
+    """Test that GPU wrappers include SLURM environment variable support."""
+
+    def setup_method(self):
+        """Set up test fixtures."""
+        self.polaris_config = PolarisConfig()
+
+    def test_mpiexec_wrapper_slurm_env_vars(self):
+        """Test that mpiexec CUDA wrapper includes SLURM env var fallback chains."""
+        assignment = ResourceAssignment(
+            job_id=99999,
+            node_ids=["node-0"],
+            hostnames=["test-node"],
+            node_occupancy=1.0
+        )
+        assignment.assign_resources_to_rank(
+            rank=0, node_idx=0, gpu_ids=[0], cpu_ids=[0, 1, 2, 3]
+        )
+
+        job_spec = JobResourceSpec(job_id=99999, ngpus=1, num_nodes=1)
+
+        wrapper_path = mpiexec_cuda_gpu_wrapper(assignment, self.polaris_config, job_spec)
+
+        with open(wrapper_path, 'r') as f:
+            content = f.read()
+
+        # Verify SLURM env vars are in the rank detection fallback chains
+        assert "SLURM_LOCALID" in content, "Wrapper should include SLURM_LOCALID for local rank detection"
+        assert "SLURM_PROCID" in content, "Wrapper should include SLURM_PROCID for global rank detection"
+
+        # Verify the fallback chain order (PMI -> OMPI -> SLURM -> default)
+        assert "PMI_LOCAL_RANK" in content
+        assert "OMPI_COMM_WORLD_LOCAL_RANK" in content
+        assert "PMI_RANK" in content
+        assert "OMPI_COMM_WORLD_RANK" in content
+
+        os.unlink(wrapper_path)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

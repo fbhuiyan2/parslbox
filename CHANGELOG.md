@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Full srun Backend for SLURM Systems
+- **Job-type-aware srun command generation** — `_build_srun_flags()` in `mpi_launcher.py` now generates proper CPU binding and GPU wrapper flags for all job types:
+  - `fullnode_cpu`: `--ntasks-per-node M --cpus-per-task D --cpu-bind=cores`
+  - `subnode_cpu`: `--ntasks-per-node N --cpus-per-task D --cpu-bind=cores --exact`
+  - `subnode_gpu`: Same CPU flags as subnode_cpu + GPU wrapper script
+  - `fullnode_gpu`: `--ntasks-per-node M --cpus-per-task D --cpu-bind=cores` + GPU wrapper script
+- **`--exact` flag for subnode srun steps** — Prevents step from accessing more CPUs than allocated, enabling correct subnode isolation on SLURM
+- **GPU wrapper reuse** — srun uses the same `generate_mpiexec_gpu_wrapper()` wrappers as PBS backends; wrappers already include `SLURM_PROCID`/`SLURM_LOCALID` fallback chains for rank detection
+- **`--cpus-per-task` in depth binding** — `_build_depth_binding()` srun branch in `mpi_command_builder.py` now emits `--cpus-per-task N --cpu-bind=cores` instead of bare `--cpu-bind=cores`
+
 #### General-purpose `sched_opts` (Scheduler Options) Support
 - **Three-layer override chain** for scheduler directives: template → config `sched_opts` → CLI `--sched-opts`
   - Template directives serve as the base layer
@@ -66,6 +76,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `parslbox/api.py`
 - `parslbox/mcp/schemas.py`
 - `parslbox/mcp/mcp_server.py`
+- `parslbox/resource_manager/mpi_launcher.py` — Rewrote `_build_srun_flags()`, fixed `build_command()` srun branch
+- `parslbox/resource_manager/mpi_command_builder.py` — Added `--cpus-per-task` to srun depth binding
+- `tests/test_mpi_launcher.py` — Added srun tests (fullnode_cpu, subnode_gpu, fullnode_gpu, multinode_gpu)
+- `tests/test_comprehensive_mpi_wrappers.py` — Added SLURM env var wrapper verification test
 
 ---
 

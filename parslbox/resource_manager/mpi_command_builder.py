@@ -373,9 +373,7 @@ class SimpleMPICommandBuilder:
             return ["--cpu-bind", "depth", "--depth", str(depth)]
         
         elif backend == MPIBackend.SRUN:
-            # SRUN: use --cpu-bind=cores (depth not directly supported)
-            logger.info("SRUN doesn't support explicit depth, using --cpu-bind=cores")
-            return ["--cpu-bind=cores"]
+            return ["--cpus-per-task", str(depth), "--cpu-bind=cores"]
         
         return []
     

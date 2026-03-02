@@ -103,7 +103,10 @@ MPI_CONFIG_NOTES = '''# --------------------------------------------------------
 #   disable: [] (list of flags/substrings to remove, applied first)
 #   add: [] (list of flags to append, supports templates)
 #
-# CPU Binding Methods:
+# CPU Binding Methods (OpenMPI & MPICH):
+#   The cpu_bind_method option applies to the OpenMPI and MPICH backends.
+#   For the srun backend, CPU binding is handled automatically (see below).
+#
 #   none      - No CPU binding (simplest, default)
 #   rankfile  - Precise per-rank CPU binding via rankfile (GPU-affinity-aware)
 #   list      - --cpu-bind list (MPICH) or rankfile (OpenMPI) (GPU-affinity-aware)
@@ -116,6 +119,15 @@ MPI_CONFIG_NOTES = '''# --------------------------------------------------------
 #   These methods use explicit per-rank core IDs from the resource manager,
 #   which selects cores physically near each assigned GPU when a CPU affinity
 #   map is available for the system.
+#
+# srun Backend (SLURM):
+#   When backend is set to "srun", CPU binding is handled automatically by
+#   pbx based on the job type. The cpu_bind_method option is not used.
+#   Instead, pbx generates the appropriate srun flags:
+#     --cpus-per-task=D --cpu-bind=cores   (all job types)
+#     --exact                              (subnode jobs only)
+#   For GPU jobs, the same GPU wrapper scripts are used (use_gpu_wrapper).
+#   The wrappers detect SLURM rank via SLURM_PROCID/SLURM_LOCALID env vars.
 #
 # Template Variables (for use in 'add'):
 #   {total_ranks}    - Total number of MPI ranks
