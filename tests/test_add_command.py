@@ -67,7 +67,7 @@ class TestAddCommand:
             
             result = runner.invoke(add_app, [
                 str(temp_job_dirs["job1"]),
-                "--app", "lammps",
+                "--app", "lammps-kk",
                 "--config", "polaris",
                 "--ngpus", "2",
                 "--tag", "test-gpu"
@@ -81,7 +81,7 @@ class TestAddCommand:
             jobs = database.get_jobs(temp_db)
             assert len(jobs) == 1
             job = jobs[0]
-            assert job['app'] == 'lammps'
+            assert job['app'] == 'lammps-kk'
             assert job['num_nodes'] == 1
             assert job['ngpus'] == 2
             assert job['node_occupancy'] == 1.0
@@ -144,10 +144,10 @@ class TestAddCommand:
                  'INPUT_REQUIRED': True,
                  'DFLT_INPUT': 'in.lammps'
              }):
-            
+
             result = runner.invoke(add_app, [
                 str(temp_job_dirs["job1"]),
-                "--app", "lammps",
+                "--app", "lammps-kk",
                 "--config", "polaris",
                 "--nnodes", "2"
             ])
@@ -161,7 +161,7 @@ class TestAddCommand:
             jobs = database.get_jobs(temp_db)
             assert len(jobs) == 1
             job = jobs[0]
-            assert job['app'] == 'lammps'
+            assert job['app'] == 'lammps-kk'
             assert job['num_nodes'] == 2
             assert job['node_occupancy'] == 1.0
     
@@ -225,7 +225,7 @@ class TestAddCommand:
             
             result = runner.invoke(add_app, [
                 str(temp_job_dirs["job1"]),
-                "--app", "lammps",
+                "--app", "lammps-kk",
                 "--config", "polaris",
                 "--ngpus", "8"  # More than 4 GPUs per node
             ])
@@ -281,7 +281,7 @@ class TestAddCommand:
             
             result = runner.invoke(add_app, [
                 str(temp_job_dirs["job1"]),
-                "--app", "lammps",
+                "--app", "lammps-kk",
                 "--config", "polaris",
                 "--nnodes", "0"  # Invalid node count
             ])
@@ -295,7 +295,7 @@ class TestAddCommand:
         
         with patch('parslbox.commands.add.path_utils.DB_FILE', temp_db), \
              patch('parslbox.commands.add.is_app_registered', return_value=False), \
-             patch('parslbox.apps.app_registry.get_registered_apps', return_value=['lammps', 'vasp', 'python']):
+             patch('parslbox.apps.app_registry.get_registered_apps', return_value=['lammps-kk', 'vasp', 'python']):
             
             result = runner.invoke(add_app, [
                 str(temp_job_dirs["job1"]),
@@ -317,7 +317,7 @@ class TestAddCommand:
             
             result = runner.invoke(add_app, [
                 "/nonexistent/path",
-                "--app", "lammps",
+                "--app", "lammps-kk",
                 "--config", "polaris",
             ])
             
@@ -341,15 +341,15 @@ class TestAddCommand:
             result1 = runner.invoke(add_app, [
                 str(temp_job_dirs["job1"]),
                 "--config", "polaris",
-                "--app", "lammps"
+                "--app", "lammps-kk"
             ])
             assert result1.exit_code == 0
-            
+
             # Try to add same job again
             result2 = runner.invoke(add_app, [
                 str(temp_job_dirs["job1"]),
                 "--config", "polaris",
-                "--app", "lammps"
+                "--app", "lammps-kk"
             ])
             assert result2.exit_code == 1
             assert "❌ Failed to add 1 job(s):" in result2.stdout
@@ -417,7 +417,7 @@ class TestAddCommand:
                 result = runner.invoke(add_app, [
                     str(temp_job_dirs["job1"]),
                     "--config", "polaris",
-                    "--app", "lammps"
+                    "--app", "lammps-kk"
                 ])
                 
                 assert result.exit_code == 0

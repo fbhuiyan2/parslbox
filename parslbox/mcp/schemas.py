@@ -11,7 +11,7 @@ class AddJobSchema(BaseModel):
         description="One or more paths to job directories, or 'all' to add all subdirectories in the current location.",
     )
     app: str = Field(
-        description="The application type. Options are 'lammps', 'vasp' and 'python'.",
+        description="The application type. Options are 'lammps-kk', 'vasp' and 'python'.",
     )
     config: str = Field(
         description="The name of the configuration to use. Options are 'crux', 'polaris', 'sophia', 'aurora_gpu' and 'aurora_tile'",

@@ -67,12 +67,12 @@ class ParslBox:
         >>> pbx = ParslBox()
         >>> job_id = pbx.add_job(
         ...     path="/path/to/simulation",
-        ...     app="lammps",
+        ...     app="lammps-kk",
         ...     config="polaris",
         ...     ngpus=2,
         ...     tag="production"
         ... )
-        >>> jobs = pbx.list_jobs(status="Ready", app="lammps")
+        >>> jobs = pbx.list_jobs(status="Ready", app="lammps-kk")
         >>> pbx.update_job(job_id, status="Submitted")
     """
 
@@ -133,7 +133,7 @@ class ParslBox:
 
         Args:
             paths: List of paths to job directories (or single path as list)
-            app: Application type (e.g., 'lammps', 'vasp', 'python')
+            app: Application type (e.g., 'lammps-kk', 'vasp', 'python')
             config: System configuration name (e.g., 'polaris', 'sophia')
             tag: Optional tag to categorize the job(s)
             input_file: Input filename for the job(s)
@@ -155,7 +155,7 @@ class ParslBox:
 
         Examples:
             # Add multiple jobs with partial failure handling
-            job_ids, failures, msg_log = pbx.add_jobs(["/path/job1", "/invalid/path"], app="lammps", config="polaris")
+            job_ids, failures, msg_log = pbx.add_jobs(["/path/job1", "/invalid/path"], app="lammps-kk", config="polaris")
             print(f"Successfully added {len(job_ids)} jobs")
             if failures:
                 print(f"Failed to add {len(failures)} jobs:")

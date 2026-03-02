@@ -5,7 +5,7 @@ This module defines the MPI configuration schema and provides functions to
 load and merge MPI configurations from system-level and app-level settings.
 
 Configuration Hierarchy (highest to lowest priority):
-1. App-level (lammps.polaris.mpi)
+1. App-level (lammps-kk.polaris.mpi)
 2. System-level (polaris.mpi)
 3. Backend defaults (hardcoded minimal commands)
 
@@ -211,7 +211,7 @@ def load_mpi_config(
     
     Args:
         system_name: Name of the system (e.g., "polaris")
-        app_name: Name of the application (e.g., "lammps")
+        app_name: Name of the application (e.g., "lammps-kk")
         system_config_class: System configuration class instance
         yaml_config: Full parsed YAML config dictionary
         

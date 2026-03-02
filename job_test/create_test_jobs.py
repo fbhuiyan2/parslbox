@@ -2,7 +2,7 @@
 """
 ParslBox Test Job Creation Script
 
-This script automates the creation of test jobs for lammps, python, and vasp applications.
+This script automates the creation of test jobs for lammps-kk, python, and vasp applications.
 It creates directory structures, copies necessary files, and adds jobs to pbx with varied
 resource configurations and parent dependencies.
 
@@ -81,7 +81,7 @@ class TestJobCreator:
         Raises:
             ValueError: If lammps is not configured or path cannot be derived
         """
-        app_config = load_app_config("lammps", self.config_name)
+        app_config = load_app_config("lammps-kk", self.config_name)
         
         if not app_config or "executable_path" not in app_config:
             raise ValueError(
@@ -354,7 +354,7 @@ class TestJobCreator:
                 # Use ParslBox API to add job
                 job_ids, failed_jobs, msg_log = self.pbx.add_jobs(
                     paths=[job_dir],
-                    app="lammps",
+                    app="lammps-kk",
                     config=self.config_name,
                     input_file="in.friction",
                     tag=self.tag,

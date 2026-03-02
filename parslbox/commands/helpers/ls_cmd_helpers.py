@@ -13,8 +13,8 @@ def truncate_path(path: str, first_dirs: int = 2, last_dirs: int = 3) -> str:
         Truncated path in format: /first/dirs/.../last/dirs
         
     Example:
-        /lus/eagle/projects/CSTEELML/fbhuiyan/testruns/parslbox_test/polaris/lammps/friction_1
-        -> /lus/eagle/.../polaris/lammps/friction_1
+        /lus/eagle/projects/CSTEELML/fbhuiyan/testruns/parslbox_test/polaris/lammps-kk/friction_1
+        -> /lus/eagle/.../polaris/lammps-kk/friction_1
     """
     if not path or not isinstance(path, str):
         return path or ""

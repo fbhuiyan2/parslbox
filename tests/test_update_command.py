@@ -36,7 +36,7 @@ def setup_test_jobs(temp_db):
     temp_dir = temp_db.parent
     job_dirs = {}
     
-    for i, app_name in enumerate(['lammps', 'vasp', 'python'], 1):
+    for i, app_name in enumerate(['lammps-kk', 'vasp', 'python'], 1):
         job_dir = temp_dir / f"job_{i}_{app_name}"
         job_dir.mkdir()
         job_dirs[app_name] = str(job_dir)
@@ -65,7 +65,7 @@ class TestUpdateJobsCore:
         db_path, job_dirs = setup_test_jobs
         
         # Get lammps job (requires input)
-        jobs = database.get_jobs(db_path, app="lammps")
+        jobs = database.get_jobs(db_path, app="lammps-kk")
         job_id = jobs[0]['job_id']
         
         # Update input file for lammps job (should succeed)
@@ -120,7 +120,7 @@ class TestUpdateJobsCore:
         db_path, job_dirs = setup_test_jobs
         
         # Get valid jobs
-        lammps_jobs = database.get_jobs(db_path, app="lammps")
+        lammps_jobs = database.get_jobs(db_path, app="lammps-kk")
         vasp_jobs = database.get_jobs(db_path, app="vasp")
         lammps_id = lammps_jobs[0]['job_id']
         vasp_id = vasp_jobs[0]['job_id']
@@ -190,7 +190,7 @@ class TestUpdateCommandCLI:
         db_path, job_dirs = setup_test_jobs
         
         # Get lammps job
-        jobs = database.get_jobs(db_path, app="lammps")
+        jobs = database.get_jobs(db_path, app="lammps-kk")
         job_id = jobs[0]['job_id']
         
         runner = CliRunner()

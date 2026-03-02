@@ -47,7 +47,7 @@ def add_jobs(
 
     Args:
         paths: List of paths to job directories, or ['all'] for all subdirectories
-        app: Application type (e.g., 'lammps', 'vasp')
+        app: Application type (e.g., 'lammps-kk', 'vasp')
         config_name: System configuration name (e.g., 'polaris')
         tag: Optional tag to categorize the job(s)
         input_file: Input filename for the job(s)
@@ -165,7 +165,7 @@ def add(
     ],
     app: Annotated[
         str,
-        typer.Option("--app", "-a", help="The application type (e.g., 'lammps', 'vasp')."),
+        typer.Option("--app", "-a", help="The application type (e.g., 'lammps-kk', 'vasp')."),
     ],
     config_name: Annotated[
         str,

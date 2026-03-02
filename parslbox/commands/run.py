@@ -180,7 +180,7 @@ def run(
     ] = None,
     apps: Annotated[
         Optional[str],
-        typer.Option("--apps", "-a", help="Comma-separated list of apps to run (e.g., 'lammps,vasp').")
+        typer.Option("--apps", "-a", help="Comma-separated list of apps to run (e.g., 'lammps-kk,vasp').")
     ] = None,
     tags: Annotated[
         Optional[str],

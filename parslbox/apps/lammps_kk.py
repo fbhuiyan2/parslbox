@@ -4,7 +4,7 @@ from parslbox.database import database
 from parslbox.apps.appbase import AppBase
 
 
-class LammpsApp(AppBase):
+class LammpsKokkosApp(AppBase):
     """
     LAMMPS application implementation for ParslBox.
     

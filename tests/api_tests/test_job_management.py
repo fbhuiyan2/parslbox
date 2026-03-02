@@ -287,7 +287,7 @@ class TestUpdateJobs:
         # Create a lammps job (requires input)
         job_dir = tmp_path / "job1"
         job_dir.mkdir()
-        job_ids, _, _ = pbx.add_jobs(paths=[str(job_dir)], app="lammps", config="polaris", input_file="in.lammps")
+        job_ids, _, _ = pbx.add_jobs(paths=[str(job_dir)], app="lammps-kk", config="polaris", input_file="in.lammps")
         job_id = job_ids[0]
         
         # Update input file (should succeed for lammps)

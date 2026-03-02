@@ -6,13 +6,13 @@ and manages custom applications loaded from user configuration.
 """
 
 from parslbox.apps.appbase import AppBase
-from parslbox.apps.lammps import LammpsApp
+from parslbox.apps.lammps_kk import LammpsKokkosApp
 from parslbox.apps.vasp import VaspApp
 from parslbox.apps.python import PythonApp
 
 # Built-in application factory (always available, no loading needed)
 APP_FACTORY = {
-    "lammps": LammpsApp,
+    "lammps-kk": LammpsKokkosApp,
     "vasp": VaspApp,
     "python": PythonApp,
 }
@@ -26,7 +26,7 @@ def get_app_class(app_name: str) -> type[AppBase]:
     Get application class for a specific application.
     
     Priority order (highest to lowest):
-    1. Built-in apps (APP_FACTORY) - lammps, vasp, python
+    1. Built-in apps (APP_FACTORY) - lammps-kk, vasp, python
     2. Custom apps (loaded from config) - user-defined apps
     
     This ensures built-in apps cannot be overridden by custom apps.

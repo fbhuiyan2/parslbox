@@ -39,7 +39,7 @@ class TestListJobs:
         env_file.write_text("#!/bin/bash\necho 'test environment'")
         
         # Add jobs with different apps
-        for app in ["python", "lammps"]:
+        for app in ["python", "lammps-kk"]:
             job_dir = tmp_path / f"job_{app}"
             job_dir.mkdir()
             if app == "python":

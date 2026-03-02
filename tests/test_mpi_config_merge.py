@@ -122,28 +122,28 @@ class TestLoadMpiConfig:
         """Backend defaults to system_config_class.MPI_BACKEND when no YAML override."""
         system_config = self._make_system_config(mpi_backend="mpich")
         yaml_config = {}
-        result = load_mpi_config("polaris", "lammps", system_config, yaml_config)
+        result = load_mpi_config("polaris", "lammps-kk", system_config, yaml_config)
         assert result.backend == MPIBackend.MPICH
 
     def test_backend_fallback_from_legacy_mpiexec(self):
         """Legacy MPI_CMD_TO_USE='mpiexec' infers mpich backend."""
         system_config = self._make_system_config(mpi_cmd="mpiexec")
         yaml_config = {}
-        result = load_mpi_config("polaris", "lammps", system_config, yaml_config)
+        result = load_mpi_config("polaris", "lammps-kk", system_config, yaml_config)
         assert result.backend == MPIBackend.MPICH
 
     def test_backend_fallback_from_legacy_srun(self):
         """Legacy MPI_CMD_TO_USE='srun' infers srun backend."""
         system_config = self._make_system_config(mpi_cmd="srun")
         yaml_config = {}
-        result = load_mpi_config("polaris", "lammps", system_config, yaml_config)
+        result = load_mpi_config("polaris", "lammps-kk", system_config, yaml_config)
         assert result.backend == MPIBackend.SRUN
 
     def test_backend_fallback_default_openmpi(self):
         """No MPI_BACKEND or MPI_CMD_TO_USE defaults to openmpi."""
         system_config = self._make_system_config()
         yaml_config = {}
-        result = load_mpi_config("polaris", "lammps", system_config, yaml_config)
+        result = load_mpi_config("polaris", "lammps-kk", system_config, yaml_config)
         assert result.backend == MPIBackend.OPENMPI
 
     def test_system_yaml_overrides_class_defaults(self):
@@ -157,7 +157,7 @@ class TestLoadMpiConfig:
                 }
             }
         }
-        result = load_mpi_config("polaris", "lammps", system_config, yaml_config)
+        result = load_mpi_config("polaris", "lammps-kk", system_config, yaml_config)
         assert result.backend == MPIBackend.OPENMPI
         assert result.use_gpu_wrapper is True
         assert result.cpu_bind_method == "depth"
@@ -173,7 +173,7 @@ class TestLoadMpiConfig:
                     "disable": ["-H"],
                 }
             },
-            "lammps": {
+            "lammps-kk": {
                 "polaris": {
                     "mpi": {
                         "use_gpu_wrapper": False,
@@ -183,7 +183,7 @@ class TestLoadMpiConfig:
                 }
             },
         }
-        result = load_mpi_config("polaris", "lammps", system_config, yaml_config)
+        result = load_mpi_config("polaris", "lammps-kk", system_config, yaml_config)
         # App override wins for scalars
         assert result.use_gpu_wrapper is False
         # System value preserved when not overridden by app
@@ -215,13 +215,13 @@ class TestLoadMpiConfig:
         system_config = self._make_system_config(mpi_backend="mpich")
         yaml_config = {
             "polaris": {"pbx_python_env_setup": "module load conda"},
-            "lammps": {
+            "lammps-kk": {
                 "polaris": {
                     "executable_path": "/path/to/lmp",
                 }
             },
         }
-        result = load_mpi_config("polaris", "lammps", system_config, yaml_config)
+        result = load_mpi_config("polaris", "lammps-kk", system_config, yaml_config)
         assert result.backend == MPIBackend.MPICH
         assert result.use_gpu_wrapper is False
         assert result.cpu_bind_method == "none"
@@ -238,13 +238,13 @@ class TestLoadMpiConfig:
                     "add": ["--oversubscribe"],
                 }
             },
-            "lammps": {
+            "lammps-kk": {
                 "sophia": {
                     "executable_path": "/path/to/lmp",
                 }
             },
         }
-        result = load_mpi_config("sophia", "lammps", system_config, yaml_config)
+        result = load_mpi_config("sophia", "lammps-kk", system_config, yaml_config)
         assert result.use_short_hostnames is True
         assert result.add == ["--oversubscribe"]
 
@@ -260,7 +260,7 @@ class TestLoadMpiConfig:
                     "add": ["--depth 8"],
                 }
             },
-            "lammps": {
+            "lammps-kk": {
                 "polaris": {
                     "mpi": {
                         "cpu_bind_method": "rankfile",
@@ -269,7 +269,7 @@ class TestLoadMpiConfig:
                 }
             },
         }
-        result = load_mpi_config("polaris", "lammps", system_config, yaml_config)
+        result = load_mpi_config("polaris", "lammps-kk", system_config, yaml_config)
         # From system YAML (not overridden by app)
         assert result.backend == MPIBackend.MPICH
         assert result.use_gpu_wrapper is True
@@ -282,13 +282,13 @@ class TestLoadMpiConfig:
         """Gracefully handles system not present in YAML."""
         system_config = self._make_system_config(mpi_backend="openmpi")
         yaml_config = {
-            "lammps": {
+            "lammps-kk": {
                 "polaris": {
                     "mpi": {"use_gpu_wrapper": True}
                 }
             }
         }
-        result = load_mpi_config("polaris", "lammps", system_config, yaml_config)
+        result = load_mpi_config("polaris", "lammps-kk", system_config, yaml_config)
         assert result.backend == MPIBackend.OPENMPI
         assert result.use_gpu_wrapper is True
 
@@ -300,7 +300,7 @@ class TestLoadMpiConfig:
                 "mpi": {"cpu_bind_method": "depth"}
             }
         }
-        result = load_mpi_config("polaris", "lammps", system_config, yaml_config)
+        result = load_mpi_config("polaris", "lammps-kk", system_config, yaml_config)
         assert result.backend == MPIBackend.MPICH
         assert result.cpu_bind_method == "depth"
 
@@ -311,12 +311,12 @@ class TestLoadMpiConfig:
             "sophia": {
                 "mpi": {"backend": "openmpi"}
             },
-            "lammps": {
+            "lammps-kk": {
                 "sophia": {
                     "mpi": {"mpi_cmd": "/opt/openmpi-4.1.6/bin/mpirun"}
                 }
             },
         }
-        result = load_mpi_config("sophia", "lammps", system_config, yaml_config)
+        result = load_mpi_config("sophia", "lammps-kk", system_config, yaml_config)
         assert result.mpi_cmd == "/opt/openmpi-4.1.6/bin/mpirun"
         assert result.get_mpi_command() == "/opt/openmpi-4.1.6/bin/mpirun"

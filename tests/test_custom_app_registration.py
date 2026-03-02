@@ -253,7 +253,7 @@ class TestAppRegistry:
     
     def test_builtin_apps_still_work(self):
         """Test that built-in apps are still accessible."""
-        builtin_apps = ['lammps', 'vasp', 'python']
+        builtin_apps = ['lammps-kk', 'vasp', 'python']
         
         for app_name in builtin_apps:
             app_class = get_app_class(app_name)
@@ -264,7 +264,7 @@ class TestAppRegistry:
     def test_get_registered_apps_includes_builtins(self):
         """Test that get_registered_apps returns built-in apps."""
         registered = get_registered_apps()
-        assert 'lammps' in registered
+        assert 'lammps-kk' in registered
         assert 'vasp' in registered
         assert 'python' in registered
     
@@ -272,8 +272,8 @@ class TestAppRegistry:
         """Test that built-in apps take priority over custom apps with same name."""
         # This test verifies the priority system works correctly
         # Built-in apps should always be returned first
-        lammps_class = get_app_class('lammps')
-        assert lammps_class.__name__ == 'LammpsApp'
+        lammps_class = get_app_class('lammps-kk')
+        assert lammps_class.__name__ == 'LammpsKokkosApp'
     
     def test_unknown_app_error_message(self):
         """Test that unknown app raises helpful error message."""

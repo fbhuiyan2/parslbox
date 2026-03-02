@@ -53,7 +53,7 @@ class LammpsStrongScaleOrchestrator:
     
     def _validate_lammps_config(self):
         """Validate that LAMMPS is properly configured for this system."""
-        app_config = load_app_config("lammps", self.config_name)
+        app_config = load_app_config("lammps-kk", self.config_name)
         
         if not app_config or "executable_path" not in app_config:
             raise ValueError(
@@ -192,7 +192,7 @@ class LammpsStrongScaleOrchestrator:
                 if self.scaling_mode == 'gpu':
                     job_params = {
                         'paths': [job_dir],
-                        'app': 'lammps',
+                        'app': 'lammps-kk',
                         'config': self.config_name,
                         'input_file': input_file,
                         'ngpus': count,
@@ -202,7 +202,7 @@ class LammpsStrongScaleOrchestrator:
                 else:  # core mode
                     job_params = {
                         'paths': [job_dir],
-                        'app': 'lammps',
+                        'app': 'lammps-kk',
                         'config': self.config_name,
                         'input_file': input_file,
                         'ncores': count,

@@ -143,7 +143,7 @@ CUSTOM_APPS_NOTES = '''# -------------------------------------------------------
 # Custom Application Registration
 #
 # Register your own custom applications here. Once registered, they work
-# just like built-in apps (lammps, vasp, python).
+# just like built-in apps (lammps-kk, vasp, python).
 #
 # How it works:
 # 1. Create a Python file with your app class (see EXAMPLE_NEW_APP.py)
@@ -179,7 +179,7 @@ custom_apps: {}
 EXAMPLE_APP_TEMPLATE = '''#===== Example APP Template =====#
 # Copy this template to add your own applications
 
-# app_name:  # e.g., lammps, vasp, my_simulation
+# app_name:  # e.g., lammps-kk, vasp, my_simulation
 #   system_name:  # e.g., polaris, aurora-tile, sophia
 #     # Full, absolute path to the software executable on the system.
 #     executable_path: "/path/to/your/software/executable/on/system"
@@ -211,7 +211,7 @@ DEFAULT_CONFIG_YAML = f"""
 # ---------------------------------------------------------------------------
 # parslbox Application Configuration
 #
-# This file defines settings for different applications (e.g., lammps)
+# This file defines settings for different applications (e.g., lammps-kk)
 # on different systems (e.g., polaris, sophia).
 #
 # IMPORTANT: You must edit this file and provide the correct, absolute
@@ -231,7 +231,7 @@ schedulers:
 
 #===== Example APP =====#
 
-app_name: # e.g., lammps, vasp
+app_name: # e.g., lammps-kk, vasp
   system_name: # e.g., polaris, sophia
     executable_path: "/path/to/your/software/executable/on/system"
     environment_setup: |
@@ -242,9 +242,9 @@ app_name: # e.g., lammps, vasp
     #   cpu_bind_method: depth
 
 
-#===== LAMMPS APP =====#
+#===== LAMMPS-KK APP =====#
 
-lammps:
+lammps-kk:
   polaris:
     executable_path: "/path/to/your/lammps/executable/on/polaris"
     environment_setup: |
@@ -283,8 +283,8 @@ lammps:
 #       use_gpu_wrapper: false        # VASP handles GPU internally
 #       disable: ["-H"]               # Remove hostlist flag if it causes issues
 
-# --- Example: LAMMPS on LCRC Swing (OpenMPI) ---
-# lammps:
+# --- Example: LAMMPS-KK on LCRC Swing (OpenMPI) ---
+# lammps-kk:
 #   lcrc-swing:
 #     executable_path: "/path/to/lmp"
 #     environment_setup: |
