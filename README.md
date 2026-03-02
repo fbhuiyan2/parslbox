@@ -7,24 +7,26 @@
  ▒███         ███▒▒███  ▒███      ▒▒▒▒███ ▒███  ▒███    ▒███▒███ ▒███  ███▒▒▒███ 
  █████       ▒▒████████ █████     ██████  █████ ███████████ ▒▒██████  █████ █████
 ▒▒▒▒▒         ▒▒▒▒▒▒▒▒ ▒▒▒▒▒     ▒▒▒▒▒▒  ▒▒▒▒▒ ▒▒▒▒▒▒▒▒▒▒▒   ▒▒▒▒▒▒  ▒▒▒▒▒ ▒▒▒▒▒ 
-                                                                                 
 ```
 
-Your autopilot for running HPC simulations. CLI orchestration built based on Parsl. Manage jobs for LAMMPS, VASP, and Python apps with resource‑aware scheduling, dependency tracking, and PBS submission. HPC configurations come out-of-the-box. Adding new apps and new HPC configurations is super simple.
+Your autopilot for HPC job orchestration. ParslBox manages multi-application workflows (LAMMPS, VASP, Python, custom apps) across PBS and SLURM clusters with resource-aware scheduling, dependency tracking, and fault tolerance.
 
-ParslBox provides both a command-line interface (CLI) and a programmatic Python API for managing and executing HPC jobs.
+ParslBox provides a CLI (pbx), a Python API, and an MCP server for AI-agent integration.
 
-
-## Highlights
-
-- Job lifecycle management with dependency support (parents, tags)
-- Multi-application plugins: lammps, vasp, python
-- Resource‑aware execution:
-  - Single‑node GPU jobs with explicit GPU assignment
-  - CPU‑only jobs via fractional node occupancy
-  - Multi‑node MPI jobs with exclusive node allocation
-- PBS integration via pbx qsub
-- Auto‑generated config template and run directories
+## Highlights:
+- Job database: Persistent job tracking using SQLite database for job paths, resource requirements, dependencies, and status across sessions
+  - Multiple databases supported through environment variable `PBX_DB_PATH`
+- Job lifecycle: add, update, filter, run with dependency support (parents, tags)
+- Built-in apps: LAMMPS, VASP, Python — plus pluggable custom apps
+- Resource-aware execution:
+  - Pack multiple sub-node jobs onto shared nodes (GPU or CPU)
+  - Run multi-node MPI jobs with exclusive node allocation
+  - CPU-GPU affinity-aware placement
+  - MPI launchers: openmpi, mpich, srun
+- Scheduler support: PBS (pbx qsub) and SLURM (pbx sbatch)
+- Pre-configured HPC systems: Polaris, Aurora, Sophia, Crux, LCRC Swing
+- Fault tolerance with node health tracking and quarantine
+- Python API and MCP server for programmatic and AI-agent integration
 - Rich CLI output (tables, colors)
 
 ## Installation
@@ -33,7 +35,7 @@ Requirements:
 - Python >= 3.11, < 3.14
 - Parsl >= 2025.9.8
 
-### Using Poetry (recommended for development)
+### Using Poetry
 ```bash
 conda create --name parslbox python=3.11.9
 conda activate parslbox
@@ -156,11 +158,26 @@ jobs = pbx.list_jobs()  # returns all jobs if no filters
 pbx.update_job(job_id, status="Submitted")
 ```
 
+## MCP Server
+
+ParslBox includes an MCP server for AI-agent integration. Install with `pip install ".[agentic]"` and start the server:
+
+```bash
+python -m parslbox.mcp.mcp_server
+```
+
+The server exposes tools for job management (add, remove, update, filter, submit) over HTTP on port 9005. See [`examples/chemgraph_parslbox_example/`](examples/chemgraph_parslbox_example/) for a full setup and client example.
+
 ## Commands Overview
 
 Note on usage:
 - Users should submit via pbx qsub. The qsub command generates a submit.sh and submits it to the scheduler; submit.sh invokes pbx run under the hood.
 - pbx run is the engine used by qsub and is not intended to be called directly by users.
+
+- pbx config
+  - Interactive wizard to create or reconfigure ParslBox configuration
+  - Prompts for config path, system selection, app selection, and database creation
+  - Arguments: optional path (`.` for current dir, `~` for home, or custom path)
 
 - pbx add
   - Arguments: paths (one or more directories, or 'all')
@@ -182,10 +199,16 @@ Note on usage:
 - pbx qsub
   - Required: --config/-c, --job-name/-N, --queue/-q, --select, --walltime/-T, --project/-A
   - Optional: --filesystems, --run-dir, --apps/-a, --tags/-t, --retries
-  - Behavior: creates run dir, generates submit.sh from config template, runs qsub submit.sh
+  - Behavior: creates run dir, generates submit.sh from PBS template, runs qsub submit.sh
   - Details:
     - If --filesystems is omitted, the filesystems line is removed from the generated script.
     - --apps and --tags are passed to pbx run inside submit.sh to select which jobs to execute.
+
+- pbx sbatch
+  - Required: --config/-c, --job-name/-N, --partition/-p, --nodes, --walltime/-T, --account/-A
+  - Optional: --run-dir, --apps/-a, --tags/-t, --retries
+  - Behavior: creates run dir, generates submit.sh from SLURM template, runs sbatch submit.sh
+  - Same filtering behavior as pbx qsub (--apps, --tags passed to pbx run)
 
 - pbx ls
   - Filters: --status/-s, --app/-a, --tag/-t
@@ -276,6 +299,7 @@ Using PBX_DB_PATH and/or PBX_CONFIG_PATH to set the paths allow users to use mul
 - CPU‑only jobs: use --nocc to share a node fractionally (e.g., 0.25); multiple jobs can co‑reside up to occupancy 1.0.
 - Multi‑node jobs: require exclusive free nodes; MPI hostlist is generated.
 - Backlog and scheduling when resources are temporarily unavailable; dependency‑aware rescheduling after resources free up.
+- Node health tracking: quarantine nodes after repeated failures, auto‑recover when healthy.
 
 ### MPI CPU Binding
 
@@ -294,9 +318,9 @@ Statuses used across the system:
 
 ## Supported Applications
 
-- lammps
-- vasp
-- python
+Built-in apps: lammps, vasp, python
+
+Custom apps can be added via config.yaml using the plugin system. See [`parslbox/apps/EXAMPLE_NEW_APP.py`](parslbox/apps/EXAMPLE_NEW_APP.py) for a template.
 
 ## Contributing
 
@@ -307,4 +331,4 @@ Issues and PRs welcome at:
 
 Author and developer: Fakhrul Hasan Bhuiyan
 
-Copyright Argonne UChicago LLC, 2025. All rights reserved.
+Copyright Argonne UChicago LLC, 2026. All rights reserved.
