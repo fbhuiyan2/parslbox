@@ -23,9 +23,9 @@ from typing import Dict, Optional, TYPE_CHECKING
 from parslbox.resource_manager.mpi_config import MPIConfig, MPIBackend
 from parslbox.resource_manager.helpers.mpi_launcher_helpers import (
     generate_openmpi_rankfile,
-    generate_mpiexec_rankfile,
+    generate_mpich_rankfile,
     generate_openmpi_gpu_wrapper,
-    generate_mpiexec_gpu_wrapper,
+    generate_mpich_gpu_wrapper,
 )
 
 if TYPE_CHECKING:
@@ -173,7 +173,7 @@ class SimpleMPICommandBuilder:
         if self.config.backend == MPIBackend.OPENMPI:
             path = generate_openmpi_rankfile(assignment, self.system_config, job_spec, job_path)
         else:
-            path = generate_mpiexec_rankfile(assignment, self.system_config, job_spec, job_path)
+            path = generate_mpich_rankfile(assignment, self.system_config, job_spec, job_path)
         
         self._deferred_rankfile_path = path
         return path
@@ -188,7 +188,7 @@ class SimpleMPICommandBuilder:
         if self.config.backend == MPIBackend.OPENMPI:
             return generate_openmpi_gpu_wrapper(assignment, self.system_config, job_spec, job_path)
         else:
-            return generate_mpiexec_gpu_wrapper(assignment, self.system_config, job_spec, job_path)
+            return generate_mpich_gpu_wrapper(assignment, self.system_config, job_spec, job_path)
     
     def _build_mpi_args(self, total_ranks: int, ranks_per_node: int) -> list:
         """

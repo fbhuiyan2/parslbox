@@ -24,7 +24,7 @@ def write_gpu_wrapper(wrapper_content: str, assignment: 'ResourceAssignment', wr
     Args:
         wrapper_content: The bash script content to write
         assignment: Resource assignment for the job
-        wrapper_type: Type of wrapper ('openmpi' or 'mpiexec')
+        wrapper_type: Type of wrapper ('openmpi' or 'mpich')
         job_path: Optional job directory path
         
     Returns:
@@ -76,7 +76,7 @@ def write_rankfile(rankfile_content: str, assignment: 'ResourceAssignment', laun
     Args:
         rankfile_content: The rankfile content to write
         assignment: Resource assignment for the job
-        launcher_type: Type of launcher ('openmpi' or 'mpiexec')
+        launcher_type: Type of launcher ('openmpi' or 'mpich')
         job_path: Optional job directory path
         
     Returns:
@@ -147,7 +147,7 @@ def generate_openmpi_rankfile(assignment: 'ResourceAssignment', system_config: '
     return write_rankfile(rankfile_content, assignment, "openmpi", job_path)
 
 
-def generate_mpiexec_rankfile(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec', job_path: str = None) -> str:
+def generate_mpich_rankfile(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec', job_path: str = None) -> str:
     """
     Generate MPICH rankfile for CPU binding only.
     
@@ -177,10 +177,10 @@ def generate_mpiexec_rankfile(assignment: 'ResourceAssignment', system_config: '
             
             global_rank += 1
     
-    return write_rankfile(rankfile_content, assignment, "mpiexec", job_path)
+    return write_rankfile(rankfile_content, assignment, "mpich", job_path)
 
 
-def mpiexec_cuda_gpu_wrapper(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec', job_path: str = None) -> str:
+def mpich_cuda_gpu_wrapper(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec', job_path: str = None) -> str:
     """
     Generate GPU assignment wrapper script for CUDA systems using MPICH.
     
@@ -225,10 +225,10 @@ fi
 exec "$@"
 """
     
-    return write_gpu_wrapper(wrapper_content, assignment, "mpiexec", job_path)
+    return write_gpu_wrapper(wrapper_content, assignment, "mpich", job_path)
 
 
-def mpiexec_intel_gpu_wrapper(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec', job_path: str = None) -> str:
+def mpich_intel_gpu_wrapper(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec', job_path: str = None) -> str:
     """
     Generate GPU assignment wrapper script for Intel GPU systems using MPICH.
     
@@ -305,7 +305,7 @@ GLOBAL_RANK={global_rank_chain}
 exec "$@"
 """
     
-    return write_gpu_wrapper(wrapper_content, assignment, "mpiexec", job_path)
+    return write_gpu_wrapper(wrapper_content, assignment, "mpich", job_path)
 
 
 def openmpi_cuda_gpu_wrapper(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec', job_path: str = None) -> str:
@@ -447,19 +447,39 @@ def generate_openmpi_gpu_wrapper(assignment: 'ResourceAssignment', system_config
         return openmpi_cuda_gpu_wrapper(assignment, system_config, job_spec, job_path)
 
 
-def generate_mpiexec_gpu_wrapper(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec', job_path: str = None) -> str:
+def generate_mpich_gpu_wrapper(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec', job_path: str = None) -> str:
     """
     Generate GPU assignment wrapper script for MPICH (CPU binding handled by --cpu-bind).
-    
+
     Dispatcher function that routes to appropriate GPU-specific implementation
     based on the system's GPU_TYPE configuration.
-    
+
     Supports both CUDA and Intel GPU systems.
     """
     gpu_type = getattr(system_config, 'GPU_TYPE', 'cuda').lower()
-    
+
     if gpu_type == 'intel':
-        return mpiexec_intel_gpu_wrapper(assignment, system_config, job_spec, job_path)
+        return mpich_intel_gpu_wrapper(assignment, system_config, job_spec, job_path)
     else:
         # Default to CUDA for 'cuda' or any other/unknown GPU types
-        return mpiexec_cuda_gpu_wrapper(assignment, system_config, job_spec, job_path)
+        return mpich_cuda_gpu_wrapper(assignment, system_config, job_spec, job_path)
+
+
+def generate_srun_rankfile(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec', job_path: str = None) -> str:
+    """
+    Generate rankfile for srun jobs.
+
+    Delegates to MPICH rankfile generation. Provided as a separate entry point
+    for srun-specific customization in the future.
+    """
+    return generate_mpich_rankfile(assignment, system_config, job_spec, job_path)
+
+
+def generate_srun_gpu_wrapper(assignment: 'ResourceAssignment', system_config: 'SystemConfig', job_spec: 'JobResourceSpec', job_path: str = None) -> str:
+    """
+    Generate GPU wrapper script for srun jobs.
+
+    Delegates to MPICH GPU wrapper generation. Provided as a separate entry point
+    for srun-specific customization in the future.
+    """
+    return generate_mpich_gpu_wrapper(assignment, system_config, job_spec, job_path)

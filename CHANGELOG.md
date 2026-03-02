@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.8.2] - 2026-03-02
+
+### Changed
+- **Renamed `mpiexec` helper functions to `mpich`** — `generate_mpiexec_rankfile`, `generate_mpiexec_gpu_wrapper`, `mpiexec_cuda_gpu_wrapper`, and `mpiexec_intel_gpu_wrapper` are now `generate_mpich_*` / `mpich_*` to match the backend name and avoid confusion with the `mpiexec` command
+- **Added dedicated srun wrapper functions** — `generate_srun_gpu_wrapper()` and `generate_srun_rankfile()` give srun its own entry points (delegating to MPICH internally) for future srun-specific customization
+
+---
+
 ## [0.8.1] - 2026-03-01
 
 ### Added
@@ -18,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `subnode_gpu`: Same CPU flags as subnode_cpu + GPU wrapper script
   - `fullnode_gpu`: `--ntasks-per-node M --cpus-per-task D --cpu-bind=cores` + GPU wrapper script
 - **`--exact` flag for subnode srun steps** — Prevents step from accessing more CPUs than allocated, enabling correct subnode isolation on SLURM
-- **GPU wrapper reuse** — srun uses the same `generate_mpiexec_gpu_wrapper()` wrappers as PBS backends; wrappers already include `SLURM_PROCID`/`SLURM_LOCALID` fallback chains for rank detection
+- **GPU wrapper reuse** — srun now uses dedicated `generate_srun_gpu_wrapper()` wrappers (delegating to MPICH internally); wrappers already include `SLURM_PROCID`/`SLURM_LOCALID` fallback chains for rank detection
 - **`--cpus-per-task` in depth binding** — `_build_depth_binding()` srun branch in `mpi_command_builder.py` now emits `--cpus-per-task N --cpu-bind=cores` instead of bare `--cpu-bind=cores`
 
 #### General-purpose `sched_opts` (Scheduler Options) Support
@@ -27,6 +35,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Per-system persistent overrides via `sched_opts` key in config YAML
   - Per-run overrides via repeatable `--sched-opts` CLI flag
   - Matching keys are replaced in-place; new directives are appended at the `{sched_opts}` placeholder
+
+- **System-level default `sched_opts`** — Each system config can now define default scheduler directives via `get_default_sched_opts()`
+  - Polaris: `#PBS -l filesystems=home:eagle`
+  - Aurora GPU/Tile: `#PBS -l filesystems=home:flare`
+  - Crux: `#PBS -l filesystems=home:eagle`
+  - Sophia: `#PBS -l filesystems=home:eagle`
+  - Base class returns `None` (no defaults); systems override as needed
+  - Defaults are automatically included in generated configs via `pbx config`
+  - Priority chain: system defaults → config `sched_opts` → CLI `--sched-opts`
 
 - **`parslbox/commands/helpers/sched_opts_helpers.py`** — Directive parsing & merging
   - `extract_directive_key()` — Parses `#PBS` and `#SBATCH` directive lines, returns canonical key

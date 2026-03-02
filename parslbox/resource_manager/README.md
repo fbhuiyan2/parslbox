@@ -81,7 +81,7 @@ MPI flags are built modularly and then optionally filtered/extended by overrides
 - Multi-node full-node CPU jobs:
   - `-ppn <ranks_per_node> -hosts <hostlist> --depth <cores_per_rank> --cpu-bind depth`
 - Multi-node sub-node or GPU jobs:
-  - Use rankfile for CPU binding: `--rankfile <mpiexec_rankfile>`
+  - Use rankfile for CPU binding: `--rankfile <mpich_rankfile>`
   - GPU jobs add wrapper script for GPU env.
 
 ### srun (SLURM)

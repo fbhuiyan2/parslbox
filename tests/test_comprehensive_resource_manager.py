@@ -29,7 +29,7 @@ from parslbox.resource_manager.cpu_affinity import CPUAffinityManager
 from parslbox.resource_manager.mpi_launcher import (
     compose_mpi_command,
     generate_openmpi_rankfile,
-    generate_mpiexec_rankfile
+    generate_mpich_rankfile
 )
 
 
@@ -705,13 +705,13 @@ class TestRankfileGeneration:
         # Cleanup
         os.unlink(rankfile_path)
     
-    def test_mpiexec_rankfile_generation(self, resource_manager):
+    def test_mpich_rankfile_generation(self, resource_manager):
         """Test MPICH rankfile generation."""
         job = {'job_id': 2, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0}
         assignment = resource_manager.assign_resources(job)
         spec = create_job_resource_spec(job)
-        
-        rankfile_path = generate_mpiexec_rankfile(assignment, resource_manager.system_config, spec)
+
+        rankfile_path = generate_mpich_rankfile(assignment, resource_manager.system_config, spec)
         
         # Read and verify rankfile content
         with open(rankfile_path, 'r') as f:

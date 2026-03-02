@@ -15,11 +15,13 @@ import tempfile
 from unittest.mock import Mock
 from parslbox.resource_manager.helpers.mpi_launcher_helpers import (
     generate_openmpi_rankfile,
-    generate_mpiexec_rankfile,
+    generate_mpich_rankfile,
     generate_openmpi_gpu_wrapper,
-    generate_mpiexec_gpu_wrapper,
-    mpiexec_cuda_gpu_wrapper,
-    mpiexec_intel_gpu_wrapper,
+    generate_mpich_gpu_wrapper,
+    generate_srun_gpu_wrapper,
+    generate_srun_rankfile,
+    mpich_cuda_gpu_wrapper,
+    mpich_intel_gpu_wrapper,
     openmpi_cuda_gpu_wrapper,
     openmpi_intel_gpu_wrapper
 )
@@ -97,12 +99,12 @@ class TestRankfileGeneration:
         
         os.unlink(rankfile_path)
     
-    def test_mpiexec_rankfile_subnode_gpu(self):
+    def test_mpich_rankfile_subnode_gpu(self):
         """Test MPICH rankfile generation for subnode GPU job."""
         assignment = self.create_assignment("subnode", num_nodes=1, ranks_per_node=2, gpus_per_rank=1)
         job_spec = JobResourceSpec(job_id=12345, ngpus=2, num_nodes=1, ranks_per_node=2)
         
-        rankfile_path = generate_mpiexec_rankfile(assignment, self.aurora_tile_config, job_spec)
+        rankfile_path = generate_mpich_rankfile(assignment, self.aurora_tile_config, job_spec)
         
         with open(rankfile_path, 'r') as f:
             content = f.read()
@@ -113,12 +115,12 @@ class TestRankfileGeneration:
         
         os.unlink(rankfile_path)
     
-    def test_mpiexec_rankfile_multinode_cpu(self):
+    def test_mpich_rankfile_multinode_cpu(self):
         """Test MPICH rankfile generation for multinode CPU job."""
         assignment = self.create_assignment("multinode", num_nodes=2, ranks_per_node=3, gpus_per_rank=0)
         job_spec = JobResourceSpec(job_id=12345, ngpus=0, num_nodes=2, ranks_per_node=3)
         
-        rankfile_path = generate_mpiexec_rankfile(assignment, self.polaris_config, job_spec)
+        rankfile_path = generate_mpich_rankfile(assignment, self.polaris_config, job_spec)
         
         with open(rankfile_path, 'r') as f:
             content = f.read()
@@ -164,12 +166,12 @@ class TestCUDAWrapperGeneration:
         
         return assignment
     
-    def test_mpiexec_cuda_wrapper_subnode(self):
+    def test_mpich_cuda_wrapper_subnode(self):
         """Test CUDA wrapper generation for subnode job."""
         assignment = self.create_gpu_assignment(num_nodes=1, gpus_per_node=2)
         job_spec = JobResourceSpec(job_id=54321, ngpus=2, num_nodes=1)
         
-        wrapper_path = mpiexec_cuda_gpu_wrapper(assignment, self.polaris_config, job_spec)
+        wrapper_path = mpich_cuda_gpu_wrapper(assignment, self.polaris_config, job_spec)
         
         with open(wrapper_path, 'r') as f:
             content = f.read()
@@ -245,12 +247,12 @@ class TestIntelGPUWrapperGeneration:
         
         return assignment
     
-    def test_mpiexec_intel_wrapper_aurora_tile(self):
+    def test_mpich_intel_wrapper_aurora_tile(self):
         """Test Intel GPU wrapper for Aurora tile mode."""
         assignment = self.create_aurora_assignment("tile", num_nodes=1)
         job_spec = JobResourceSpec(job_id=67890, ngpus=12, num_nodes=1)
         
-        wrapper_path = mpiexec_intel_gpu_wrapper(assignment, self.aurora_tile_config, job_spec)
+        wrapper_path = mpich_intel_gpu_wrapper(assignment, self.aurora_tile_config, job_spec)
         
         with open(wrapper_path, 'r') as f:
             content = f.read()
@@ -295,12 +297,12 @@ class TestIntelGPUWrapperGeneration:
         
         os.unlink(wrapper_path)
     
-    def test_mpiexec_intel_wrapper_multinode_aurora(self):
+    def test_mpich_intel_wrapper_multinode_aurora(self):
         """Test Intel GPU wrapper for multinode Aurora job."""
         assignment = self.create_aurora_assignment("tile", num_nodes=2)
         job_spec = JobResourceSpec(job_id=67890, ngpus=24, num_nodes=2)  # 2 nodes × 12 tiles
         
-        wrapper_path = mpiexec_intel_gpu_wrapper(assignment, self.aurora_tile_config, job_spec)
+        wrapper_path = mpich_intel_gpu_wrapper(assignment, self.aurora_tile_config, job_spec)
         
         with open(wrapper_path, 'r') as f:
             content = f.read()
@@ -340,12 +342,12 @@ class TestDispatcherFunctions:
         )
         return assignment
     
-    def test_mpiexec_dispatcher_cuda(self):
+    def test_mpich_dispatcher_cuda(self):
         """Test MPIEXEC dispatcher routes to CUDA wrapper."""
         assignment = self.create_test_assignment()
         job_spec = JobResourceSpec(job_id=11111, ngpus=1, num_nodes=1)
         
-        wrapper_path = generate_mpiexec_gpu_wrapper(assignment, self.polaris_config, job_spec)
+        wrapper_path = generate_mpich_gpu_wrapper(assignment, self.polaris_config, job_spec)
         
         with open(wrapper_path, 'r') as f:
             content = f.read()
@@ -357,12 +359,12 @@ class TestDispatcherFunctions:
         
         os.unlink(wrapper_path)
     
-    def test_mpiexec_dispatcher_intel(self):
+    def test_mpich_dispatcher_intel(self):
         """Test MPIEXEC dispatcher routes to Intel wrapper."""
         assignment = self.create_test_assignment()
         job_spec = JobResourceSpec(job_id=11111, ngpus=1, num_nodes=1)
         
-        wrapper_path = generate_mpiexec_gpu_wrapper(assignment, self.aurora_tile_config, job_spec)
+        wrapper_path = generate_mpich_gpu_wrapper(assignment, self.aurora_tile_config, job_spec)
         
         with open(wrapper_path, 'r') as f:
             content = f.read()
@@ -460,7 +462,7 @@ class TestJobTypeScenarios:
         job_spec = JobResourceSpec(job_id=33333, ngpus=12, num_nodes=1)
         
         # Test wrapper generation
-        wrapper_path = generate_mpiexec_gpu_wrapper(assignment, self.aurora_tile_config, job_spec)
+        wrapper_path = generate_mpich_gpu_wrapper(assignment, self.aurora_tile_config, job_spec)
         with open(wrapper_path, 'r') as f:
             wrapper_content = f.read()
         
@@ -497,7 +499,7 @@ class TestJobTypeScenarios:
         job_spec = JobResourceSpec(job_id=44444, ngpus=8, num_nodes=2)
         
         # Test rankfile generation
-        rankfile_path = generate_mpiexec_rankfile(assignment, self.polaris_config, job_spec)
+        rankfile_path = generate_mpich_rankfile(assignment, self.polaris_config, job_spec)
         with open(rankfile_path, 'r') as f:
             rankfile_content = f.read()
         
@@ -506,7 +508,7 @@ class TestJobTypeScenarios:
         assert "4 1 32,33,34,35,36,37,38,39" in rankfile_content  # Rank 4 on node 1
         
         # Test wrapper generation
-        wrapper_path = generate_mpiexec_gpu_wrapper(assignment, self.polaris_config, job_spec)
+        wrapper_path = generate_mpich_gpu_wrapper(assignment, self.polaris_config, job_spec)
         with open(wrapper_path, 'r') as f:
             wrapper_content = f.read()
         
@@ -525,7 +527,7 @@ class TestSLURMWrapperSupport:
         """Set up test fixtures."""
         self.polaris_config = PolarisConfig()
 
-    def test_mpiexec_wrapper_slurm_env_vars(self):
+    def test_mpich_wrapper_slurm_env_vars(self):
         """Test that mpiexec CUDA wrapper includes SLURM env var fallback chains."""
         assignment = ResourceAssignment(
             job_id=99999,
@@ -539,7 +541,7 @@ class TestSLURMWrapperSupport:
 
         job_spec = JobResourceSpec(job_id=99999, ngpus=1, num_nodes=1)
 
-        wrapper_path = mpiexec_cuda_gpu_wrapper(assignment, self.polaris_config, job_spec)
+        wrapper_path = mpich_cuda_gpu_wrapper(assignment, self.polaris_config, job_spec)
 
         with open(wrapper_path, 'r') as f:
             content = f.read()
@@ -553,6 +555,76 @@ class TestSLURMWrapperSupport:
         assert "OMPI_COMM_WORLD_LOCAL_RANK" in content
         assert "PMI_RANK" in content
         assert "OMPI_COMM_WORLD_RANK" in content
+
+        os.unlink(wrapper_path)
+
+
+class TestSrunWrapperFunctions:
+    """Test srun-specific wrapper and rankfile functions."""
+
+    def setup_method(self):
+        """Set up test fixtures."""
+        self.polaris_config = PolarisConfig()
+        self.aurora_tile_config = AuroraTileConfig()
+
+    def create_test_assignment(self):
+        """Create a simple test assignment."""
+        assignment = ResourceAssignment(
+            job_id=88888,
+            node_ids=["node-0"],
+            hostnames=["test-node"],
+            node_occupancy=1.0
+        )
+        assignment.assign_resources_to_rank(
+            rank=0, node_idx=0, gpu_ids=[0], cpu_ids=[0, 1, 2, 3]
+        )
+        return assignment
+
+    def test_srun_gpu_wrapper_delegates_to_mpich(self):
+        """Test that generate_srun_gpu_wrapper produces the same output as generate_mpich_gpu_wrapper."""
+        assignment = self.create_test_assignment()
+        job_spec = JobResourceSpec(job_id=88888, ngpus=1, num_nodes=1)
+
+        srun_wrapper = generate_srun_gpu_wrapper(assignment, self.polaris_config, job_spec)
+        assert os.path.exists(srun_wrapper)
+
+        with open(srun_wrapper, 'r') as f:
+            content = f.read()
+
+        # Should contain GPU assignment content (same as mpich wrapper)
+        assert "CUDA_VISIBLE_DEVICES" in content or "ZE_AFFINITY_MASK" in content
+        assert "exec \"$@\"" in content
+
+        os.unlink(srun_wrapper)
+
+    def test_srun_rankfile_delegates_to_mpich(self):
+        """Test that generate_srun_rankfile produces the same output as generate_mpich_rankfile."""
+        assignment = self.create_test_assignment()
+        job_spec = JobResourceSpec(job_id=88888, ngpus=1, num_nodes=1)
+
+        srun_rankfile = generate_srun_rankfile(assignment, self.polaris_config, job_spec)
+        assert os.path.exists(srun_rankfile)
+
+        with open(srun_rankfile, 'r') as f:
+            content = f.read()
+
+        # Should contain rankfile content (same as mpich rankfile)
+        assert "0 0 0,1,2,3" in content
+
+        os.unlink(srun_rankfile)
+
+    def test_srun_gpu_wrapper_intel(self):
+        """Test srun GPU wrapper with Intel GPU system."""
+        assignment = self.create_test_assignment()
+        job_spec = JobResourceSpec(job_id=88888, ngpus=1, num_nodes=1)
+
+        wrapper_path = generate_srun_gpu_wrapper(assignment, self.aurora_tile_config, job_spec)
+
+        with open(wrapper_path, 'r') as f:
+            content = f.read()
+
+        assert "ZE_AFFINITY_MASK" in content
+        assert "Intel GPU assignment wrapper" in content
 
         os.unlink(wrapper_path)
 

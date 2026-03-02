@@ -222,7 +222,7 @@ class TestMPICommandBuilder:
         assert "-host node1" in command
         assert "--cpu-bind list:" in command
     
-    @patch('parslbox.resource_manager.mpi_launcher.generate_mpiexec_rankfile')
+    @patch('parslbox.resource_manager.mpi_launcher.generate_mpich_rankfile')
     def test_build_mpiexec_multinode(self, mock_rankfile):
         """Test building mpiexec command for multi-node job."""
         mock_rankfile.return_value = "/tmp/rankfile.txt"
@@ -258,7 +258,7 @@ class TestMPICommandBuilder:
         assert "--nodelist node1,node2" in command
         assert "--nodes 2" in command
 
-    @patch('parslbox.resource_manager.mpi_launcher.generate_mpiexec_gpu_wrapper')
+    @patch('parslbox.resource_manager.mpi_launcher.generate_srun_gpu_wrapper')
     def test_build_srun_fullnode_cpu(self, mock_wrapper):
         """Test building srun command for fullnode CPU job."""
         self.mock_job_spec.detect_job_type.return_value = "fullnode_cpu"
@@ -280,7 +280,7 @@ class TestMPICommandBuilder:
         mock_wrapper.assert_not_called()
         assert "wrapper" not in command
 
-    @patch('parslbox.resource_manager.mpi_launcher.generate_mpiexec_gpu_wrapper')
+    @patch('parslbox.resource_manager.mpi_launcher.generate_srun_gpu_wrapper')
     def test_build_srun_subnode_gpu(self, mock_wrapper):
         """Test building srun command for subnode GPU job."""
         mock_wrapper.return_value = "/tmp/gpu_wrapper.sh"
@@ -310,7 +310,7 @@ class TestMPICommandBuilder:
         mock_wrapper.assert_called_once()
         assert "gpu_wrapper.sh" in command
 
-    @patch('parslbox.resource_manager.mpi_launcher.generate_mpiexec_gpu_wrapper')
+    @patch('parslbox.resource_manager.mpi_launcher.generate_srun_gpu_wrapper')
     def test_build_srun_fullnode_gpu(self, mock_wrapper):
         """Test building srun command for fullnode GPU job."""
         mock_wrapper.return_value = "/tmp/gpu_wrapper.sh"
@@ -337,7 +337,7 @@ class TestMPICommandBuilder:
         # No --exact for fullnode
         assert "--exact" not in command
 
-    @patch('parslbox.resource_manager.mpi_launcher.generate_mpiexec_gpu_wrapper')
+    @patch('parslbox.resource_manager.mpi_launcher.generate_srun_gpu_wrapper')
     def test_build_srun_multinode_gpu(self, mock_wrapper):
         """Test building srun command for multinode GPU job."""
         mock_wrapper.return_value = "/tmp/gpu_wrapper.sh"

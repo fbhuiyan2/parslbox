@@ -11,9 +11,10 @@ from typing import Dict, TYPE_CHECKING
 # Import helper functions
 from parslbox.resource_manager.helpers.mpi_launcher_helpers import (
     generate_openmpi_rankfile,
-    generate_mpiexec_rankfile,
+    generate_mpich_rankfile,
     generate_openmpi_gpu_wrapper,
-    generate_mpiexec_gpu_wrapper
+    generate_mpich_gpu_wrapper,
+    generate_srun_gpu_wrapper
 )
 
 if TYPE_CHECKING:
@@ -204,7 +205,7 @@ class MPICommandBuilder:
                     # GPU job: generate wrapper for GPU assignment
                     # Note: wrapper_path is stored in context and appended by build_command()
                     # AFTER overrides are applied, ensuring correct flag ordering
-                    wrapper_path = generate_mpiexec_gpu_wrapper(assignment, system_config, job_spec, job_path)
+                    wrapper_path = generate_mpich_gpu_wrapper(assignment, system_config, job_spec, job_path)
                     context['wrapper_path'] = wrapper_path
         else:
             # Multi-node
@@ -222,17 +223,17 @@ class MPICommandBuilder:
                 flags.extend(["--cpu-bind", "depth"])
             else:
                 # Multi-node sub-node or GPU jobs: Use rankfile
-                rankfile_path = generate_mpiexec_rankfile(assignment, system_config, job_spec, job_path)
+                rankfile_path = generate_mpich_rankfile(assignment, system_config, job_spec, job_path)
                 context['rankfile_path'] = rankfile_path
                 ranks_per_node = len(assignment.get_ranks_for_node(0)) if assignment.hostnames else total_ranks // len(assignment.hostnames)
                 flags.extend(["-ppn", str(ranks_per_node)])
                 flags.extend(["--rankfile", rankfile_path])
-                
+
                 if job_spec.is_gpu_job():
                     # GPU job: generate wrapper for GPU assignment
                     # Note: wrapper_path is stored in context and appended by build_command()
                     # AFTER overrides are applied, ensuring correct flag ordering
-                    wrapper_path = generate_mpiexec_gpu_wrapper(assignment, system_config, job_spec, job_path)
+                    wrapper_path = generate_mpich_gpu_wrapper(assignment, system_config, job_spec, job_path)
                     context['wrapper_path'] = wrapper_path
         
         return flags, context
@@ -291,7 +292,7 @@ class MPICommandBuilder:
             flags.extend(["--cpu-bind=cores"])
             flags.extend(["--exact"])
             # GPU wrapper
-            wrapper_path = generate_mpiexec_gpu_wrapper(assignment, system_config, job_spec, job_path)
+            wrapper_path = generate_srun_gpu_wrapper(assignment, system_config, job_spec, job_path)
             context['wrapper_path'] = wrapper_path
 
         elif job_type == "fullnode_gpu":
@@ -303,7 +304,7 @@ class MPICommandBuilder:
             flags.extend(["--cpus-per-task", str(cpus_per_task)])
             flags.extend(["--cpu-bind=cores"])
             # GPU wrapper
-            wrapper_path = generate_mpiexec_gpu_wrapper(assignment, system_config, job_spec, job_path)
+            wrapper_path = generate_srun_gpu_wrapper(assignment, system_config, job_spec, job_path)
             context['wrapper_path'] = wrapper_path
 
         return flags, context
