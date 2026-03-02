@@ -1,3 +1,4 @@
+```
  ███████████                              ████  ███████████                      
 ▒▒███▒▒▒▒▒███                            ▒▒███ ▒▒███▒▒▒▒▒███                     
  ▒███    ▒███  ██████   ████████   █████  ▒███  ▒███    ▒███  ██████  █████ █████
@@ -7,6 +8,7 @@
  █████       ▒▒████████ █████     ██████  █████ ███████████ ▒▒██████  █████ █████
 ▒▒▒▒▒         ▒▒▒▒▒▒▒▒ ▒▒▒▒▒     ▒▒▒▒▒▒  ▒▒▒▒▒ ▒▒▒▒▒▒▒▒▒▒▒   ▒▒▒▒▒▒  ▒▒▒▒▒ ▒▒▒▒▒ 
                                                                                  
+```
 
 Your autopilot for running HPC simulations. CLI orchestration built based on Parsl. Manage jobs for LAMMPS, VASP, and Python apps with resource‑aware scheduling, dependency tracking, and PBS submission. HPC configurations come out-of-the-box. Adding new apps and new HPC configurations is super simple.
 
