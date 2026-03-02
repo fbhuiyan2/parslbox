@@ -59,6 +59,10 @@ class LcrcSwingConfig(SystemConfig):
                 "LCRC Swing config expects a node list file from PBS."
             )
 
+        if nodes > 1:
+            total_gpus = nodes * self.GPUS_PER_NODE
+            return nodes, total_gpus
+        
         # --- Get GPU count using nvidia-smi ---
         # Swing allows sub-node GPU allocation, so we need to detect actual GPUs
         try:
