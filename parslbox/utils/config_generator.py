@@ -51,11 +51,11 @@ class ConfigGenerator:
         # System configs
         sections.append(self._generate_systems())
 
-        # Custom apps placeholder
-        sections.append(self._generate_custom_apps_section())
-
         # App configs
         sections.append(self._generate_apps())
+
+        # Custom apps placeholder
+        sections.append(self._generate_custom_apps_section())
 
         # Footer with MPI reference
         sections.append(self._generate_footer())
