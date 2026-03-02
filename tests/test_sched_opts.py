@@ -559,5 +559,204 @@ class TestSubmitJob:
                 )
 
 
+# ============================================================
+# Tests for system-level default sched_opts
+# ============================================================
+
+
+class TestSystemDefaultSchedOpts:
+    """Tests for the system-class default sched_opts override chain."""
+
+    def test_system_default_sched_opts_applied(self, tmp_path):
+        """System defaults are applied when no config or CLI sched_opts."""
+        config = _make_config("pbs")
+
+        mock_sys = MagicMock()
+        mock_sys.get_default_sched_opts.return_value = "#PBS -l filesystems=home:eagle"
+
+        with patch(
+            "parslbox.commands.helpers.submit_helpers.load_config",
+            return_value=config,
+        ), patch(
+            "parslbox.system_configs.loader.get_system_config",
+            return_value=mock_sys,
+        ), patch(
+            "parslbox.commands.helpers.submit_helpers.subprocess.run"
+        ) as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="12345.pbs01\n", returncode=0
+            )
+
+            result = submit_job(
+                config_name="polaris",
+                job_name="testjob",
+                queue="prod",
+                select="4",
+                walltime=60,
+                project="proj",
+                run_dir=tmp_path,
+                scheduler_type="pbs",
+                submit_command="qsub",
+            )
+
+            assert result["success"] is True
+            script = (tmp_path / "submit.sh").read_text()
+            assert "#PBS -l filesystems=home:eagle" in script
+
+    def test_config_overrides_system_default(self, tmp_path):
+        """Config-level sched_opts override system defaults with same key."""
+        config = _make_config(
+            "pbs",
+            sched_opts="#PBS -l filesystems=home:grand",
+        )
+
+        mock_sys = MagicMock()
+        mock_sys.get_default_sched_opts.return_value = "#PBS -l filesystems=home:eagle"
+
+        with patch(
+            "parslbox.commands.helpers.submit_helpers.load_config",
+            return_value=config,
+        ), patch(
+            "parslbox.system_configs.loader.get_system_config",
+            return_value=mock_sys,
+        ), patch(
+            "parslbox.commands.helpers.submit_helpers.subprocess.run"
+        ) as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="12345.pbs01\n", returncode=0
+            )
+
+            result = submit_job(
+                config_name="polaris",
+                job_name="testjob",
+                queue="prod",
+                select="4",
+                walltime=60,
+                project="proj",
+                run_dir=tmp_path,
+                scheduler_type="pbs",
+                submit_command="qsub",
+            )
+
+            assert result["success"] is True
+            script = (tmp_path / "submit.sh").read_text()
+            assert "#PBS -l filesystems=home:grand" in script
+            assert "#PBS -l filesystems=home:eagle" not in script
+
+    def test_cli_overrides_system_and_config(self, tmp_path):
+        """CLI sched_opts override both system defaults and config."""
+        config = _make_config(
+            "pbs",
+            sched_opts="#PBS -l filesystems=home:grand",
+        )
+
+        mock_sys = MagicMock()
+        mock_sys.get_default_sched_opts.return_value = "#PBS -l filesystems=home:eagle"
+
+        with patch(
+            "parslbox.commands.helpers.submit_helpers.load_config",
+            return_value=config,
+        ), patch(
+            "parslbox.system_configs.loader.get_system_config",
+            return_value=mock_sys,
+        ), patch(
+            "parslbox.commands.helpers.submit_helpers.subprocess.run"
+        ) as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="12345.pbs01\n", returncode=0
+            )
+
+            result = submit_job(
+                config_name="polaris",
+                job_name="testjob",
+                queue="prod",
+                select="4",
+                walltime=60,
+                project="proj",
+                run_dir=tmp_path,
+                sched_opts=["#PBS -l filesystems=home:flare"],
+                scheduler_type="pbs",
+                submit_command="qsub",
+            )
+
+            assert result["success"] is True
+            script = (tmp_path / "submit.sh").read_text()
+            assert "#PBS -l filesystems=home:flare" in script
+            assert "#PBS -l filesystems=home:grand" not in script
+            assert "#PBS -l filesystems=home:eagle" not in script
+
+    def test_system_default_no_system_config_class(self, tmp_path):
+        """Submission works even when get_system_config raises ValueError."""
+        config = _make_config("pbs")
+
+        with patch(
+            "parslbox.commands.helpers.submit_helpers.load_config",
+            return_value=config,
+        ), patch(
+            "parslbox.system_configs.loader.get_system_config",
+            side_effect=ValueError("Unknown system"),
+        ), patch(
+            "parslbox.commands.helpers.submit_helpers.subprocess.run"
+        ) as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="12345.pbs01\n", returncode=0
+            )
+
+            result = submit_job(
+                config_name="polaris",
+                job_name="testjob",
+                queue="prod",
+                select="4",
+                walltime=60,
+                project="proj",
+                run_dir=tmp_path,
+                scheduler_type="pbs",
+                submit_command="qsub",
+            )
+
+            assert result["success"] is True
+            script = (tmp_path / "submit.sh").read_text()
+            assert "{sched_opts}" not in script
+
+    def test_system_default_with_none_preserves_config(self, tmp_path):
+        """When system returns None, config sched_opts still work."""
+        config = _make_config(
+            "pbs",
+            sched_opts="#PBS -l filesystems=home:eagle",
+        )
+
+        mock_sys = MagicMock()
+        mock_sys.get_default_sched_opts.return_value = None
+
+        with patch(
+            "parslbox.commands.helpers.submit_helpers.load_config",
+            return_value=config,
+        ), patch(
+            "parslbox.system_configs.loader.get_system_config",
+            return_value=mock_sys,
+        ), patch(
+            "parslbox.commands.helpers.submit_helpers.subprocess.run"
+        ) as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="12345.pbs01\n", returncode=0
+            )
+
+            result = submit_job(
+                config_name="polaris",
+                job_name="testjob",
+                queue="prod",
+                select="4",
+                walltime=60,
+                project="proj",
+                run_dir=tmp_path,
+                scheduler_type="pbs",
+                submit_command="qsub",
+            )
+
+            assert result["success"] is True
+            script = (tmp_path / "submit.sh").read_text()
+            assert "#PBS -l filesystems=home:eagle" in script
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

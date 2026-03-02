@@ -117,6 +117,10 @@ class PolarisConfig(SystemConfig):
             retries=retries,
         )
     
+    def get_default_sched_opts(self) -> str:
+        """Polaris default scheduler directives."""
+        return "#PBS -l filesystems=home:eagle"
+
     def get_default_mpi_config_yaml(self) -> dict:
         """Polaris MPI defaults for config generation."""
         return {

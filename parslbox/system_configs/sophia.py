@@ -133,3 +133,7 @@ class SophiaConfig(SystemConfig):
             run_dir=str(run_dir),
             retries=retries,
         )
+
+    def get_default_sched_opts(self) -> str:
+        """Polaris default scheduler directives."""
+        return "#PBS -l filesystems=home:eagle"

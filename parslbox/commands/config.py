@@ -16,7 +16,7 @@ from parslbox.system_configs.loader import get_available_systems, get_system_con
 from parslbox.utils import path_utils
 from parslbox.database import database
 
-app = typer.Typer()
+app = typer.Typer(invoke_without_command=True)
 
 # Mode detection - set to True when called from CLI
 _is_interactive = False
@@ -122,7 +122,7 @@ def config_setup(
     }
 
 
-@app.command()
+@app.callback()
 def config(
     path: Optional[str] = typer.Argument(
         None,

@@ -103,8 +103,9 @@ class TestConfigGenerator:
                 "use_gpu_wrapper": True,
                 "cpu_bind_method": "depth"
             }
+            mock_sys.get_default_sched_opts.return_value = None
             mock_get_sys.return_value = mock_sys
-            
+
             generator = ConfigGenerator(["polaris"], ["python"])
             systems = generator._generate_systems()
 
@@ -122,6 +123,7 @@ class TestConfigGenerator:
             mock_sys = Mock()
             mock_sys.SCHEDULER = "pbs"
             mock_sys.get_default_mpi_config_yaml.return_value = {"backend": "mpich"}
+            mock_sys.get_default_sched_opts.return_value = None
             mock_get_sys.return_value = mock_sys
 
             generator = ConfigGenerator(["polaris"], ["python"])
@@ -138,6 +140,7 @@ class TestConfigGenerator:
             mock_sys = Mock()
             mock_sys.SCHEDULER = "slurm"
             mock_sys.get_default_mpi_config_yaml.return_value = {"backend": "openmpi"}
+            mock_sys.get_default_sched_opts.return_value = None
             mock_get_sys.return_value = mock_sys
 
             generator = ConfigGenerator(["sophia"], ["python"])
@@ -152,6 +155,7 @@ class TestConfigGenerator:
         """Test system configuration generation for multiple systems."""
         def mock_get_sys(name):
             mock = Mock()
+            mock.get_default_sched_opts.return_value = None
             if name == "polaris":
                 mock.get_default_mpi_config_yaml.return_value = {
                     "backend": "mpich",
@@ -312,6 +316,7 @@ class TestConfigGenerator:
             mock_sys = Mock()
             mock_sys.SCHEDULER = "pbs"
             mock_sys.get_default_mpi_config_yaml.return_value = {"backend": "mpich"}
+            mock_sys.get_default_sched_opts.return_value = None
             mock_get_sys.return_value = mock_sys
 
             generator = ConfigGenerator(["polaris"], ["python"])
@@ -327,6 +332,7 @@ class TestConfigGenerator:
             mock_sys = Mock()
             mock_sys.SCHEDULER = "pbs"
             mock_sys.get_default_mpi_config_yaml.return_value = {"backend": "mpich"}
+            mock_sys.get_default_sched_opts.return_value = None
             mock_get_sys.return_value = mock_sys
 
             generator = ConfigGenerator(["polaris"], ["python"])
@@ -347,8 +353,9 @@ class TestConfigGenerator:
                 "backend": "mpich",
                 "use_gpu_wrapper": True
             }
+            mock_sys.get_default_sched_opts.return_value = None
             mock_get_sys.return_value = mock_sys
-            
+
             generator = ConfigGenerator(["polaris"], ["lammps", "python"])
             config_str = generator.generate()
             
@@ -369,12 +376,13 @@ class TestConfigGenerator:
             mock_sys = Mock()
             mock_sys.SCHEDULER = "pbs"
             mock_sys.get_default_mpi_config_yaml.return_value = {"backend": "mpich"}
+            mock_sys.get_default_sched_opts.return_value = None
             mock_get_sys.return_value = mock_sys
-            
+
             generator = ConfigGenerator(["polaris"], ["python"])
             config_str = generator.generate()
             config = yaml.safe_load(config_str)
-            
+
             # Required top-level sections
             assert "schedulers" in config
             assert "custom_apps" in config
@@ -405,8 +413,9 @@ class TestConfigGenerator:
             mock_sys = Mock()
             mock_sys.SCHEDULER = "pbs"
             mock_sys.get_default_mpi_config_yaml.return_value = {"backend": "mpich"}
+            mock_sys.get_default_sched_opts.return_value = None
             mock_get_sys.return_value = mock_sys
-            
+
             generator = ConfigGenerator(["polaris"], [])
             config_str = generator.generate()
             
@@ -426,6 +435,59 @@ class TestConfigGenerator:
             
             # Should not crash, just skip invalid system
             assert "invalid_system:" not in systems
+
+
+    def test_generate_systems_sched_opts_from_system_defaults(self):
+        """Test that systems with get_default_sched_opts() show uncommented sched_opts."""
+        with patch('parslbox.utils.config_generator.get_system_config') as mock_get_sys:
+            mock_sys = Mock()
+            mock_sys.SCHEDULER = "pbs"
+            mock_sys.get_default_sched_opts.return_value = "#PBS -l filesystems=home:eagle"
+            mock_sys.get_default_mpi_config_yaml.return_value = {"backend": "mpich"}
+            mock_get_sys.return_value = mock_sys
+
+            generator = ConfigGenerator(["polaris"], ["python"])
+            systems = generator._generate_systems()
+
+            # Should have uncommented sched_opts with the system default
+            assert "  sched_opts: |" in systems
+            assert "#PBS -l filesystems=home:eagle" in systems
+            # Should NOT have the commented-out placeholder
+            assert "  # sched_opts: |" not in systems
+
+    def test_generate_systems_sched_opts_no_defaults_shows_placeholder(self):
+        """Test that systems without defaults still show commented placeholder."""
+        with patch('parslbox.utils.config_generator.get_system_config') as mock_get_sys:
+            mock_sys = Mock()
+            mock_sys.SCHEDULER = "slurm"
+            mock_sys.get_default_sched_opts.return_value = None
+            mock_sys.get_default_mpi_config_yaml.return_value = {"backend": "openmpi"}
+            mock_get_sys.return_value = mock_sys
+
+            generator = ConfigGenerator(["sophia"], ["python"])
+            systems = generator._generate_systems()
+
+            assert "  # sched_opts: |" in systems
+            assert "#SBATCH --mem=128G" in systems
+
+    def test_generate_systems_sched_opts_multiline_defaults(self):
+        """Test that multi-line system defaults are properly formatted."""
+        with patch('parslbox.utils.config_generator.get_system_config') as mock_get_sys:
+            mock_sys = Mock()
+            mock_sys.SCHEDULER = "pbs"
+            mock_sys.get_default_sched_opts.return_value = (
+                "#PBS -l filesystems=home:eagle\n"
+                "#PBS -l place=scatter"
+            )
+            mock_sys.get_default_mpi_config_yaml.return_value = {"backend": "mpich"}
+            mock_get_sys.return_value = mock_sys
+
+            generator = ConfigGenerator(["polaris"], ["python"])
+            systems = generator._generate_systems()
+
+            assert "  sched_opts: |" in systems
+            assert "#PBS -l filesystems=home:eagle" in systems
+            assert "#PBS -l place=scatter" in systems
 
 
 class TestGetBuiltinApps:
@@ -464,8 +526,9 @@ class TestIntegrationScenarios:
                 "use_gpu_wrapper": True,
                 "cpu_bind_method": "depth"
             }
+            mock_sys.get_default_sched_opts.return_value = None
             mock_get_sys.return_value = mock_sys
-            
+
             generator = ConfigGenerator(["polaris"], ["lammps"])
             config_str = generator.generate()
             config = yaml.safe_load(config_str)
@@ -486,6 +549,7 @@ class TestIntegrationScenarios:
         """Test generating config for multiple systems and apps."""
         def mock_get_sys(name):
             mock = Mock()
+            mock.get_default_sched_opts.return_value = None
             if name == "polaris":
                 mock.SCHEDULER = "pbs"
                 mock.get_default_mpi_config_yaml.return_value = {

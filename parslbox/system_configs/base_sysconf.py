@@ -198,6 +198,26 @@ class SystemConfig(ABC):
         from parslbox.resource_manager import ResourceManager
         return ResourceManager(self, job_tracker)
     
+    def get_default_sched_opts(self) -> Optional[str]:
+        """
+        Get default scheduler directives for this system.
+
+        Override in subclasses to provide system-specific scheduler defaults
+        (e.g., filesystem directives for ALCF systems).
+
+        These defaults are the lowest priority in the override chain:
+        System defaults → config.yaml sched_opts → CLI --sched-opts
+
+        Returns:
+            Multi-line string of scheduler directives (one per line), or None.
+            PBS systems should return #PBS directives.
+            SLURM systems should return #SBATCH directives.
+            Multiple directives are separated by newlines, e.g.:
+                "#PBS -l filesystems=home:eagle\\n#PBS -l place=scatter"
+            Each directive can be individually overridden by config.yaml or CLI.
+        """
+        return None
+
     def get_default_mpi_config_yaml(self) -> dict:
         """
         Get default MPI configuration for this system's YAML config.

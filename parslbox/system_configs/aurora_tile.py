@@ -121,6 +121,10 @@ class AuroraTileConfig(SystemConfig):
             retries=retries,
         )
     
+    def get_default_sched_opts(self) -> str:
+        """Aurora Tile default scheduler directives."""
+        return "#PBS -l filesystems=home:flare"
+
     def get_default_mpi_config_yaml(self) -> dict:
         """Aurora Tile MPI defaults for config generation."""
         return {

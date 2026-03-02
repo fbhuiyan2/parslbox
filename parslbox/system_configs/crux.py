@@ -126,6 +126,11 @@ class CruxConfig(SystemConfig):
             retries=retries,
         )
     
+    def get_default_sched_opts(self) -> str:
+        """Polaris default scheduler directives."""
+        return ("#PBS -l filesystems=home:eagle\n")
+
+
     def get_default_mpi_config_yaml(self) -> dict:
         """Crux MPI defaults for config generation (CPU-only system)."""
         return {
