@@ -126,5 +126,6 @@ class PolarisConfig(SystemConfig):
         return {
             "backend": self.MPI_BACKEND,
             "use_gpu_wrapper": True,
-            "cpu_bind_method": "depth",
+            "cpu_bind_method": "rankfile",
+            "use_hostlist": True
         }

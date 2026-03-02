@@ -122,13 +122,14 @@ class AuroraGpuConfig(SystemConfig):
         )
     
     def get_default_sched_opts(self) -> str:
-        """Aurora GPU default scheduler directives."""
+        """Aurora Tile default scheduler directives."""
         return "#PBS -l filesystems=home:flare"
 
     def get_default_mpi_config_yaml(self) -> dict:
-        """Aurora GPU MPI defaults for config generation."""
+        """Aurora Tile MPI defaults for config generation."""
         return {
             "backend": self.MPI_BACKEND,
             "use_gpu_wrapper": True,
-            "cpu_bind_method": "depth",
+            "cpu_bind_method": "rankfile",
+            "use_hostlist": True
         }
