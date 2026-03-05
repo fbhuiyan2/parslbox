@@ -112,6 +112,8 @@ class SimpleMPICommandBuilder:
         """Calculate ranks per node."""
         if job_spec.is_gpu_job():
             # For GPU jobs, 1 rank per GPU
+            if job_spec.num_nodes > 1:
+                return job_spec.ngpus // job_spec.num_nodes
             return job_spec.ngpus
         else:
             return job_spec.ranks_per_node
