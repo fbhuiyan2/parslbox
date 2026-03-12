@@ -26,7 +26,6 @@ from parslbox.apps.app_registry import (
     get_registered_apps,
 )
 from parslbox.system_configs.loader import get_system_config, load_config
-from parslbox.resource_manager.mpi_launcher import compose_mpi_command
 from parslbox.resource_manager.exceptions import InsufficientResources
 from parslbox.resource_manager.models import create_job_resource_spec
 from parslbox.utils.logging_utils import setup_logging

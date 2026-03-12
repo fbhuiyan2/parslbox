@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class SimpleMPICommandBuilder:
+class MPICommandBuilder:
     """
     Simplified MPI command builder that starts with minimal commands
     and adds complexity only when explicitly configured.
@@ -479,7 +479,7 @@ def build_mpi_command(
     Returns:
         Dictionary with MPI command prefix
     """
-    builder = SimpleMPICommandBuilder(mpi_config, system_config)
+    builder = MPICommandBuilder(mpi_config, system_config)
     prefix = builder.build_command(assignment, job_spec, job_path)
     
     return {

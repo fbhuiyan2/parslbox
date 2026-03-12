@@ -1,5 +1,5 @@
 """
-Unit tests for SimpleMPICommandBuilder and build_mpi_command.
+Unit tests for MPICommandBuilder and build_mpi_command.
 
 Tests the simplified MPI command builder's ability to generate correct MPI commands
 across different backends (MPICH, OpenMPI, SRUN) with various configurations.
@@ -7,12 +7,12 @@ across different backends (MPICH, OpenMPI, SRUN) with various configurations.
 
 import pytest
 from unittest.mock import Mock, patch
-from parslbox.resource_manager.mpi_command_builder import SimpleMPICommandBuilder, build_mpi_command
+from parslbox.resource_manager.mpi_command_builder import MPICommandBuilder, build_mpi_command
 from parslbox.resource_manager.mpi_config import MPIConfig, MPIBackend
 
 
-class TestSimpleMPICommandBuilder:
-    """Test cases for the SimpleMPICommandBuilder class."""
+class TestMPICommandBuilder:
+    """Test cases for the MPICommandBuilder class."""
 
     def setup_method(self):
         """Set up test fixtures."""
@@ -45,7 +45,7 @@ class TestSimpleMPICommandBuilder:
 
     def test_init(self):
         """Test builder stores config and system_config."""
-        builder = SimpleMPICommandBuilder(self.mpi_config, self.mock_system_config)
+        builder = MPICommandBuilder(self.mpi_config, self.mock_system_config)
         assert builder.config is self.mpi_config
         assert builder.system_config is self.mock_system_config
 
@@ -57,7 +57,7 @@ class TestSimpleMPICommandBuilder:
         self.mock_job_spec.ngpus = 4
         self.mock_job_spec.num_nodes = 1
 
-        builder = SimpleMPICommandBuilder(self.mpi_config, self.mock_system_config)
+        builder = MPICommandBuilder(self.mpi_config, self.mock_system_config)
         result = builder._calculate_ranks_per_node(self.mock_job_spec, self.mock_assignment)
         assert result == 4
 
@@ -67,7 +67,7 @@ class TestSimpleMPICommandBuilder:
         self.mock_job_spec.ngpus = 1200
         self.mock_job_spec.num_nodes = 100
 
-        builder = SimpleMPICommandBuilder(self.mpi_config, self.mock_system_config)
+        builder = MPICommandBuilder(self.mpi_config, self.mock_system_config)
         result = builder._calculate_ranks_per_node(self.mock_job_spec, self.mock_assignment)
         assert result == 12
 
@@ -76,7 +76,7 @@ class TestSimpleMPICommandBuilder:
         self.mock_job_spec.is_gpu_job.return_value = False
         self.mock_job_spec.ranks_per_node = 8
 
-        builder = SimpleMPICommandBuilder(self.mpi_config, self.mock_system_config)
+        builder = MPICommandBuilder(self.mpi_config, self.mock_system_config)
         result = builder._calculate_ranks_per_node(self.mock_job_spec, self.mock_assignment)
         assert result == 8
 
@@ -90,7 +90,7 @@ class TestSimpleMPICommandBuilder:
         self.mock_job_spec.get_total_ranks.return_value = 4
 
         config = MPIConfig(backend=MPIBackend.MPICH)
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "-n 4" in command
@@ -105,7 +105,7 @@ class TestSimpleMPICommandBuilder:
         self.mock_assignment.hostnames = [f"node{i}" for i in range(100)]
 
         config = MPIConfig(backend=MPIBackend.MPICH)
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "-n 1200" in command
@@ -120,7 +120,7 @@ class TestSimpleMPICommandBuilder:
         self.mock_job_spec.get_total_ranks.return_value = 8
 
         config = MPIConfig(backend=MPIBackend.MPICH)
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "-n 8" in command
@@ -134,7 +134,7 @@ class TestSimpleMPICommandBuilder:
         self.mock_job_spec.get_total_ranks.return_value = 64
 
         config = MPIConfig(backend=MPIBackend.MPICH)
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "-n 64" in command
@@ -150,7 +150,7 @@ class TestSimpleMPICommandBuilder:
         self.mock_job_spec.get_total_ranks.return_value = 4
 
         config = MPIConfig(backend=MPIBackend.OPENMPI)
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "-np 4" in command
@@ -165,7 +165,7 @@ class TestSimpleMPICommandBuilder:
         self.mock_assignment.hostnames = [f"node{i}" for i in range(100)]
 
         config = MPIConfig(backend=MPIBackend.OPENMPI)
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "-np 1200" in command
@@ -180,7 +180,7 @@ class TestSimpleMPICommandBuilder:
         self.mock_job_spec.get_total_ranks.return_value = 8
 
         config = MPIConfig(backend=MPIBackend.OPENMPI)
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "-np 8" in command
@@ -196,7 +196,7 @@ class TestSimpleMPICommandBuilder:
         self.mock_job_spec.get_total_ranks.return_value = 4
 
         config = MPIConfig(backend=MPIBackend.SRUN)
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "-n 4" in command
@@ -211,7 +211,7 @@ class TestSimpleMPICommandBuilder:
         self.mock_assignment.hostnames = [f"node{i}" for i in range(100)]
 
         config = MPIConfig(backend=MPIBackend.SRUN)
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "-n 1200" in command
@@ -223,7 +223,7 @@ class TestSimpleMPICommandBuilder:
     def test_hostlist_mpich(self):
         """MPICH with use_hostlist=True: assert -hosts node1,node2."""
         config = MPIConfig(backend=MPIBackend.MPICH, use_hostlist=True)
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "-hosts node1,node2" in command
@@ -231,7 +231,7 @@ class TestSimpleMPICommandBuilder:
     def test_hostlist_openmpi(self):
         """OpenMPI with use_hostlist=True: assert -H node1,node2."""
         config = MPIConfig(backend=MPIBackend.OPENMPI, use_hostlist=True)
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "-H node1,node2" in command
@@ -239,7 +239,7 @@ class TestSimpleMPICommandBuilder:
     def test_hostlist_srun(self):
         """SRUN with use_hostlist=True: assert --nodelist node1,node2."""
         config = MPIConfig(backend=MPIBackend.SRUN, use_hostlist=True)
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "--nodelist node1,node2" in command
@@ -248,7 +248,7 @@ class TestSimpleMPICommandBuilder:
         """With use_short_hostnames=True: assert domain stripped."""
         self.mock_assignment.hostnames = ["node1.example.com", "node2.example.com"]
         config = MPIConfig(backend=MPIBackend.MPICH, use_hostlist=True, use_short_hostnames=True)
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "-hosts node1,node2" in command
@@ -259,7 +259,7 @@ class TestSimpleMPICommandBuilder:
     def test_cpu_bind_none(self):
         """cpu_bind_method=none: no binding flags added."""
         config = MPIConfig(backend=MPIBackend.MPICH, cpu_bind_method="none")
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "--cpu-bind" not in command
@@ -271,7 +271,7 @@ class TestSimpleMPICommandBuilder:
         """MPICH rankfile binding: assert --rankfile in output."""
         mock_rankfile.return_value = "/tmp/rankfile.txt"
         config = MPIConfig(backend=MPIBackend.MPICH, cpu_bind_method="rankfile")
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "--rankfile" in command
@@ -282,7 +282,7 @@ class TestSimpleMPICommandBuilder:
         """OpenMPI rankfile binding: assert --map-by rankfile:file= in output."""
         mock_rankfile.return_value = "/tmp/rankfile.txt"
         config = MPIConfig(backend=MPIBackend.OPENMPI, cpu_bind_method="rankfile")
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "--map-by rankfile:file=" in command
@@ -290,7 +290,7 @@ class TestSimpleMPICommandBuilder:
     def test_cpu_bind_list_mpich(self):
         """MPICH list binding: assert --cpu-bind list: in output."""
         config = MPIConfig(backend=MPIBackend.MPICH, cpu_bind_method="list")
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "--cpu-bind list:" in command
@@ -298,7 +298,7 @@ class TestSimpleMPICommandBuilder:
     def test_cpu_bind_depth_mpich(self):
         """MPICH depth binding: assert --cpu-bind depth --depth N."""
         config = MPIConfig(backend=MPIBackend.MPICH, cpu_bind_method="depth")
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "--cpu-bind depth" in command
@@ -307,7 +307,7 @@ class TestSimpleMPICommandBuilder:
     def test_cpu_bind_depth_openmpi(self):
         """OpenMPI depth binding: assert --map-by core:PE=N --bind-to core."""
         config = MPIConfig(backend=MPIBackend.OPENMPI, cpu_bind_method="depth")
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "--map-by core:PE=" in command
@@ -325,7 +325,7 @@ class TestSimpleMPICommandBuilder:
         self.mock_job_spec.get_total_ranks.return_value = 4
 
         config = MPIConfig(backend=MPIBackend.MPICH, use_gpu_wrapper=True)
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "gpu_wrapper.sh" in command
@@ -341,7 +341,7 @@ class TestSimpleMPICommandBuilder:
         self.mock_job_spec.get_total_ranks.return_value = 4
 
         config = MPIConfig(backend=MPIBackend.MPICH, use_gpu_wrapper=True, disable=["gpu-wrapper"])
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "gpu_wrapper" not in command
@@ -351,7 +351,7 @@ class TestSimpleMPICommandBuilder:
         self.mock_job_spec.is_gpu_job.return_value = False
 
         config = MPIConfig(backend=MPIBackend.MPICH, use_gpu_wrapper=True)
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "wrapper" not in command
@@ -361,7 +361,7 @@ class TestSimpleMPICommandBuilder:
     def test_disable_exact_flag(self):
         """Disable ['-hosts'] removes flag + value."""
         config = MPIConfig(backend=MPIBackend.MPICH, use_hostlist=True, disable=["-hosts"])
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "-hosts" not in command
@@ -372,7 +372,7 @@ class TestSimpleMPICommandBuilder:
         """Disable ['rankfile'] removes matching flags."""
         mock_rankfile.return_value = "/tmp/rankfile.txt"
         config = MPIConfig(backend=MPIBackend.MPICH, cpu_bind_method="rankfile", disable=["rankfile"])
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "rankfile" not in command
@@ -387,7 +387,7 @@ class TestSimpleMPICommandBuilder:
             cpu_bind_method="rankfile",
             disable=["-hosts", "rankfile"]
         )
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "-hosts" not in command
@@ -396,7 +396,7 @@ class TestSimpleMPICommandBuilder:
     def test_add_flags(self):
         """Add ['--mca btl ^openib'] appends flags."""
         config = MPIConfig(backend=MPIBackend.MPICH, add=["--mca btl ^openib"])
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "--mca" in command
@@ -406,7 +406,7 @@ class TestSimpleMPICommandBuilder:
     def test_add_with_template(self):
         """Add ['-hosts {hostlist}'] substitutes template."""
         config = MPIConfig(backend=MPIBackend.MPICH, add=["-hosts {hostlist}"])
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "-hosts node1,node2" in command
@@ -422,7 +422,7 @@ class TestSimpleMPICommandBuilder:
             disable=["-hosts", "rankfile"],
             add=["--verbose"]
         )
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "-hosts" not in command
@@ -511,7 +511,7 @@ class TestIntegrationScenarios:
         job_spec.is_gpu_job.return_value = True
 
         config = MPIConfig(backend=MPIBackend.MPICH)
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(assignment, job_spec)
 
         assert "-n 1200" in command
@@ -534,7 +534,7 @@ class TestIntegrationScenarios:
         job_spec.is_gpu_job.return_value = True
 
         config = MPIConfig(backend=MPIBackend.MPICH)
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(assignment, job_spec)
 
         assert "-n 4" in command
@@ -556,7 +556,7 @@ class TestIntegrationScenarios:
         job_spec.is_gpu_job.return_value = False
 
         config = MPIConfig(backend=MPIBackend.MPICH)
-        builder = SimpleMPICommandBuilder(config, self.mock_system_config)
+        builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(assignment, job_spec)
 
         assert "-n 64" in command

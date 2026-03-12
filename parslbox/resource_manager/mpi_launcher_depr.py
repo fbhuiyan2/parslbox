@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 VALID_LAUNCHERS = ('mpirun', 'mpiexec', 'srun')
 
 
-class MPICommandBuilder:
+class MPICommandBuilder_depr:
     """
     Modular MPI command builder that supports app-specific overrides.
     
@@ -440,7 +440,7 @@ def compose_mpi_command(assignment: 'ResourceAssignment', system_config: 'System
         Dictionary with the generated MPI command prefix
     """
     # Use new modular builder for all MPI command generation
-    builder = MPICommandBuilder(system_config.MPI_CMD_TO_USE, mpi_overrides)
+    builder = MPICommandBuilder_depr(system_config.MPI_CMD_TO_USE, mpi_overrides)
     prefix = builder.build_command(assignment, system_config, job_spec, job_path)
     key = f"PBX_{system_config.MPI_CMD_TO_USE.upper()}_PREFIX"
     

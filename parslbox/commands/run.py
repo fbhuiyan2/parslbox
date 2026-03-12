@@ -18,7 +18,6 @@ from parslbox.utils import path_utils
 from parslbox.utils.logging_utils import setup_logging, validate_log_level
 from parslbox.utils.pbx_config_utils import load_app_config, is_app_configured, load_full_config
 from parslbox.database import database
-from parslbox.resource_manager.mpi_launcher import compose_mpi_command  # Legacy, kept for fallback
 from parslbox.resource_manager.mpi_config import load_mpi_config
 from parslbox.resource_manager.mpi_command_builder import build_mpi_command
 from parslbox.resource_manager.exceptions import InsufficientResources
