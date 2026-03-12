@@ -9,7 +9,7 @@ import pytest
 import tempfile
 import os
 from unittest.mock import Mock, patch, MagicMock
-from parslbox.resource_manager.mpi_launcher import MPICommandBuilder, compose_mpi_command
+from parslbox.resource_manager.mpi_launcher_depr import MPICommandBuilder_depr, compose_mpi_command
 
 
 class TestMPICommandBuilder:
@@ -44,32 +44,32 @@ class TestMPICommandBuilder:
     def test_init_valid_launcher(self):
         """Test initialization with valid launcher types."""
         for launcher in ['mpirun', 'mpiexec', 'srun']:
-            builder = MPICommandBuilder(launcher)
+            builder = MPICommandBuilder_depr(launcher)
             assert builder.launcher_type == launcher
             assert builder.overrides == {}
     
     def test_init_invalid_launcher(self):
         """Test initialization with invalid launcher type."""
         with pytest.raises(ValueError, match="Invalid launcher type"):
-            MPICommandBuilder("invalid_launcher")
+            MPICommandBuilder_depr("invalid_launcher")
     
     def test_init_with_overrides(self):
         """Test initialization with overrides."""
         overrides = {"disable": ["--rankfile"], "add": ["--mca btl ^openib"]}
-        builder = MPICommandBuilder("mpirun", overrides)
+        builder = MPICommandBuilder_depr("mpirun", overrides)
         assert builder.overrides == overrides
     
     def test_init_with_none_overrides(self):
         """Test initialization with None overrides."""
-        builder = MPICommandBuilder("mpirun", None)
+        builder = MPICommandBuilder_depr("mpirun", None)
         assert builder.overrides == {}
     
-    @patch('parslbox.resource_manager.mpi_launcher.generate_openmpi_rankfile')
+    @patch('parslbox.resource_manager.mpi_launcher_depr.generate_openmpi_rankfile')
     def test_build_mpirun_command_no_overrides(self, mock_rankfile):
         """Test building mpirun command without overrides."""
         mock_rankfile.return_value = "/tmp/rankfile.txt"
         
-        builder = MPICommandBuilder("mpirun")
+        builder = MPICommandBuilder_depr("mpirun")
         command = builder.build_command(
             self.mock_assignment, 
             self.mock_system_config, 
@@ -85,13 +85,13 @@ class TestMPICommandBuilder:
         mock_rankfile.assert_called_once()
         assert "rankfile" in command
     
-    @patch('parslbox.resource_manager.mpi_launcher.generate_openmpi_rankfile')
+    @patch('parslbox.resource_manager.mpi_launcher_depr.generate_openmpi_rankfile')
     def test_build_mpirun_command_with_disable_overrides(self, mock_rankfile):
         """Test building mpirun command with disable overrides."""
         mock_rankfile.return_value = "/tmp/rankfile.txt"
         
         overrides = {"disable": ["-H", "rankfile"]}
-        builder = MPICommandBuilder("mpirun", overrides)
+        builder = MPICommandBuilder_depr("mpirun", overrides)
         command = builder.build_command(
             self.mock_assignment, 
             self.mock_system_config, 
@@ -102,13 +102,13 @@ class TestMPICommandBuilder:
         expected_command = "mpirun -np 4"
         assert command == expected_command
     
-    @patch('parslbox.resource_manager.mpi_launcher.generate_openmpi_rankfile')
+    @patch('parslbox.resource_manager.mpi_launcher_depr.generate_openmpi_rankfile')
     def test_build_mpirun_command_with_add_overrides(self, mock_rankfile):
         """Test building mpirun command with add overrides."""
         mock_rankfile.return_value = "/tmp/rankfile.txt"
         
         overrides = {"add": ["--mca btl ^openib", "--verbose"]}
-        builder = MPICommandBuilder("mpirun", overrides)
+        builder = MPICommandBuilder_depr("mpirun", overrides)
         command = builder.build_command(
             self.mock_assignment, 
             self.mock_system_config, 
@@ -121,7 +121,7 @@ class TestMPICommandBuilder:
         assert "^openib" in command
         assert "--verbose" in command
     
-    @patch('parslbox.resource_manager.mpi_launcher.generate_openmpi_rankfile')
+    @patch('parslbox.resource_manager.mpi_launcher_depr.generate_openmpi_rankfile')
     def test_build_mpirun_command_with_both_overrides(self, mock_rankfile):
         """Test building mpirun command with both disable and add overrides."""
         mock_rankfile.return_value = "/tmp/rankfile.txt"
@@ -130,7 +130,7 @@ class TestMPICommandBuilder:
             "disable": ["-H"],
             "add": ["--mca btl ^openib"]
         }
-        builder = MPICommandBuilder("mpirun", overrides)
+        builder = MPICommandBuilder_depr("mpirun", overrides)
         command = builder.build_command(
             self.mock_assignment, 
             self.mock_system_config, 
@@ -150,7 +150,7 @@ class TestMPICommandBuilder:
         """Test building mpirun command for full-node CPU job."""
         self.mock_job_spec.detect_job_type.return_value = "fullnode_cpu"
         
-        builder = MPICommandBuilder("mpirun")
+        builder = MPICommandBuilder_depr("mpirun")
         command = builder.build_command(
             self.mock_assignment, 
             self.mock_system_config, 
@@ -163,15 +163,15 @@ class TestMPICommandBuilder:
         assert "--bind-to core" in command
         assert "rankfile" not in command
     
-    @patch('parslbox.resource_manager.mpi_launcher.generate_openmpi_gpu_wrapper')
-    @patch('parslbox.resource_manager.mpi_launcher.generate_openmpi_rankfile')
+    @patch('parslbox.resource_manager.mpi_launcher_depr.generate_openmpi_gpu_wrapper')
+    @patch('parslbox.resource_manager.mpi_launcher_depr.generate_openmpi_rankfile')
     def test_build_mpirun_gpu_job(self, mock_rankfile, mock_wrapper):
         """Test building mpirun command for GPU job."""
         mock_rankfile.return_value = "/tmp/rankfile.txt"
         mock_wrapper.return_value = "/tmp/wrapper.sh"
         self.mock_job_spec.is_gpu_job.return_value = True
         
-        builder = MPICommandBuilder("mpirun")
+        builder = MPICommandBuilder_depr("mpirun")
         command = builder.build_command(
             self.mock_assignment, 
             self.mock_system_config, 
@@ -190,7 +190,7 @@ class TestMPICommandBuilder:
         self.mock_assignment.hostnames = ["node1"]
         self.mock_job_spec.detect_job_type.return_value = "fullnode_cpu"
         
-        builder = MPICommandBuilder("mpiexec")
+        builder = MPICommandBuilder_depr("mpiexec")
         command = builder.build_command(
             self.mock_assignment, 
             self.mock_system_config, 
@@ -210,7 +210,7 @@ class TestMPICommandBuilder:
         self.mock_assignment.hostnames = ["node1"]
         self.mock_assignment.get_ranks_for_node.return_value = [0, 1]
         
-        builder = MPICommandBuilder("mpiexec")
+        builder = MPICommandBuilder_depr("mpiexec")
         command = builder.build_command(
             self.mock_assignment, 
             self.mock_system_config, 
@@ -222,12 +222,12 @@ class TestMPICommandBuilder:
         assert "-host node1" in command
         assert "--cpu-bind list:" in command
     
-    @patch('parslbox.resource_manager.mpi_launcher.generate_mpich_rankfile')
+    @patch('parslbox.resource_manager.mpi_launcher_depr.generate_mpich_rankfile')
     def test_build_mpiexec_multinode(self, mock_rankfile):
         """Test building mpiexec command for multi-node job."""
         mock_rankfile.return_value = "/tmp/rankfile.txt"
         
-        builder = MPICommandBuilder("mpiexec")
+        builder = MPICommandBuilder_depr("mpiexec")
         command = builder.build_command(
             self.mock_assignment, 
             self.mock_system_config, 
@@ -244,7 +244,7 @@ class TestMPICommandBuilder:
     def test_build_srun_command(self):
         """Test building srun command."""
         self.mock_job_spec.detect_job_type.return_value = "fullnode_cpu"
-        builder = MPICommandBuilder("srun")
+        builder = MPICommandBuilder_depr("srun")
         command = builder.build_command(
             self.mock_assignment,
             self.mock_system_config,
@@ -258,12 +258,12 @@ class TestMPICommandBuilder:
         assert "--nodelist node1,node2" in command
         assert "--nodes 2" in command
 
-    @patch('parslbox.resource_manager.mpi_launcher.generate_srun_gpu_wrapper')
+    @patch('parslbox.resource_manager.mpi_launcher_depr.generate_srun_gpu_wrapper')
     def test_build_srun_fullnode_cpu(self, mock_wrapper):
         """Test building srun command for fullnode CPU job."""
         self.mock_job_spec.detect_job_type.return_value = "fullnode_cpu"
 
-        builder = MPICommandBuilder("srun")
+        builder = MPICommandBuilder_depr("srun")
         command = builder.build_command(
             self.mock_assignment,
             self.mock_system_config,
@@ -280,7 +280,7 @@ class TestMPICommandBuilder:
         mock_wrapper.assert_not_called()
         assert "wrapper" not in command
 
-    @patch('parslbox.resource_manager.mpi_launcher.generate_srun_gpu_wrapper')
+    @patch('parslbox.resource_manager.mpi_launcher_depr.generate_srun_gpu_wrapper')
     def test_build_srun_subnode_gpu(self, mock_wrapper):
         """Test building srun command for subnode GPU job."""
         mock_wrapper.return_value = "/tmp/gpu_wrapper.sh"
@@ -294,7 +294,7 @@ class TestMPICommandBuilder:
         self.mock_job_spec.get_total_ranks.return_value = 2
         self.mock_job_spec.ngpus = 2
 
-        builder = MPICommandBuilder("srun")
+        builder = MPICommandBuilder_depr("srun")
         command = builder.build_command(
             self.mock_assignment,
             self.mock_system_config,
@@ -310,7 +310,7 @@ class TestMPICommandBuilder:
         mock_wrapper.assert_called_once()
         assert "gpu_wrapper.sh" in command
 
-    @patch('parslbox.resource_manager.mpi_launcher.generate_srun_gpu_wrapper')
+    @patch('parslbox.resource_manager.mpi_launcher_depr.generate_srun_gpu_wrapper')
     def test_build_srun_fullnode_gpu(self, mock_wrapper):
         """Test building srun command for fullnode GPU job."""
         mock_wrapper.return_value = "/tmp/gpu_wrapper.sh"
@@ -319,7 +319,7 @@ class TestMPICommandBuilder:
         self.mock_job_spec.ngpus = 2
         self.mock_job_spec.ranks_per_node = 2
 
-        builder = MPICommandBuilder("srun")
+        builder = MPICommandBuilder_depr("srun")
         command = builder.build_command(
             self.mock_assignment,
             self.mock_system_config,
@@ -337,7 +337,7 @@ class TestMPICommandBuilder:
         # No --exact for fullnode
         assert "--exact" not in command
 
-    @patch('parslbox.resource_manager.mpi_launcher.generate_srun_gpu_wrapper')
+    @patch('parslbox.resource_manager.mpi_launcher_depr.generate_srun_gpu_wrapper')
     def test_build_srun_multinode_gpu(self, mock_wrapper):
         """Test building srun command for multinode GPU job."""
         mock_wrapper.return_value = "/tmp/gpu_wrapper.sh"
@@ -349,7 +349,7 @@ class TestMPICommandBuilder:
         self.mock_job_spec.ngpus = 4
         self.mock_job_spec.ranks_per_node = 4
 
-        builder = MPICommandBuilder("srun")
+        builder = MPICommandBuilder_depr("srun")
         command = builder.build_command(
             self.mock_assignment,
             self.mock_system_config,
@@ -367,7 +367,7 @@ class TestMPICommandBuilder:
     
     def test_filter_disabled_flags_exact_match(self):
         """Test filtering flags with exact flag matching."""
-        builder = MPICommandBuilder("mpirun")
+        builder = MPICommandBuilder_depr("mpirun")
         flags = ["-np", "4", "-H", "node1,node2", "--verbose"]
         disable_list = ["-H"]
         
@@ -379,7 +379,7 @@ class TestMPICommandBuilder:
     
     def test_filter_disabled_flags_substring_match(self):
         """Test filtering flags with substring matching."""
-        builder = MPICommandBuilder("mpirun")
+        builder = MPICommandBuilder_depr("mpirun")
         flags = ["-np", "4", "--map-by", "rankfile:file=/tmp/file", "--verbose"]
         disable_list = ["rankfile"]
         
@@ -391,7 +391,7 @@ class TestMPICommandBuilder:
     
     def test_filter_disabled_flags_multiple_rules(self):
         """Test filtering flags with multiple disable rules."""
-        builder = MPICommandBuilder("mpirun")
+        builder = MPICommandBuilder_depr("mpirun")
         flags = ["-np", "4", "-H", "node1", "--map-by", "rankfile:file=/tmp/file", "--verbose"]
         disable_list = ["-H", "rankfile"]
         
@@ -403,7 +403,7 @@ class TestMPICommandBuilder:
     
     def test_filter_disabled_flags_no_matches(self):
         """Test filtering flags with no matches."""
-        builder = MPICommandBuilder("mpirun")
+        builder = MPICommandBuilder_depr("mpirun")
         flags = ["-np", "4", "--verbose"]
         disable_list = ["--nonexistent"]
         
@@ -414,7 +414,7 @@ class TestMPICommandBuilder:
     
     def test_filter_disabled_flags_empty_list(self):
         """Test filtering flags with empty disable list."""
-        builder = MPICommandBuilder("mpirun")
+        builder = MPICommandBuilder_depr("mpirun")
         flags = ["-np", "4", "--verbose"]
         disable_list = []
         
@@ -425,7 +425,7 @@ class TestMPICommandBuilder:
     
     def test_apply_overrides_no_overrides(self):
         """Test applying overrides when no overrides are specified."""
-        builder = MPICommandBuilder("mpirun")
+        builder = MPICommandBuilder_depr("mpirun")
         flags = ["-np", "4", "--verbose"]
         
         result = builder._apply_overrides(flags)
@@ -436,7 +436,7 @@ class TestMPICommandBuilder:
     def test_apply_overrides_only_add(self):
         """Test applying overrides with only add rules."""
         overrides = {"add": ["--mca btl ^openib"]}
-        builder = MPICommandBuilder("mpirun", overrides)
+        builder = MPICommandBuilder_depr("mpirun", overrides)
         flags = ["-np", "4"]
         
         result = builder._apply_overrides(flags)
@@ -448,7 +448,7 @@ class TestMPICommandBuilder:
     def test_apply_overrides_multiword_add(self):
         """Test applying overrides with multi-word add flags."""
         overrides = {"add": ["--bind-to core", "--verbose"]}
-        builder = MPICommandBuilder("mpirun", overrides)
+        builder = MPICommandBuilder_depr("mpirun", overrides)
         flags = ["-np", "4"]
         
         result = builder._apply_overrides(flags)
@@ -474,7 +474,7 @@ class TestComposeMPICommand:
         # Mock job spec
         self.mock_job_spec = Mock()
     
-    @patch('parslbox.resource_manager.mpi_launcher.MPICommandBuilder')
+    @patch('parslbox.resource_manager.mpi_launcher_depr.MPICommandBuilder_depr')
     def test_compose_mpi_command_no_overrides(self, mock_builder_class):
         """Test compose_mpi_command without overrides."""
         mock_builder = Mock()
@@ -497,7 +497,7 @@ class TestComposeMPICommand:
         }
         assert result == expected
     
-    @patch('parslbox.resource_manager.mpi_launcher.MPICommandBuilder')
+    @patch('parslbox.resource_manager.mpi_launcher_depr.MPICommandBuilder_depr')
     def test_compose_mpi_command_with_overrides(self, mock_builder_class):
         """Test compose_mpi_command with overrides."""
         mock_builder = Mock()
@@ -522,7 +522,7 @@ class TestComposeMPICommand:
         }
         assert result == expected
     
-    @patch('parslbox.resource_manager.mpi_launcher.MPICommandBuilder')
+    @patch('parslbox.resource_manager.mpi_launcher_depr.MPICommandBuilder_depr')
     def test_compose_mpi_command_mpiexec(self, mock_builder_class):
         """Test compose_mpi_command with mpiexec launcher."""
         mock_builder = Mock()
@@ -547,7 +547,7 @@ class TestComposeMPICommand:
         }
         assert result == expected
     
-    @patch('parslbox.resource_manager.mpi_launcher.MPICommandBuilder')
+    @patch('parslbox.resource_manager.mpi_launcher_depr.MPICommandBuilder_depr')
     def test_compose_mpi_command_srun(self, mock_builder_class):
         """Test compose_mpi_command with srun launcher."""
         mock_builder = Mock()
@@ -599,7 +599,7 @@ class TestIntegrationScenarios:
         self.mock_job_spec.detect_job_type.return_value = "subnode_cpu"
         self.mock_job_spec.is_gpu_job.return_value = False
     
-    @patch('parslbox.resource_manager.mpi_launcher.generate_openmpi_rankfile')
+    @patch('parslbox.resource_manager.mpi_launcher_depr.generate_openmpi_rankfile')
     def test_vasp_sophia_scenario(self, mock_rankfile):
         """Test the VASP on Sophia scenario that motivated this feature."""
         mock_rankfile.return_value = "/tmp/rankfile.txt"
@@ -609,7 +609,7 @@ class TestIntegrationScenarios:
             "disable": ["rankfile", "-H"]
         }
         
-        builder = MPICommandBuilder("mpirun", vasp_sophia_overrides)
+        builder = MPICommandBuilder_depr("mpirun", vasp_sophia_overrides)
         command = builder.build_command(
             self.mock_assignment,
             self.mock_system_config,
@@ -633,7 +633,7 @@ class TestIntegrationScenarios:
             "add": ["--mca btl ^openib", "--mca pml ob1", "--verbose"]
         }
         
-        builder = MPICommandBuilder("mpirun", custom_overrides)
+        builder = MPICommandBuilder_depr("mpirun", custom_overrides)
         command = builder.build_command(
             self.mock_assignment,
             self.mock_system_config,

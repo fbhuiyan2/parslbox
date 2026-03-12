@@ -26,7 +26,7 @@ from parslbox.resource_manager import (
     create_job_resource_spec
 )
 from parslbox.resource_manager.cpu_affinity import CPUAffinityManager
-from parslbox.resource_manager.mpi_launcher import (
+from parslbox.resource_manager.mpi_launcher_depr import (
     compose_mpi_command,
     generate_openmpi_rankfile,
     generate_mpich_rankfile
