@@ -15,6 +15,9 @@ class PythonApp(AppBase):
     # App configuration
     INPUT_REQUIRED = True
     DFLT_INPUT = None
+    USES_MPI = False  # Python scripts don't use MPI for parallelization.
+                      # PBX wraps the command with a resource launcher to
+                      # constrain execution to assigned resources.
     
     def get_command_template(self, **kwargs) -> str:
         """

@@ -22,6 +22,10 @@ class AppBase(ABC):
     # App configuration (must be defined in subclasses)
     INPUT_REQUIRED: bool
     DFLT_INPUT: str | None
+    USES_MPI: bool = True  # Whether this app uses MPI for parallelization.
+                           # Set to False for non-MPI apps (e.g., Python scripts).
+                           # Non-MPI apps get a resource launcher prepended to
+                           # constrain execution to the assigned node/resources.
     
     @abstractmethod
     def get_command_template(self, **kwargs) -> str:
@@ -185,7 +189,14 @@ class AppBase(ABC):
             app_config=app_config,
             mpi_commands=mpi_commands
         )
-        
+
+        # For non-MPI apps, prepend resource launcher to constrain
+        # execution to the resources assigned by the resource manager
+        if not self.USES_MPI:
+            resource_launcher = mpi_commands.get('PBX_RESOURCE_LAUNCHER', '')
+            if resource_launcher:
+                command = f"{resource_launcher} {command}"
+
         # Get any additional setup commands
         additional_setup = self.get_additional_setup(
             total_gpus=total_gpus,

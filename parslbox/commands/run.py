@@ -19,7 +19,7 @@ from parslbox.utils.logging_utils import setup_logging, validate_log_level
 from parslbox.utils.pbx_config_utils import load_app_config, is_app_configured, load_full_config
 from parslbox.database import database
 from parslbox.resource_manager.mpi_config import load_mpi_config
-from parslbox.resource_manager.mpi_command_builder import build_mpi_command
+from parslbox.resource_manager.mpi_command_builder import build_mpi_command, build_resource_launcher
 from parslbox.resource_manager.exceptions import InsufficientResources
 from parslbox.resource_manager.models import create_job_resource_spec
 from parslbox.resource_manager.job_tracker import JobTracker
@@ -110,7 +110,20 @@ def create_parsl_future(job, app_instance, app_config, mpi_config, config_name, 
             job_path=str(job_path)
         )
         logger.info(f"Job {job_id}: Generated MPI command - {mpi_commands.get('PBX_MPI_PREFIX', 'None')}")
-        
+
+        # For non-MPI apps, generate a resource launcher to constrain
+        # execution to the assigned node/resources
+        if not app_instance.USES_MPI:
+            resource_launcher = build_resource_launcher(
+                mpi_config=mpi_config,
+                system_config=system_config,
+                assignment=assignment,
+                job_spec=job_spec,
+                job_path=str(job_path),
+            )
+            mpi_commands['PBX_RESOURCE_LAUNCHER'] = resource_launcher
+            logger.info(f"Job {job_id}: Resource launcher - {resource_launcher}")
+
         # Run preprocessing
         logger.info(f"Running preprocessing for Job ID {job_id}...")
         app_instance.preprocess(

@@ -468,21 +468,100 @@ def build_mpi_command(
 ) -> Dict[str, str]:
     """
     Convenience function to build MPI command.
-    
+
     Args:
         mpi_config: MPI configuration
         system_config: System configuration
         assignment: Resource assignment
         job_spec: Job resource specification
         job_path: Optional job directory
-        
+
     Returns:
         Dictionary with MPI command prefix
     """
     builder = MPICommandBuilder(mpi_config, system_config)
     prefix = builder.build_command(assignment, job_spec, job_path)
-    
+
     return {
         "PBX_MPI_PREFIX": prefix,
         f"PBX_{mpi_config.get_mpi_command().upper()}_PREFIX": prefix,
     }
+
+
+def build_resource_launcher(
+    mpi_config: MPIConfig,
+    system_config: 'SystemConfig',
+    assignment: 'ResourceAssignment',
+    job_spec: 'JobResourceSpec',
+    job_path: Optional[str] = None
+) -> str:
+    """
+    Build a single-process MPI launcher for non-MPI apps (USES_MPI=False).
+
+    Non-MPI apps don't use MPI for parallelization. The MPI launcher's only
+    role is to place a single process on the assigned node with the assigned
+    CPU/GPU resources. The app handles any internal parallelism itself.
+
+    This function reuses MPICommandBuilder.build_command() with modified inputs:
+    - A synthetic JobResourceSpec that forces -n 1 --ppn 1 output, regardless
+      of the actual job's resource spec (which can be multi-node, multi-GPU, etc.)
+    - A modified ResourceAssignment preserving ALL node IDs/hostnames (for
+      hostlist) but with CPU cores consolidated into rank 0 on node 0
+    - No GPU wrapper — GPU binding is via CUDA_VISIBLE_DEVICES env var
+      (already exported in the bash engine via _format_env_vars())
+
+    All user MPI config settings are respected (use_hostlist, cpu_bind_method,
+    use_short_hostnames, disable/add overrides). Nothing is forced or overridden.
+
+    Args:
+        mpi_config: MPI configuration (used for backend type and options)
+        system_config: System configuration
+        assignment: Resource assignment from the resource manager
+        job_spec: Original job resource specification
+        job_path: Optional job directory for generated files
+
+    Returns:
+        Resource launcher command string
+    """
+    from parslbox.resource_manager.models import JobResourceSpec, ResourceAssignment
+
+    # Synthetic spec to make MPICommandBuilder produce -n 1 --ppn 1.
+    # The actual job can be any size — PBX always launches 1 process
+    # since the app handles its own parallelism (USES_MPI=False).
+    single_spec = JobResourceSpec(
+        job_id=job_spec.job_id,
+        num_nodes=1,
+        ngpus=0,  # No GPU handling via MPI — use env vars instead
+        node_occupancy=job_spec.node_occupancy,
+        ranks_per_node=1,
+    )
+
+    # Consolidate all CPU cores from all ranks on node 0 → rank 0
+    all_cores = []
+    if assignment.cpu_assignments and assignment.cpu_assignments[0]:
+        for rank, cores in assignment.cpu_assignments[0].items():
+            all_cores.extend(cores)
+    all_cores = sorted(set(all_cores))
+
+    # Preserve ALL nodes/hostnames for the hostlist,
+    # but only rank 0 on node 0 has CPU assignments
+    n_nodes = len(assignment.node_ids)
+    launcher_assignment = ResourceAssignment(
+        job_id=assignment.job_id,
+        node_ids=assignment.node_ids,
+        hostnames=assignment.hostnames,
+        gpu_assignments=[{} for _ in range(n_nodes)],
+        cpu_assignments=(
+            [{0: all_cores}] + [{} for _ in range(n_nodes - 1)]
+            if all_cores
+            else [{} for _ in range(n_nodes)]
+        ),
+        node_occupancy=assignment.node_occupancy,
+    )
+
+    # Reuse the existing command builder
+    builder = MPICommandBuilder(mpi_config, system_config)
+    prefix = builder.build_command(launcher_assignment, single_spec, job_path)
+
+    logger.info(f"Job {assignment.job_id}: Resource launcher: {prefix}")
+    return prefix
