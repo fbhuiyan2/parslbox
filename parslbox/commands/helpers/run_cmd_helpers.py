@@ -9,7 +9,7 @@ import parsl
 from parslbox.database import database
 
 # Valid job status values (stored in lowercase for comparison)
-VALID_JOB_STATUSES = ["ready", "done", "failed", "restart", "running", "submitted", "warning"]
+VALID_JOB_STATUSES = ["ready", "done", "failed", "killed", "restart", "running", "submitted", "warning"]
 
 
 def get_default_run_dir() -> Path:
@@ -64,7 +64,7 @@ def parse_parents(parents_str):
 # as they are now handled by JobTracker for better performance and to eliminate database reads
 
 
-def create_shutdown_handler(status_buffer, logger, parsl_loaded_flag):
+def create_shutdown_handler(status_buffer, logger, parsl_loaded_flag, job_tracker=None):
     """
     Create a signal handler that flushes the status buffer on termination.
     
@@ -98,40 +98,62 @@ def create_shutdown_handler(status_buffer, logger, parsl_loaded_flag):
         logger.info("Setting 10-second alarm for forced exit protection")
         signal.alarm(10)
         
+        # STEP 0: Get active job IDs from in-memory JobTracker.
+        # Only tracks THIS instance's jobs, so other PBX batch jobs
+        # sharing the same database are unaffected.
+        active_ids = []
+        if job_tracker:
+            try:
+                active_jobs = (
+                    job_tracker.get_jobs_by_status("Running")
+                    + job_tracker.get_jobs_by_status("Submitted")
+                )
+                active_ids = [j['job_id'] for j in active_jobs]
+                logger.info(f"Emergency shutdown: Step 0 - Found {len(active_ids)} active jobs")
+            except Exception as e:
+                logger.error(f"Emergency shutdown: Step 0 - Failed to get active jobs: {e}")
+
         try:
-            # STEP 1: Flush status buffer FIRST (MOST CRITICAL OPERATION)
-            # This must complete even if Parsl cleanup fails
-            logger.info(f"Emergency shutdown: Step 1/2 - Flushing status buffer...")
+            # STEP 1: Flush status buffer (clears any stale buffered entries to DB)
+            logger.info(f"Emergency shutdown: Step 1/3 - Flushing status buffer...")
             flush_start = time.time()
-            
+
             count = status_buffer.flush_all()
-            
+
             flush_duration = time.time() - flush_start
             if count > 0:
-                logger.info(f"Emergency shutdown: Step 1/2 - Successfully flushed {count} job(s) in {flush_duration:.3f}s")
+                logger.info(f"Emergency shutdown: Step 1/3 - Successfully flushed {count} job(s) in {flush_duration:.3f}s")
             else:
-                logger.info(f"Emergency shutdown: Step 1/2 - No pending updates to flush ({flush_duration:.3f}s)")
-                
+                logger.info(f"Emergency shutdown: Step 1/3 - No pending updates to flush ({flush_duration:.3f}s)")
+
         except Exception as e:
-            logger.error(f"Emergency shutdown: Step 1/2 - Status buffer flush FAILED: {e}")
+            logger.error(f"Emergency shutdown: Step 1/3 - Status buffer flush FAILED: {e}")
             logger.error(f"Emergency shutdown: Failed at timestamp {time.time()}")
-            # Continue to try Parsl cleanup even if flush failed
-        
+
+        # STEP 2: Mark active jobs as Killed (direct DB write, AFTER flush
+        # so nothing can overwrite it)
+        if active_ids:
+            try:
+                database.update_jobs(status_buffer.db_path, job_ids=active_ids, status='Killed')
+                logger.info(f"Emergency shutdown: Step 2/3 - Marked {len(active_ids)} active jobs as Killed")
+            except Exception as e:
+                logger.error(f"Emergency shutdown: Step 2/3 - Failed to mark active jobs: {e}")
+
         try:
-            # STEP 2: Clean up Parsl resources (SECONDARY OPERATION)
+            # STEP 3: Clean up Parsl resources
             if parsl_loaded_flag.get('loaded', False):
-                logger.info(f"Emergency shutdown: Step 2/2 - Cleaning up Parsl resources...")
+                logger.info(f"Emergency shutdown: Step 3/3 - Cleaning up Parsl resources...")
                 cleanup_start = time.time()
                 
                 parsl.dfk().cleanup()
                 
                 cleanup_duration = time.time() - cleanup_start
-                logger.info(f"Emergency shutdown: Step 2/2 - Parsl cleanup complete in {cleanup_duration:.3f}s")
+                logger.info(f"Emergency shutdown: Step 3/3 - Parsl cleanup complete in {cleanup_duration:.3f}s")
             else:
-                logger.info("Emergency shutdown: Step 2/2 - Parsl not loaded, skipping cleanup")
+                logger.info("Emergency shutdown: Step 3/3 - Parsl not loaded, skipping cleanup")
                 
         except Exception as e:
-            logger.error(f"Emergency shutdown: Step 2/2 - Parsl cleanup FAILED: {e}")
+            logger.error(f"Emergency shutdown: Step 3/3 - Parsl cleanup FAILED: {e}")
             logger.error(f"Emergency shutdown: Failed at timestamp {time.time()}")
             # Don't re-raise - we want to exit cleanly even if Parsl cleanup fails
         

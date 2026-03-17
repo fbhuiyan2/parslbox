@@ -38,7 +38,7 @@ from parslbox.database.status_buffer import StatusBuffer
 app = typer.Typer()
 
 # Valid job status values (stored in lowercase for comparison)
-VALID_JOB_STATUSES = ["ready", "done", "failed", "restart", "running", "submitted", "warning"]
+VALID_JOB_STATUSES = ["ready", "done", "failed", "killed", "restart", "running", "submitted", "warning"]
 
 
 def get_scheduler_job_id(scheduler):
@@ -303,7 +303,7 @@ def run(
     logger.info("Initialized StatusBuffer for batching database updates")
     
     # Register signal handlers for graceful shutdown on walltime exceeded
-    shutdown_handler = create_shutdown_handler(status_buffer, logger, parsl_loaded_flag)
+    shutdown_handler = create_shutdown_handler(status_buffer, logger, parsl_loaded_flag, job_tracker)
     signal.signal(signal.SIGTERM, shutdown_handler)
     signal.signal(signal.SIGINT, shutdown_handler)
     logger.info("Registered signal handlers for SIGTERM and SIGINT")
