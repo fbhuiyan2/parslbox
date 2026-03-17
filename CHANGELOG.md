@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.8.5] - 2026-03-17
+
+### Added
+
+#### Resource Constraining for Non-MPI Apps
+- **New `USES_MPI` class attribute on `AppBase`** (default `True`) — Apps that don't use MPI for parallelization set `USES_MPI = False` to get a resource launcher prepended to their command, ensuring execution on the assigned node with assigned CPU/GPU resources instead of the head node
+- **New `build_resource_launcher()` function** in `mpi_command_builder.py` — Generates a single-process MPI launcher (`mpiexec -n 1 --ppn 1 ...`) by reusing `MPICommandBuilder` with a synthetic single-rank spec. Consolidates all assigned CPU cores into a single binding. GPU binding via `CUDA_VISIBLE_DEVICES` env var. All user MPI config settings respected
+- **`PythonApp` set to `USES_MPI = False`** — Python scripts now run on assigned resources instead of the head node
+- **`NonMPIApp` example** added to `EXAMPLE_NEW_APP.py` with documentation
+- **13 new tests** in `tests/test_resource_launcher.py` covering all backends, CPU consolidation, hostlist, GPU wrapper exclusion, and `USES_MPI` attribute verification
+
+#### Resource Requirement Estimator (`--req` flag)
+- **New `--req / -r` flag on `pbx info`** — Calculates resource requirements for selected jobs against a target system (e.g., `pbx info 1 2 3 --req polaris`)
+  - Shows simultaneous execution nodes (all jobs at once) vs optimal packing nodes (no idle resources)
+  - Handles GPU jobs, CPU jobs, mixed workloads, multi-node jobs, and sub-node sharing
+  - Warns about incompatible jobs (GPU jobs on CPU-only systems, oversized single-node jobs)
+  - Filters to schedulable jobs (Ready/Restart), warns about skipped non-schedulable jobs
+  - Validates system name against available configurations
+
+### Fixed
+
+#### SIGTERM Handler Now Marks Active Jobs as Killed
+- **Jobs no longer stuck in "Running" state after walltime exceeded** — Previously, the SIGTERM handler only flushed the status buffer (which was typically empty). Now it identifies active jobs via `JobTracker` (in-memory, only this instance's jobs), flushes the buffer first to clear stale entries, then marks active jobs as "Killed" via direct database write
+- **New "Killed" job status** — Added to `VALID_JOB_STATUSES` in both `run.py` and `run_cmd_helpers.py`. Distinguishes walltime-killed jobs from application failures ("Failed")
+- **Safe with concurrent PBX instances** — Uses `JobTracker` which only tracks this instance's jobs, so other batch jobs sharing the same database are unaffected
+
+### Modified Files
+- `parslbox/apps/appbase.py` — Added `USES_MPI` attribute and resource launcher prepend logic
+- `parslbox/apps/python.py` — Set `USES_MPI = False`
+- `parslbox/apps/EXAMPLE_NEW_APP.py` — Added `USES_MPI` documentation and `NonMPIApp` example
+- `parslbox/resource_manager/mpi_command_builder.py` — Added `build_resource_launcher()` function
+- `parslbox/commands/run.py` — Added `build_resource_launcher` import, resource launcher generation for non-MPI apps, `job_tracker` passed to shutdown handler, added "killed" to valid statuses
+- `parslbox/commands/info.py` — Added `--req / -r` flag with resource analysis functions
+- `parslbox/commands/helpers/run_cmd_helpers.py` — Restructured signal handler (3-step: get active IDs → flush → mark Killed), added `job_tracker` parameter, added "killed" to valid statuses
+
+### New Files
+- `tests/test_resource_launcher.py` (13 tests)
+
+---
+
 ## [0.8.2] - 2026-03-02
 
 ### Changed

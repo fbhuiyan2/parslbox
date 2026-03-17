@@ -1,5 +1,6 @@
+import math
 import typer
-from typing import List
+from typing import List, Optional
 from rich.console import Console
 from rich.table import Table
 
@@ -49,6 +50,7 @@ def info(
     timestamp: bool = typer.Option(False, "--timestamp", "-ts", help="Show only the timestamp field."),
     env_file: bool = typer.Option(False, "--envfile", "-e", help="Show only the environment file field."),
     parents: bool = typer.Option(False, "--parents", "-P", help="Show all parent dependencies without truncation."),
+    req: Optional[str] = typer.Option(None, "--req", "-r", help="Calculate resource requirements for a target system (e.g., polaris, crux, sophia)."),
 ):
     """
     Shows detailed information about specific jobs.
@@ -162,3 +164,167 @@ def info(
         console.print(f"[green]Showing information for 1 job.[/green]")
     else:
         console.print(f"[green]Showing information for {len(jobs)} jobs.[/green]")
+
+    # Resource requirement analysis
+    if req:
+        _print_resource_requirements(jobs, req)
+
+
+def _print_resource_requirements(jobs: list, system_name: str):
+    """Print resource requirement analysis for jobs against a target system."""
+    from parslbox.system_configs.loader import get_system_config, get_available_systems
+
+    # Validate system name
+    available = get_available_systems()
+    if system_name not in available:
+        console.print(f"\n[red]Unknown system '{system_name}'. Available: {', '.join(available)}[/red]")
+        return
+
+    sys_config = get_system_config(system_name)
+    gpus_per_node = sys_config.GPUS_PER_NODE
+    cores_per_node = sys_config.CORES_PER_NODE
+
+    # Filter schedulable jobs (Ready/Restart), warn about others
+    schedulable = [j for j in jobs if j['status'] in ('Ready', 'Restart')]
+    non_schedulable = [j for j in jobs if j['status'] not in ('Ready', 'Restart')]
+
+    console.print()
+    console.print(f"[bold]Resource Requirements for {system_name}[/bold] "
+                  f"({gpus_per_node} GPUs/node, {cores_per_node} cores/node):")
+
+    if non_schedulable:
+        statuses = {}
+        for j in non_schedulable:
+            statuses[j['status']] = statuses.get(j['status'], 0) + 1
+        status_str = ", ".join(f"{count} {s}" for s, count in statuses.items())
+        console.print(f"  [yellow]Skipping {len(non_schedulable)} non-schedulable jobs ({status_str})[/yellow]")
+
+    if not schedulable:
+        console.print(f"  [yellow]No schedulable (Ready/Restart) jobs to analyze.[/yellow]")
+        return
+
+    # Classify jobs
+    gpu_jobs = [j for j in schedulable if j['ngpus'] > 0]
+    cpu_jobs = [j for j in schedulable if j['ngpus'] == 0]
+
+    console.print(f"  Schedulable jobs: {len(schedulable)}")
+    if gpu_jobs and cpu_jobs:
+        console.print(f"    GPU jobs: {len(gpu_jobs)}")
+        console.print(f"    CPU jobs: {len(cpu_jobs)}")
+
+    # --- GPU analysis ---
+    if gpu_jobs:
+        _print_gpu_analysis(gpu_jobs, gpus_per_node, system_name)
+
+    # --- CPU analysis ---
+    if cpu_jobs:
+        _print_cpu_analysis(cpu_jobs, gpus_per_node)
+
+    # --- Combined total ---
+    if gpu_jobs and cpu_jobs:
+        gpu_sim, gpu_opt = _calc_gpu_nodes(gpu_jobs, gpus_per_node)
+        cpu_sim, cpu_opt = _calc_cpu_nodes(cpu_jobs)
+        console.print()
+        console.print(f"  [bold]Total node estimate: {gpu_sim + cpu_sim} (simultaneous) / "
+                      f"{gpu_opt + cpu_opt} (optimal)[/bold]")
+
+
+def _print_gpu_analysis(gpu_jobs: list, gpus_per_node: int, system_name: str):
+    """Print GPU job resource analysis."""
+    if gpus_per_node == 0:
+        total_gpus = sum(j['ngpus'] for j in gpu_jobs)
+        console.print(f"\n  Total GPUs required: {total_gpus}")
+        console.print(f"  [red]WARNING: {system_name} has no GPUs. "
+                      f"{len(gpu_jobs)} GPU job(s) cannot run on this system.[/red]")
+        return
+
+    # Check for oversized single-node jobs
+    oversized = [j for j in gpu_jobs if j['num_nodes'] == 1 and j['ngpus'] > gpus_per_node]
+    if oversized:
+        for j in oversized:
+            console.print(f"\n  [red]WARNING: Job {j['job_id']} requires {j['ngpus']} GPUs "
+                          f"but {system_name} only has {gpus_per_node} GPUs/node. "
+                          f"Cannot run as single-node job.[/red]")
+
+    total_gpus = sum(j['ngpus'] for j in gpu_jobs)
+    multinode_jobs = [j for j in gpu_jobs if j['num_nodes'] > 1]
+    singlenode_jobs = [j for j in gpu_jobs if j['num_nodes'] == 1 and j not in oversized]
+
+    console.print(f"\n  Total GPUs required: {total_gpus}")
+    if multinode_jobs:
+        mn_nodes = sum(j['num_nodes'] for j in multinode_jobs)
+        console.print(f"    Multi-node jobs: {len(multinode_jobs)} ({mn_nodes} dedicated nodes)")
+
+    sim, opt = _calc_gpu_nodes(gpu_jobs, gpus_per_node)
+    min_nodes = max((j['num_nodes'] for j in gpu_jobs), default=1)
+
+    idle = sim * gpus_per_node - total_gpus
+    console.print(f"\n  Nodes for simultaneous execution: {sim}"
+                  + (f" ({sim * gpus_per_node} GPU slots, {idle} idle)" if idle > 0 else ""))
+
+    if opt < sim:
+        queued = total_gpus - opt * gpus_per_node
+        console.print(f"  Nodes for optimal packing:        {opt}"
+                      f" ({opt * gpus_per_node} GPU slots, {queued} GPU(s) queued by pbx)")
+    else:
+        console.print(f"  Nodes for optimal packing:        {opt}")
+
+    if min_nodes > 1 and min_nodes < sim:
+        console.print(f"  Minimum viable nodes:             {min_nodes} (largest job's requirement)")
+
+
+def _print_cpu_analysis(cpu_jobs: list, gpus_per_node: int):
+    """Print CPU job resource analysis."""
+    singlenode = [j for j in cpu_jobs if j['num_nodes'] == 1]
+    multinode = [j for j in cpu_jobs if j['num_nodes'] > 1]
+
+    total_occupancy = sum(j['node_occupancy'] for j in singlenode)
+    mn_nodes = sum(j['num_nodes'] for j in multinode)
+
+    console.print(f"\n  Total CPU node occupancy: {total_occupancy:.1f}"
+                  + (f" + {mn_nodes} multi-node dedicated" if multinode else ""))
+
+    sim, opt = _calc_cpu_nodes(cpu_jobs)
+    full = int(total_occupancy)
+    frac = total_occupancy - full
+
+    console.print(f"\n  Nodes for simultaneous execution: {sim}")
+    if frac > 0 and full > 0:
+        console.print(f"  Nodes for optimal packing:        {opt} "
+                      f"({full} full + 1 at {frac:.0%})"
+                      + (f" + {mn_nodes} multi-node" if multinode else ""))
+    else:
+        console.print(f"  Nodes for optimal packing:        {opt}")
+
+    if gpus_per_node > 0:
+        console.print(f"\n  [dim]Note: CPU jobs will run on GPU-equipped nodes (GPUs will be idle).[/dim]")
+
+
+def _calc_gpu_nodes(gpu_jobs: list, gpus_per_node: int) -> tuple:
+    """Calculate (simultaneous, optimal) node counts for GPU jobs."""
+    if gpus_per_node == 0:
+        return (0, 0)
+
+    multinode_nodes = sum(j['num_nodes'] for j in gpu_jobs if j['num_nodes'] > 1)
+    singlenode_gpus = sum(j['ngpus'] for j in gpu_jobs
+                         if j['num_nodes'] == 1 and j['ngpus'] <= gpus_per_node)
+
+    sim = multinode_nodes + math.ceil(singlenode_gpus / gpus_per_node) if singlenode_gpus else multinode_nodes
+    opt = multinode_nodes + (singlenode_gpus // gpus_per_node) if singlenode_gpus else multinode_nodes
+
+    # Ensure optimal has at least 1 node if there are remaining GPUs
+    if singlenode_gpus % gpus_per_node > 0 and opt == multinode_nodes:
+        opt += 1
+
+    return (sim, opt)
+
+
+def _calc_cpu_nodes(cpu_jobs: list) -> tuple:
+    """Calculate (simultaneous, optimal) node counts for CPU jobs."""
+    total_occupancy = sum(j['node_occupancy'] for j in cpu_jobs if j['num_nodes'] == 1)
+    multinode_nodes = sum(j['num_nodes'] for j in cpu_jobs if j['num_nodes'] > 1)
+
+    sim = multinode_nodes + math.ceil(total_occupancy)
+    opt = multinode_nodes + math.ceil(total_occupancy)  # CPU can't pack tighter than occupancy
+
+    return (sim, opt)

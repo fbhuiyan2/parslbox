@@ -1,6 +1,6 @@
 # Devlog
 
-**Current Version: 0.7.1**
+**Current Version: 0.8.5**
 
 ## Purpose
 This file tracks bug fixes and development issues encountered during ParslBox development. 
