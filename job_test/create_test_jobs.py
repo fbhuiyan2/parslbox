@@ -282,7 +282,7 @@ class TestJobCreator:
                 return {"node_occupancy": 1.0}, "Full node CPU"
             else:
                 # Multi-node CPU job
-                nnodes = random.choice(self.multinode_options)
+                nnodes = random.choice(self.fullnode_options)
                 return {"nnodes": nnodes, "node_occupancy": 1.0}, f"Multi-node CPU, {nnodes} nodes"
         
         # If GPU mode is enabled, only create GPU jobs
