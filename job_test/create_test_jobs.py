@@ -32,18 +32,20 @@ from parslbox.system_configs.loader import get_system_config
 class TestJobCreator:
     """Main class for creating test jobs."""
     
-    def __init__(self, config_name: str, tag: str = None):
+    def __init__(self, config_name: str, tag: str = None, lmp_exm_dir: str = None):
         """
         Initialize the test job creator.
         
         Args:
             config_name: Name of the system configuration (e.g., 'polaris', 'crux')
             tag: Optional tag to apply to all created jobs
+            lmp_exm_dir: Optional custom LAMMPS examples directory path
         """
         self.gpu_enabled = True
         self.cpu_only = False
         self.config_name = config_name
         self.tag = tag or "test"  # Default tag if none provided
+        self.lmp_exm_dir = Path(lmp_exm_dir) if lmp_exm_dir else None
         self.system_config = get_system_config(config_name)
         self.tests_dir = Path("tests")
         self.created_jobs = []  # Track created job IDs for parent assignment
@@ -54,7 +56,7 @@ class TestJobCreator:
         
         # Resource configuration options
         self.gpu_options = [1, 2, 8]
-        self.multinode_options = [1]
+        self.fullnode_options = [1, 2]
         self.cpu_occupancy_options = [1]
         
     def setup_directories(self):
@@ -73,7 +75,7 @@ class TestJobCreator:
     
     def get_lammps_examples_path(self) -> Path:
         """
-        Derive the LAMMPS examples path from the executable path in config.
+        Get the LAMMPS examples path from custom directory or derive from executable path.
         
         Returns:
             Path to LAMMPS examples directory
@@ -81,6 +83,15 @@ class TestJobCreator:
         Raises:
             ValueError: If lammps is not configured or path cannot be derived
         """
+        # If custom LAMMPS examples directory is provided, use it
+        if self.lmp_exm_dir:
+            if not self.lmp_exm_dir.exists():
+                raise ValueError(
+                    f"Custom LAMMPS examples directory not found: {self.lmp_exm_dir}"
+                )
+            return self.lmp_exm_dir
+        
+        # Otherwise, derive from executable path in config
         app_config = load_app_config("lammps-kk", self.config_name)
         
         if not app_config or "executable_path" not in app_config:
@@ -92,7 +103,7 @@ class TestJobCreator:
         executable_path = Path(app_config["executable_path"])
         
         # Derive examples path: replace /build/lmp with /examples
-        if executable_path.name == "lmp" and executable_path.parent.name == "build":
+        if executable_path.name == "lmp" and "build" in executable_path.parent.name:
             examples_path = executable_path.parent.parent / "examples"
         else:
             # Fallback: assume examples is a sibling of the executable's parent
@@ -276,7 +287,7 @@ class TestJobCreator:
         
         # If GPU mode is enabled, only create GPU jobs
         elif self.gpu_enabled:
-            config_type = job_index % 4  # 4 GPU configuration types
+            config_type = job_index % 3  # 3 GPU configuration types
             
             if config_type == 0:
                 # Single GPU job
@@ -288,24 +299,10 @@ class TestJobCreator:
                 if ngpus > self.system_config.GPUS_PER_NODE:
                     ngpus = self.system_config.GPUS_PER_NODE
                 return {"ngpus": ngpus}, f"Multi-GPU job, {ngpus} GPUs"
-            elif config_type == 2:
-                try:
-                    # Multi-node GPU job (All GPUs per node)
-                    nnodes = random.choice(self.multinode_options)
-                    if nnodes > 1:
-                        return {"nnodes": nnodes}, f"Multi-node GPU, {nnodes} nodes"
-                    else:
-                        # Full node GPU job (all GPUs on node)
-                        ngpus = self.system_config.GPUS_PER_NODE
-                        return {"ngpus": ngpus}, f"Full node GPU, {ngpus} GPUs"
-                except:   # if the multinode_options is empty
-                    # Single GPU job
-                    ngpus = 1
-                    return {"ngpus": ngpus}, f"Single GPU job, {ngpus} GPU"
             else:
-                # Full node GPU job (all GPUs on node)
-                ngpus = self.system_config.GPUS_PER_NODE
-                return {"ngpus": ngpus}, f"Full node GPU, {ngpus} GPUs"
+                # Multi-node GPU job (All GPUs per node)
+                nnodes = random.choice(self.fullnode_options)
+                return {"nnodes": nnodes}, f"Multi-node GPU, {nnodes} nodes"
         
         # Fallback: if neither GPU nor CPU-only is set properly, default to single GPU
         else:
@@ -523,6 +520,13 @@ Examples:
         help="Tag to apply to all created jobs (default: 'test_jobs')"
     )
     
+    parser.add_argument(
+        "--lmp-exm-dir",
+        type=str,
+        metavar="DIR",
+        help="Custom LAMMPS examples directory path (overrides auto-detection)"
+    )
+    
     args = parser.parse_args()
     
     # Validate that at least one job type is specified
@@ -531,7 +535,7 @@ Examples:
     
     try:
         # Create the test job creator
-        creator = TestJobCreator(args.config_name, args.tag)
+        creator = TestJobCreator(args.config_name, args.tag, args.lmp_exm_dir)
         
         # Setup directory structure
         creator.setup_directories()
