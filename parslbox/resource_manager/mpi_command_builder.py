@@ -72,7 +72,7 @@ class MPICommandBuilder:
         # Get basic info
         total_ranks = job_spec.get_total_ranks()
         ranks_per_node = self._calculate_ranks_per_node(job_spec, assignment)
-        hostlist = self._get_hostlist(assignment)
+        hostlist = self._get_hostlist(assignment, ranks_per_node)
         
         # Build context for template substitution
         context = self._build_context(assignment, job_spec, job_path, hostlist, ranks_per_node)
@@ -118,11 +118,20 @@ class MPICommandBuilder:
         else:
             return job_spec.ranks_per_node
     
-    def _get_hostlist(self, assignment: 'ResourceAssignment') -> str:
-        """Get hostlist, optionally using short hostnames."""
-        hostnames = assignment.hostnames
+    def _get_hostlist(self, assignment: 'ResourceAssignment', ranks_per_node: int = 0) -> str:
+        """
+        Get hostlist, optionally using short hostnames and slot counts.
+
+        When use_hostlist_slots is enabled (OpenMPI only), appends :slots to
+        each hostname (e.g., node01:4). This prevents OpenMPI's "not enough
+        slots" error, which occurs when OpenMPI's detected slot count is lower
+        than the requested ranks per node.
+        """
+        hostnames = list(assignment.hostnames)
         if self.config.use_short_hostnames:
             hostnames = [h.split('.')[0] for h in hostnames]
+        if self.config.use_hostlist_slots and self.config.backend == MPIBackend.OPENMPI and ranks_per_node > 0:
+            hostnames = [f"{h}:{ranks_per_node}" for h in hostnames]
         return ",".join(hostnames)
     
     def _build_context(
@@ -321,10 +330,14 @@ class MPICommandBuilder:
         backend = self.config.backend
         
         if backend == MPIBackend.OPENMPI:
-            # OpenMPI uses rankfile for list binding too
+            # OpenMPI has no inline per-rank CPU binding flag (unlike MPICH's
+            # --cpu-bind list:... or SRUN's --cpu-bind=map_cpu:...). The only
+            # way to bind specific cores to specific ranks in OpenMPI is via a
+            # rankfile. So for OpenMPI, "list" produces the same output as
+            # "rankfile" — both generate a rankfile with per-rank slot entries.
             rankfile_path = self._generate_rankfile_if_needed({})
             return ["--map-by", f"rankfile:file={rankfile_path}"]
-        
+
         elif backend == MPIBackend.MPICH:
             # Build cpu-bind list from assignment
             cpu_bind_list = []

@@ -51,6 +51,8 @@ class MPIConfig:
     mpi_cmd: Optional[str] = None
     use_gpu_wrapper: bool = False
     use_hostlist: bool = False
+    use_hostlist_slots: bool = False  # Append :slots to hostnames in hostlist (OpenMPI only).
+                                      # Prevents "not enough slots" errors.
     use_short_hostnames: bool = False
     cpu_bind_method: str = "none"
     disable: List[str] = field(default_factory=list)
@@ -155,6 +157,7 @@ def mpi_config_from_dict(config_dict: Dict[str, Any]) -> MPIConfig:
         mpi_cmd=config_dict.get("mpi_cmd"),
         use_gpu_wrapper=config_dict.get("use_gpu_wrapper", False),
         use_hostlist=config_dict.get("use_hostlist", False),
+        use_hostlist_slots=config_dict.get("use_hostlist_slots", False),
         use_short_hostnames=config_dict.get("use_short_hostnames", False),
         cpu_bind_method=config_dict.get("cpu_bind_method", "none"),
         disable=config_dict.get("disable", []),
