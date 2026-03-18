@@ -292,13 +292,18 @@ class TestFullnodeJobs:
         assert len(assignment.node_ids) == 1
         assert assignment.node_occupancy == 1.0
 
-        # Verify ranks but no per-rank resource assignments (MPI handles distribution)
+        # Verify ranks with per-rank CPU core distribution
         assert len(assignment.get_all_ranks()) == 4
 
-        # For full-node CPU jobs, CPU assignments should be empty (MPI handles)
+        # Full-node CPU jobs distribute all cores across ranks
+        all_cores = []
         for rank in range(4):
-            assert assignment.get_cpu_assignments_for_rank(rank) == []
+            rank_cores = assignment.get_cpu_assignments_for_rank(rank)
+            assert len(rank_cores) == 8  # 32 cores / 4 ranks = 8 per rank
+            all_cores.extend(rank_cores)
             assert assignment.get_gpu_assignments_for_rank(rank) == []
+
+        assert len(set(all_cores)) == 32  # All cores assigned, no overlap
 
         # Verify node state
         node = resource_manager.nodes[0]
@@ -356,13 +361,18 @@ class TestFullnodeJobs:
         assert len(assignment.hostnames) == 2
         assert assignment.is_single_node() == False
 
-        # Verify total ranks
+        # Verify total ranks with per-rank CPU distribution
         assert len(assignment.get_all_ranks()) == 8  # 2 nodes * 4 ranks
 
-        # For multi-node CPU jobs, no per-rank resource assignments
+        # Multi-node CPU jobs distribute all cores across ranks per node
+        all_cores = []
         for rank in range(8):
-            assert assignment.get_cpu_assignments_for_rank(rank) == []
+            rank_cores = assignment.get_cpu_assignments_for_rank(rank)
+            assert len(rank_cores) == 8  # 32 cores / 4 ranks per node = 8 per rank
+            all_cores.extend(rank_cores)
             assert assignment.get_gpu_assignments_for_rank(rank) == []
+
+        assert len(all_cores) == 64  # 32 cores * 2 nodes (core IDs repeat per node)
 
         # Verify node states
         for i in range(2):

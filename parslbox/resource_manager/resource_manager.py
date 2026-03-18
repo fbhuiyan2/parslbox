@@ -374,34 +374,43 @@ class ResourceManager:
             )
         
         # Assign the first N free nodes
+        # Capture available core IDs BEFORE assign_fullnode_cpu_job() clears them
         assigned_nodes = free_nodes[:spec.num_nodes]
         node_ids = []
         hostnames = []
-        
+        node_cores = []  # Per-node list of available core IDs
+
         for node in assigned_nodes:
+            node_cores.append(sorted(list(node.available_core_ids)))
             node.assign_fullnode_cpu_job(spec.job_id)
             node_ids.append(node.node_id)
             hostnames.append(node.hostname)
-        
-        # Create ResourceAssignment with empty per-rank allocations
-        # (MPI will handle core distribution)
+
         assignment = ResourceAssignment(
             job_id=spec.job_id,
             node_ids=node_ids,
             hostnames=hostnames,
             node_occupancy=spec.node_occupancy
         )
-        
-        # For full-node CPU jobs, assign ranks across nodes with empty resource lists
-        # MPI will handle the actual core binding
+
+        # Distribute all available cores evenly across ranks per node
         current_rank = 0
         for node_idx in range(spec.num_nodes):
+            all_cores = node_cores[node_idx]
+            cores_per_rank = max(1, len(all_cores) // spec.ranks_per_node)
+            remaining = len(all_cores) % spec.ranks_per_node
+
+            core_idx = 0
             for local_rank in range(spec.ranks_per_node):
+                rank_core_count = cores_per_rank + (1 if local_rank < remaining else 0)
+                rank_cores = all_cores[core_idx:core_idx + rank_core_count]
+                core_idx += rank_core_count
+
                 assignment.assign_resources_to_rank(
                     rank=current_rank,
                     node_idx=node_idx,
-                    gpu_ids=[],  # No per-rank GPU assignment
-                    cpu_ids=[]   # No per-rank CPU assignment (MPI handles distribution)
+                    gpu_ids=[],
+                    cpu_ids=rank_cores,
                 )
                 current_rank += 1
         
