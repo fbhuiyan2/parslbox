@@ -41,8 +41,8 @@ class TestJobCreator:
             tag: Optional tag to apply to all created jobs
             lmp_exm_dir: Optional custom LAMMPS examples directory path
         """
-        self.gpu_enabled = True
-        self.cpu_only = False
+        self.create_gpu_jobs = True
+        self.create_cpu_only_jobs = False
         self.config_name = config_name
         self.tag = tag or "test"  # Default tag if none provided
         self.lmp_exm_dir = Path(lmp_exm_dir) if lmp_exm_dir else None
@@ -262,6 +262,9 @@ class TestJobCreator:
         """
         Generate varied resource configurations for jobs.
         
+        Handles CPU and GPU job creation independently based on flags.
+        Both can be enabled simultaneously to create a mix of job types.
+        
         Args:
             job_index: Current job index (0-based)
             total_jobs: Total number of jobs
@@ -269,44 +272,77 @@ class TestJobCreator:
         Returns:
             Tuple of (api_kwargs, description)
         """
-        # If CPU-only mode is enabled, only create CPU jobs
-        if self.cpu_only:
-            config_type = job_index % 3  # 3 CPU configuration types
-            
-            if config_type == 0:
-                # Partial node CPU job
+        # Determine how many job types are enabled
+        num_job_types = sum([self.create_cpu_only_jobs, self.create_gpu_jobs])
+        
+        if num_job_types == 0:
+            # Default to GPU jobs if nothing is enabled
+            return {"ngpus": 1}, "Default single GPU job"
+        
+        # Calculate which type of job to create based on index
+        if self.create_cpu_only_jobs and self.create_gpu_jobs:
+            # Both enabled: randomly choose between CPU and GPU jobs
+            if random.choice([True, False]):
+                return self._generate_cpu_job_config(job_index)
+            else:
+                return self._generate_gpu_job_config(job_index)
+        elif self.create_cpu_only_jobs:
+            # Only CPU jobs
+            return self._generate_cpu_job_config(job_index)
+        else:
+            # Only GPU jobs
+            return self._generate_gpu_job_config(job_index)
+    
+    def _generate_cpu_job_config(self, job_index: int) -> Tuple[dict, str]:
+        """Generate CPU-only job configuration."""
+        config_type = job_index % 3  # 3 CPU configuration types
+        
+        if config_type == 0:
+            # Partial node CPU job
+            if self.cpu_occupancy_options:
                 occupancy = random.choice(self.cpu_occupancy_options)
                 return {"node_occupancy": occupancy}, f"Partial node CPU, {occupancy} occupancy"
-            elif config_type == 1:
-                # Full node CPU job
-                return {"node_occupancy": 1.0}, "Full node CPU"
             else:
-                # Multi-node CPU job
+                # Fallback to full node if no occupancy options
+                return {"node_occupancy": 1.0}, "Full node CPU (fallback)"
+        elif config_type == 1:
+            # Full node CPU job
+            return {"node_occupancy": 1.0}, "Full node CPU"
+        else:
+            # Multi-node CPU job
+            if self.fullnode_options:
                 nnodes = random.choice(self.fullnode_options)
                 return {"nnodes": nnodes, "node_occupancy": 1.0}, f"Multi-node CPU, {nnodes} nodes"
+            else:
+                # Fallback to single full node if no multi-node options
+                return {"node_occupancy": 1.0}, "Full node CPU (fallback from multi-node)"
+    
+    def _generate_gpu_job_config(self, job_index: int) -> Tuple[dict, str]:
+        """Generate GPU job configuration."""
+        config_type = job_index % 3  # 3 GPU configuration types
         
-        # If GPU mode is enabled, only create GPU jobs
-        elif self.gpu_enabled:
-            config_type = job_index % 3  # 3 GPU configuration types
-            
-            if config_type == 0:
-                # Single GPU job
-                ngpus = 1
-                return {"ngpus": ngpus}, f"Single GPU job, {ngpus} GPU"
-            elif config_type == 1:
-                # Multi-GPU single node job
+        if config_type == 0:
+            # Single GPU job
+            ngpus = 1
+            return {"ngpus": ngpus}, f"Single GPU job, {ngpus} GPU"
+        elif config_type == 1:
+            # Multi-GPU single node job
+            if self.gpu_options:
                 ngpus = random.choice(self.gpu_options)
                 if ngpus > self.system_config.GPUS_PER_NODE:
                     ngpus = self.system_config.GPUS_PER_NODE
                 return {"ngpus": ngpus}, f"Multi-GPU job, {ngpus} GPUs"
             else:
-                # Multi-node GPU job (All GPUs per node)
+                # Fallback to single GPU if no multi-GPU options
+                return {"ngpus": 1}, "Single GPU job (fallback from multi-GPU)"
+        else:
+            # Multi-node GPU job (All GPUs per node)
+            if self.fullnode_options:
                 nnodes = random.choice(self.fullnode_options)
                 return {"nnodes": nnodes}, f"Multi-node GPU, {nnodes} nodes"
-        
-        # Fallback: if neither GPU nor CPU-only is set properly, default to single GPU
-        else:
-            return {"ngpus": 1}, "Default single GPU job"
+            else:
+                # Fallback to single GPU if no multi-GPU options
+                return {"ngpus": 1}, "Single GPU job (fallback from multi-GPU)"
     
     def _generate_parent_dependencies(self, current_job_count: int) -> List[int]:
         """
