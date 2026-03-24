@@ -46,6 +46,8 @@ class MPIConfig:
         cpu_bind_method: CPU binding method (none, rankfile, list, depth, depth <N>)
         disable: List of flags/substrings to remove from command
         add: List of flags to append to command (supports templates)
+        env_setup: Optional shell commands to run before app's environment_setup
+                   (e.g., module loads to make mpirun/mpiexec available)
     """
     backend: MPIBackend = MPIBackend.OPENMPI
     mpi_cmd: Optional[str] = None
@@ -57,6 +59,7 @@ class MPIConfig:
     cpu_bind_method: str = "none"
     disable: List[str] = field(default_factory=list)
     add: List[str] = field(default_factory=list)
+    env_setup: Optional[str] = None
     
     def get_mpi_command(self) -> str:
         """Get the MPI command to use."""
@@ -162,6 +165,7 @@ def mpi_config_from_dict(config_dict: Dict[str, Any]) -> MPIConfig:
         cpu_bind_method=config_dict.get("cpu_bind_method", "none"),
         disable=config_dict.get("disable", []),
         add=config_dict.get("add", []),
+        env_setup=config_dict.get("env_setup"),
     )
 
 

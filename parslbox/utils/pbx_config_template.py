@@ -102,6 +102,9 @@ MPI_CONFIG_NOTES = '''# --------------------------------------------------------
 #   cpu_bind_method: none | rankfile | list | depth | depth <N>
 #   disable: [] (list of flags/substrings to remove, applied first)
 #   add: [] (list of flags to append, supports templates)
+#   env_setup: |             (shell commands to make MPI available, e.g., module loads.
+#                             Runs BEFORE app's environment_setup in the bash script.
+#                             Useful for non-MPI apps that need mpirun/mpiexec loaded.)
 #
 # CPU Binding Methods (OpenMPI & MPICH):
 #   The cpu_bind_method option applies to the OpenMPI and MPICH backends.

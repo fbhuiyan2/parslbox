@@ -109,6 +109,10 @@ def create_parsl_future(job, app_instance, app_config, mpi_config, config_name, 
             job_spec=job_spec,
             job_path=str(job_path)
         )
+        # Add MPI env_setup to the commands dict so it reaches the bash engine
+        if mpi_config.env_setup:
+            mpi_commands['PBX_MPI_ENV_SETUP'] = mpi_config.env_setup
+
         logger.info(f"Job {job_id}: Generated MPI command - {mpi_commands.get('PBX_MPI_PREFIX', 'None')}")
 
         # For non-MPI apps, generate a resource launcher to constrain

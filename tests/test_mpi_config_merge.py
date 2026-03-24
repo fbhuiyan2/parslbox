@@ -9,6 +9,7 @@ import pytest
 from unittest.mock import Mock
 from parslbox.resource_manager.mpi_config import (
     merge_mpi_config_dicts,
+    mpi_config_from_dict,
     load_mpi_config,
     MPIBackend,
     MPIConfig,
@@ -100,6 +101,44 @@ class TestMergeMpiConfigDicts:
         result = merge_mpi_config_dicts(base, override)
         assert result["backend"] == "mpich"
         assert result["use_gpu_wrapper"] is True
+
+    def test_env_setup_override_replaces_base(self):
+        """App-level env_setup completely replaces system-level env_setup."""
+        base = {"backend": "openmpi", "env_setup": "module load openmpi\n"}
+        override = {"env_setup": "module load custom-mpi\n"}
+        result = merge_mpi_config_dicts(base, override)
+        assert result["env_setup"] == "module load custom-mpi\n"
+
+    def test_env_setup_preserved_when_no_override(self):
+        """System-level env_setup preserved when app doesn't override it."""
+        base = {"backend": "openmpi", "env_setup": "module load openmpi\n"}
+        override = {"use_gpu_wrapper": True}
+        result = merge_mpi_config_dicts(base, override)
+        assert result["env_setup"] == "module load openmpi\n"
+
+
+class TestMpiConfigFromDict:
+    """Tests for mpi_config_from_dict env_setup handling."""
+
+    def test_env_setup_parsed_from_dict(self):
+        """env_setup string is correctly parsed from config dict."""
+        config = mpi_config_from_dict({"env_setup": "module load openmpi\n"})
+        assert config.env_setup == "module load openmpi\n"
+
+    def test_env_setup_defaults_to_none(self):
+        """env_setup defaults to None when not specified."""
+        config = mpi_config_from_dict({"backend": "openmpi"})
+        assert config.env_setup is None
+
+    def test_env_setup_empty_string(self):
+        """Empty string env_setup is handled gracefully."""
+        config = mpi_config_from_dict({"env_setup": ""})
+        assert config.env_setup == ""
+
+    def test_env_setup_none_value(self):
+        """None env_setup (from empty YAML block) is handled gracefully."""
+        config = mpi_config_from_dict({"env_setup": None})
+        assert config.env_setup is None
 
 
 class TestLoadMpiConfig:
@@ -320,3 +359,73 @@ class TestLoadMpiConfig:
         result = load_mpi_config("sophia", "lammps-kk", system_config, yaml_config)
         assert result.mpi_cmd == "/opt/openmpi-4.1.6/bin/mpirun"
         assert result.get_mpi_command() == "/opt/openmpi-4.1.6/bin/mpirun"
+
+    def test_system_env_setup_inherited(self):
+        """System-level env_setup is inherited when app doesn't override."""
+        system_config = self._make_system_config(mpi_backend="openmpi")
+        yaml_config = {
+            "polaris": {
+                "mpi": {
+                    "env_setup": "module load openmpi\n",
+                }
+            },
+            "python": {
+                "polaris": {}
+            },
+        }
+        result = load_mpi_config("polaris", "python", system_config, yaml_config)
+        assert result.env_setup == "module load openmpi\n"
+
+    def test_app_env_setup_overrides_system(self):
+        """App-level env_setup completely replaces system-level env_setup."""
+        system_config = self._make_system_config(mpi_backend="openmpi")
+        yaml_config = {
+            "polaris": {
+                "mpi": {
+                    "env_setup": "module load openmpi\n",
+                }
+            },
+            "lammps-kk": {
+                "polaris": {
+                    "mpi": {
+                        "env_setup": "module load custom-mpi\nexport MPI_HOME=/opt/custom\n",
+                    }
+                }
+            },
+        }
+        result = load_mpi_config("polaris", "lammps-kk", system_config, yaml_config)
+        assert result.env_setup == "module load custom-mpi\nexport MPI_HOME=/opt/custom\n"
+
+    def test_env_setup_in_three_layer_merge(self):
+        """env_setup participates correctly in 3-layer merge."""
+        system_config = self._make_system_config(mpi_backend="mpich")
+        yaml_config = {
+            "polaris": {
+                "mpi": {
+                    "env_setup": "module load mpich\n",
+                    "use_gpu_wrapper": True,
+                }
+            },
+            "lammps-kk": {
+                "polaris": {
+                    "mpi": {
+                        "use_gpu_wrapper": False,
+                        # No env_setup override -- should inherit system-level
+                    }
+                }
+            },
+        }
+        result = load_mpi_config("polaris", "lammps-kk", system_config, yaml_config)
+        assert result.env_setup == "module load mpich\n"
+        assert result.use_gpu_wrapper is False  # Overridden by app
+
+    def test_no_env_setup_defaults_to_none(self):
+        """env_setup defaults to None when not specified anywhere."""
+        system_config = self._make_system_config(mpi_backend="openmpi")
+        yaml_config = {
+            "polaris": {
+                "mpi": {"backend": "openmpi"}
+            },
+        }
+        result = load_mpi_config("polaris", "lammps-kk", system_config, yaml_config)
+        assert result.env_setup is None

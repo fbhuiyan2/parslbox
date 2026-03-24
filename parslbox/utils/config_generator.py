@@ -158,6 +158,10 @@ class ConfigGenerator:
         backend = mpi_config.get("backend", "openmpi")
         output += f"    backend: {backend}\n"
 
+        # env_setup (empty with guiding comments)
+        output += "    env_setup: |              # Shell commands to make MPI available\n"
+        output += "      # module load openmpi   # (runs before app's environment_setup)\n"
+
         # use_gpu_wrapper
         if mpi_config.get("use_gpu_wrapper"):
             output += "    use_gpu_wrapper: true      # Generate per-rank GPU assignment wrapper\n"

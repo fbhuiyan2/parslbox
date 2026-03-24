@@ -154,30 +154,31 @@ class AppBase(ABC):
         This method handles all common logic and calls get_command_template()
         to get the app-specific command.
         """
-        # Get MPI command prefix
+        # Get MPI command prefix and MPI env setup
         mpi_prefix = mpi_commands.get('PBX_MPI_PREFIX', '')
-        
+        mpi_env_setup = mpi_commands.get('PBX_MPI_ENV_SETUP', '')
+
         # Get executable from app config
         executable = app_config.get('executable_path', '')
-        
-        # Start with base environment setup from app config
-        env_setup = app_config.get('environment_setup', '')
-        
-        # Append environment setup from env_file if provided
+
+        # Environment setup from app config (config.yaml)
+        env_setup_frm_appconfig = app_config.get('environment_setup', '')
+
+        # Environment setup from env_file
+        env_setup_frm_envfile = ''
         if env_file:
             try:
                 with open(env_file, 'r') as f:
-                    env_file_content = f.read()
-                    env_setup += "\n" + env_file_content
+                    env_setup_frm_envfile = f.read()
             except Exception as e:
-                env_setup += f"\necho 'Warning: Could not read env_file {env_file}: {e}'"
-        
+                env_setup_frm_envfile = f"echo 'Warning: Could not read env_file {env_file}: {e}'"
+
         # Handle mpi_opts - use empty string if None
         mpi_opts_str = mpi_opts if mpi_opts is not None else ''
-        
-        # Format environment variables for GPU assignment
-        env_exports = self._format_env_vars(env_vars)
-        
+
+        # GPU/resource env vars from resource manager
+        env_exports_frm_rsrc_mgr = self._format_env_vars(env_vars)
+
         # Get app-specific command template
         command = self.get_command_template(
             mpi_prefix=mpi_prefix,
@@ -197,29 +198,32 @@ class AppBase(ABC):
             if resource_launcher:
                 command = f"{resource_launcher} {command}"
 
-        # Get any additional setup commands
-        additional_setup = self.get_additional_setup(
+        # App-specific setup (e.g., OMP_NUM_THREADS)
+        setup_frm_app = self.get_additional_setup(
             total_gpus=total_gpus,
             app_config=app_config,
             mpi_prefix=mpi_prefix,
             mpi_commands=mpi_commands
         )
-        
-        # Update status to Running
-        # Now this is handled in 'run' cmd
-        
+
         # Construct the full bash script
         return f"""
 cd {job_path}
 
-# Environment Setup (from config.yaml + env_file if provided)
-{env_setup}
+# MPI Environment Setup (from mpi.env_setup in config.yaml)
+{mpi_env_setup}
 
-# Resource-specific environment variables (GPU assignments, etc.)
-{env_exports}
+# App Environment Setup (from app config in config.yaml)
+{env_setup_frm_appconfig}
 
-# Additional app-specific setup
-{additional_setup}
+# App Environment Setup (from env_file)
+{env_setup_frm_envfile}
+
+# Resource environment variables (GPU assignments from resource manager)
+{env_exports_frm_rsrc_mgr}
+
+# App-specific setup (from app's get_additional_setup)
+{setup_frm_app}
 
 # Execution
 echo "INFO: Starting {self.__class__.__name__} for job ID {job_id}..."
