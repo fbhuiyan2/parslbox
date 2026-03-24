@@ -15,10 +15,16 @@ if gpu_id is None:
 try:
     cpu_affinity = os.sched_getaffinity(0)  # CPUs this process is allowed to run on
     ncpu = len(cpu_affinity)
+    print(f"Detected CPU affinity using sched_getaffinity: {cpu_affinity}")
 except AttributeError:
     # Fallback if sched_getaffinity is not available (e.g., macOS)
-    ncpu = os.cpu_count()
+    cpu_affinity = set(range(os.cpu_count()))
+    ncpu = len(cpu_affinity)
+    print(f"Fallback CPU affinity using os.cpu_count: {cpu_affinity}")
+
+cpu_ids = sorted(cpu_affinity)
 
 print(f"\nHello from host {hostname}:")
 print(f"  GPU ID(s): {gpu_id}")
-print(f"  CPU affinity: {ncpu} CPUs available to this process\n")
+print(f"  CPU affinity: {ncpu} CPUs available to this process")
+print(f"  CPU IDs: {cpu_ids}\n")
