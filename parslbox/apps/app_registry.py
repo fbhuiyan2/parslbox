@@ -9,12 +9,14 @@ from parslbox.apps.appbase import AppBase
 from parslbox.apps.lammps_kk import LammpsKokkosApp
 from parslbox.apps.vasp import VaspApp
 from parslbox.apps.python import PythonApp
+from parslbox.apps.julia import JuliaApp
 
 # Built-in application factory (always available, no loading needed)
 APP_FACTORY = {
     "lammps-kk": LammpsKokkosApp,
     "vasp": VaspApp,
     "python": PythonApp,
+    "julia": JuliaApp,
 }
 
 # Custom applications (loaded lazily from config)
