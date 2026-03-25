@@ -227,6 +227,10 @@ class ConfigGenerator:
                 if app_name == "python":
                     # Python app doesn't need executable_path
                     output += "    # Python app uses the Python interpreter from environment\n"
+                elif app_name == "julia":
+                    # Julia app doesn't need executable_path
+                    output += "    # Julia app uses the Julia interpreter from environment\n"
+                    output += "    # Set JULIA_PROJECT in environment_setup or env_file to activate a project\n"
                 else:
                     output += f"    executable_path: \"/path/to/your/{app_name}/executable/on/{sys_name}\"\n"
 

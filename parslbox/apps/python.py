@@ -22,22 +22,26 @@ class PythonApp(AppBase):
     def get_command_template(self, **kwargs) -> str:
         """
         Construct Python execution command.
-        
-        Python command format: python {in_file}
-        
+
+        Python command format: {executable} {in_file}
+        Users can configure a custom executable path (e.g., "python3 -u")
+        via executable_path in config.yaml, or rely on the environment.
+
         Args:
             **kwargs: Contains in_file and other parameters
-        
+
         Returns:
             str: Python execution command
         """
         in_file = kwargs['in_file']
-        
+        executable = kwargs.get('executable', 'python')
+
         # Log the command being constructed
         logger = logging.getLogger(__name__)
-        logger.info(f"Python command: python {in_file}")
-        
-        return f"python {in_file}"
+        cmd = f"{executable} {in_file}"
+        logger.info(f"Python command: {cmd}")
+
+        return cmd
     
     def get_additional_setup(self, **kwargs) -> str:
         """
