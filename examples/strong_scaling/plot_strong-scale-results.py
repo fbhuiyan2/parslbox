@@ -65,8 +65,8 @@ class LammpsStrongScaleAnalyzer:
             'font.size': 20,
             'axes.titlesize': 20,
             'axes.labelsize': 20,
-            'xtick.labelsize': 16,
-            'ytick.labelsize': 16,
+            'xtick.labelsize': 18,
+            'ytick.labelsize': 18,
             'legend.fontsize': 18,
             'lines.linewidth': 2,
             'lines.markersize': 8,
@@ -91,12 +91,12 @@ class LammpsStrongScaleAnalyzer:
             minor_tick_interval = 2  # 4 minor ticks between majors (10/5 = 2)
         elif max_count <= 1000:
             xlim_max = math.ceil(max_count / 100) * 100
-            major_tick_interval = 50
-            minor_tick_interval = 10  # 4 minor ticks between majors (50/5 = 10)
-        else:
-            xlim_max = math.ceil(max_count / 500) * 500
             major_tick_interval = 100
             minor_tick_interval = 20  # 4 minor ticks between majors (100/5 = 20)
+        else:
+            xlim_max = math.ceil(max_count / 500) * 500
+            major_tick_interval = 500
+            minor_tick_interval = 100  # 4 minor ticks between majors (500/5 = 100)
         
         return xlim_max, major_tick_interval, minor_tick_interval
     
@@ -117,9 +117,12 @@ class LammpsStrongScaleAnalyzer:
             if max_value < 0.5:
                 major_tick_interval = 0.1
                 minor_tick_interval = 0.05  # 1 minor tick between majors (0.1/2 = 0.05)
+            elif max_value < 10:
+                major_tick_interval = 1
+                minor_tick_interval = 0.5  # 1 minor tick between majors (1/2 = 0.5)
             else:
-                major_tick_interval = 0.25
-                minor_tick_interval = 0.125  # 1 minor tick between majors (0.25/2 = 0.125)
+                major_tick_interval = 5
+                minor_tick_interval = 2.5  # 1 minor tick between majors (5/2 = 2.5)
         else:
             # Round to nearest 10
             ylim_max = math.ceil(max_value / 10) * 10
@@ -415,19 +418,17 @@ class LammpsStrongScaleAnalyzer:
         unit_label = "GPUs" if self.mode == 'gpu' else "Cores"
         
         # Timesteps/s plot
-        ax1.plot(scale_counts, timesteps_per_s, 'o-', color='blue', label='Timesteps/s')
+        ax1.plot(scale_counts, timesteps_per_s, 'o-', color='blue')
         ax1.set_xlabel(f'Number of {unit_label}')
         ax1.set_ylabel('Timesteps per Second')
-        ax1.legend()
-        
+
         # Set up axis formatting for timesteps/s plot
         self._setup_axis_ticks(ax1, x_lim_max, y1_lim_max, x_major, x_minor, y1_major, y1_minor)
-        
+
         # ns/day plot
-        ax2.plot(scale_counts, ns_per_day, 'o-', color='green', label='ns/day')
+        ax2.plot(scale_counts, ns_per_day, 'o-', color='green')
         ax2.set_xlabel(f'Number of {unit_label}')
         ax2.set_ylabel('Nanoseconds per Day')
-        ax2.legend()
         
         # Set up axis formatting for ns/day plot
         self._setup_axis_ticks(ax2, x_lim_max, y2_lim_max, x_major, x_minor, y2_major, y2_minor)

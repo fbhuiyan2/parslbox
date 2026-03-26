@@ -62,8 +62,8 @@ class LammpsWeakScaleAnalyzer:
             'font.size': 20,
             'axes.titlesize': 20,
             'axes.labelsize': 20,
-            'xtick.labelsize': 16,
-            'ytick.labelsize': 16,
+            'xtick.labelsize': 18,
+            'ytick.labelsize': 18,
             'legend.fontsize': 18,
             'lines.linewidth': 2,
             'lines.markersize': 8,
@@ -77,18 +77,53 @@ class LammpsWeakScaleAnalyzer:
         if max_count <= 100:
             xlim_max = 100
             major_tick_interval = 10
-            minor_tick_interval = 2
+            minor_tick_interval = 2  # 4 minor ticks between majors (10/5 = 2)
         elif max_count <= 1000:
             xlim_max = math.ceil(max_count / 100) * 100
-            major_tick_interval = 50
-            minor_tick_interval = 10
+            major_tick_interval = 100
+            minor_tick_interval = 20  # 4 minor ticks between majors (100/5 = 20)
         else:
             xlim_max = math.ceil(max_count / 500) * 500
-            major_tick_interval = 100
-            minor_tick_interval = 20
+            major_tick_interval = 500
+            minor_tick_interval = 100  # 4 minor ticks between majors (500/5 = 100)
         
         return xlim_max, major_tick_interval, minor_tick_interval
     
+    def _calculate_y_axis_params_performance(self, max_value: float, is_ns_per_day: bool = False) -> Tuple[float, float, float]:
+        """
+        Calculate y-axis limits and tick intervals for performance plots.
+
+        Args:
+            max_value: Maximum value in the data
+            is_ns_per_day: True for ns/day plot, False for timesteps/s plot
+
+        Returns:
+            Tuple of (ylim_max, major_tick_interval, minor_tick_interval)
+        """
+        if is_ns_per_day:
+            # Round to nearest 0.5
+            ylim_max = math.ceil(max_value * 2) / 2
+            if max_value < 0.5:
+                major_tick_interval = 0.1
+                minor_tick_interval = 0.05  # 1 minor tick between majors (0.1/2 = 0.05)
+            elif max_value < 10:
+                major_tick_interval = 1
+                minor_tick_interval = 0.5  # 1 minor tick between majors (1/2 = 0.5)
+            else:
+                major_tick_interval = 5
+                minor_tick_interval = 2.5  # 1 minor tick between majors (5/2 = 2.5)
+        else:
+            # Round to nearest 10
+            ylim_max = math.ceil(max_value / 10) * 10
+            if max_value < 50:
+                major_tick_interval = 5
+                minor_tick_interval = 1  # 4 minor ticks between majors (5/5 = 1)
+            else:
+                major_tick_interval = 10
+                minor_tick_interval = 2  # 4 minor ticks between majors (10/5 = 2)
+
+        return ylim_max, major_tick_interval, minor_tick_interval
+
     def _setup_axis_ticks(self, ax, xlim_max: float, ylim_max: float,
                          x_major: float, x_minor: float,
                          y_major: float, y_minor: float):
@@ -286,16 +321,8 @@ class LammpsWeakScaleAnalyzer:
         max_ns_per_day = max(ns_per_day)
         
         x_lim_max, x_major, x_minor = self._calculate_x_axis_params(max_count)
-        
-        # Y-axis for timesteps/s
-        y1_lim_max = math.ceil(max_timesteps / 10) * 10
-        y1_major = 10 if max_timesteps < 50 else 10
-        y1_minor = 2
-        
-        # Y-axis for ns/day
-        y2_lim_max = math.ceil(max_ns_per_day * 2) / 2
-        y2_major = 0.25 if max_ns_per_day < 0.5 else 0.25
-        y2_minor = 0.125
+        y1_lim_max, y1_major, y1_minor = self._calculate_y_axis_params_performance(max_timesteps, is_ns_per_day=False)
+        y2_lim_max, y2_major, y2_minor = self._calculate_y_axis_params_performance(max_ns_per_day, is_ns_per_day=True)
         
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 12))
         
