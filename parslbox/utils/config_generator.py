@@ -235,8 +235,11 @@ class ConfigGenerator:
                     output += f"    executable_path: \"/path/to/your/{app_name}/executable/on/{sys_name}\"\n"
 
                 output += "    environment_setup: |\n"
-                output += "      # Add app-specific environment setup here\n"
-                output += "      # module purge\n"
+                output += "      # Start with purge & restore so worker subprocesses\n"
+                output += "      # get a clean module environment (avoids subtle errors).\n"
+                output += "      module purge\n"
+                output += "      module restore\n"
+                output += "      # Add app-specific environment setup below\n"
                 output += "      # module load ...\n"
                 output += "    # Optional: Override system MPI settings for this app\n"
                 output += "    # mpi:\n"
