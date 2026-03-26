@@ -8,12 +8,40 @@ atomic structure to maintain constant atoms per compute unit, and adds jobs
 to pbx with proper dependencies for weak scaling analysis.
 
 Usage:
-    python lammps_weak_scale_orchestrator.py <config_name> --gpus 1 2 4 --fstruct small.lmp --ff forcefield.dat [options]
-    python lammps_weak_scale_orchestrator.py <config_name> --cores 1 8 64 --fstruct small.lmp --ff forcefield.dat [options]
+    python lammps_weak_scale_orchestrator.py <config_name> (--gpus | --cores) N [N ...] --fstruct FILE --ff FILE [options]
+
+Arguments:
+    config_name              System configuration name (e.g., polaris, crux, sophia)
+
+Required (mutually exclusive):
+    --gpus N [N ...]         GPU counts for scaling test (e.g., --gpus 1 2 4)
+    --cores N [N ...]        Core counts for scaling test (e.g., --cores 1 8 64)
+
+Required:
+    --fstruct FILE           Small structure/data file (<100 atoms, <100 A^3)
+    --ff FILE                Force field file name (e.g., pair_coeff.dat, forcefield.dat)
+
+Optional:
+    --in FILE                LAMMPS input file name (default: in.lammps)
+    --natoms-per-unit N      Target atoms per GPU/core (default: 250)
+    --rankspercore N         Ranks per core for CPU scaling (default: 1)
+    --tag TAG                Tag to apply to all created jobs (default: weak_scale)
 
 Examples:
-    python lammps_weak_scale_orchestrator.py polaris --gpus 1 2 4 --fstruct data.lmp --ff pair_coeff.dat
-    python lammps_weak_scale_orchestrator.py sophia --cores 1 8 64 128 --fstruct small.lmp --ff forcefield.dat --natoms-per-unit 500
+    # GPU weak scaling on Polaris
+    python lammps_weak_scale_orchestrator.py polaris --gpus 1 2 4 --fstruct small.lmp --ff pair_coeff.dat
+
+    # GPU scaling with custom atoms per GPU
+    python lammps_weak_scale_orchestrator.py polaris --gpus 1 2 4 8 --fstruct data.lmp --ff forcefield.dat --natoms-per-unit 500
+
+    # CPU weak scaling on Sophia
+    python lammps_weak_scale_orchestrator.py sophia --cores 1 8 64 128 --fstruct small.lmp --ff pair_coeff.dat
+
+    # CPU scaling with oversubscription
+    python lammps_weak_scale_orchestrator.py sophia --cores 1 8 64 --fstruct data.lmp --ff forcefield.dat --rankspercore 2
+
+    # Custom job tag
+    python lammps_weak_scale_orchestrator.py polaris --gpus 1 2 4 --fstruct small.lmp --ff pair_coeff.dat --tag my_weak_test
 """
 
 import argparse
@@ -509,16 +537,6 @@ def main():
     parser = argparse.ArgumentParser(
         description="Create LAMMPS weak scaling test jobs for ParslBox",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # GPU scaling
-  %(prog)s polaris --gpus 1 2 4 --fstruct small.lmp --ff pair_coeff.dat
-  %(prog)s polaris --gpus 1 2 4 8 --fstruct data.lmp --ff forcefield.dat --natoms-per-unit 500
-  
-  # CPU scaling
-  %(prog)s sophia --cores 1 8 64 128 --fstruct small.lmp --ff pair_coeff.dat
-  %(prog)s sophia --cores 1 8 64 --fstruct data.lmp --ff forcefield.dat --rankspercore 2
-        """
     )
     
     parser.add_argument(

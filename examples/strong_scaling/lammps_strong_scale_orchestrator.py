@@ -3,15 +3,44 @@
 LAMMPS Strong Scaling Orchestrator for ParslBox
 
 This script automates the creation of LAMMPS strong scaling test jobs.
-It creates directory structures for different GPU counts, copies necessary files,
-and adds jobs to pbx with proper dependencies for strong scaling analysis.
+It creates directory structures for different GPU/core counts, copies
+necessary files, and adds jobs to pbx with proper dependencies for
+strong scaling analysis.
 
 Usage:
-    python lammps_strong_scale_orchestrator.py <config_name> --gpus 1 2 4 --fstruct model.lmp --ff forcefield.dat [--in in.lammps]
+    python lammps_strong_scale_orchestrator.py <config_name> (--gpus | --cores) N [N ...] --fstruct FILE --ff FILE [options]
+
+Arguments:
+    config_name              System configuration name (e.g., polaris, crux, sophia)
+
+Required (mutually exclusive):
+    --gpus N [N ...]         GPU counts for scaling test (e.g., --gpus 1 2 4)
+    --cores N [N ...]        Core counts for scaling test (e.g., --cores 1 8 64)
+
+Required:
+    --fstruct FILE           Structure/data file name (e.g., data.lmp, model.lmp)
+    --ff FILE                Force field file name (e.g., pair_coeff.dat, forcefield.dat)
+
+Optional:
+    --in FILE                LAMMPS input file name (default: in.lammps)
+    --rankspercore N         Ranks per core for CPU scaling (default: 1)
+    --tag TAG                Tag to apply to all created jobs (default: strong_scale)
 
 Examples:
+    # GPU scaling on Polaris
     python lammps_strong_scale_orchestrator.py polaris --gpus 1 2 4 --fstruct data.lmp --ff pair_coeff.dat
-    python lammps_strong_scale_orchestrator.py crux --gpus 1 2 --fstruct model.lmp --ff forcefield.dat --in in.friction
+
+    # GPU scaling with custom input file
+    python lammps_strong_scale_orchestrator.py polaris --gpus 1 2 4 8 --fstruct data.lmp --ff pair_coeff.dat --in in.lammps
+
+    # CPU scaling on Sophia
+    python lammps_strong_scale_orchestrator.py sophia --cores 1 8 64 128 --fstruct data.lmp --ff pair_coeff.dat
+
+    # CPU scaling with oversubscription
+    python lammps_strong_scale_orchestrator.py sophia --cores 1 8 64 --fstruct data.lmp --ff forcefield.dat --rankspercore 2
+
+    # Custom job tag
+    python lammps_strong_scale_orchestrator.py crux --gpus 1 2 --fstruct model.lmp --ff forcefield.dat --tag my_test
 """
 
 import argparse
@@ -342,16 +371,6 @@ def main():
     parser = argparse.ArgumentParser(
         description="Create LAMMPS strong scaling test jobs for ParslBox",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # GPU scaling
-  %(prog)s polaris --gpus 1 2 4 --fstruct data.lmp --ff pair_coeff.dat
-  %(prog)s polaris --gpus 1 2 4 8 --fstruct data.lmp --ff pair_coeff.dat --in in.lammps
-  
-  # CPU scaling
-  %(prog)s sophia --cores 1 8 64 128 --fstruct data.lmp --ff pair_coeff.dat
-  %(prog)s sophia --cores 1 8 64 --fstruct data.lmp --ff forcefield.dat --rankspercore 2
-        """
     )
     
     parser.add_argument(
