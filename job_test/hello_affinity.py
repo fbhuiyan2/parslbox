@@ -1,6 +1,7 @@
 import os
 import socket
 import time
+from parslbox.apps.utils import report_status
 
 time.sleep(5)  # Simulate some work being done
 
@@ -28,3 +29,5 @@ print(f"\nHello from host {hostname}:")
 print(f"  GPU ID(s): {gpu_id}")
 print(f"  CPU affinity: {ncpu} CPUs available to this process")
 print(f"  CPU IDs: {cpu_ids}\n")
+
+report_status("done")
