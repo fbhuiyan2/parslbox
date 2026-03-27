@@ -37,7 +37,7 @@ class JuliaApp(AppBase):
             str: Julia execution command
         """
         in_file = kwargs['in_file']
-        executable = kwargs.get('executable', 'julia')
+        executable = kwargs.get('executable') or 'julia'
 
         logger = logging.getLogger(__name__)
         cmd = f"{executable} {in_file}"

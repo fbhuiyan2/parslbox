@@ -34,7 +34,7 @@ class PythonApp(AppBase):
             str: Python execution command
         """
         in_file = kwargs['in_file']
-        executable = kwargs.get('executable', 'python')
+        executable = kwargs.get('executable') or 'python'
 
         # Log the command being constructed
         logger = logging.getLogger(__name__)
