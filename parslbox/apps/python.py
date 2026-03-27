@@ -67,46 +67,57 @@ class PythonApp(AppBase):
     def check_success(self, job_id: int, job_path: Path, db_path: Path, error_message: str = None) -> str:
         """
         Check if Python job completed successfully.
-        
-        Python-specific: Fails immediately if there was an execution error.
-        For Python jobs, execution errors typically indicate script failures.
-        
+
+        Reads the PBX_JOB_STATUS_REPORT file written by the user script
+        via report_status(). If the file is not found, the job is marked
+        as Failed. The status file is deleted after reading.
+
+        User scripts should call report_status() to report their outcome:
+            from parslbox.apps.utils import report_status
+            report_status("done")    # or report_status("failed")
+
         Args:
             job_id (int): The job ID
             job_path (Path): Path to the job directory
             db_path (Path): Path to the database file
             error_message (str, optional): Error message from fut.result()
-            
+
         Returns:
             str: Final job status ('Done' or 'Failed')
         """
         logger = logging.getLogger(__name__)
-        
+
         if error_message:
             logger.error(f"Job {job_id}: Python script execution failed: {error_message}")
             return "Failed"
-        else:
-            logger.info(f"Job {job_id}: Python script completed successfully.")
-            return "Done"
+
+        # Read status report file written by user script via report_status()
+        from parslbox.apps.utils import PBX_STATUS_FILE
+        status_file = job_path / PBX_STATUS_FILE
+        if not status_file.is_file():
+            logger.warning(f"Job {job_id}: {PBX_STATUS_FILE} not found. Marking as Failed.")
+            return "Failed"
+        try:
+            status = status_file.read_text().strip()
+            logger.info(f"Job {job_id}: Status report: {status}")
+            return status
+        finally:
+            status_file.unlink(missing_ok=True)
 
     def postprocess(self, job_id: int, job_path: Path, db_path: Path) -> str:
         """
         Post-processing for a Python job.
-        
-        Simple implementation that returns 'Done'.
-        Users can implement their own success checking within their scripts.
-        
+
         Args:
             job_id (int): The job ID
             job_path (Path): Path to the job directory
             db_path (Path): Path to the database file
-            
+
         Returns:
             str: Status after post-processing ('Done')
         """
-        logger = logging.getLogger(__name__)
-        logger.info(f"Job {job_id}: Post-processing started.")
-        
-        # No complex post-processing for Python jobs
-        logger.info(f"Job {job_id}: Post-processing completed.")
-        return "Done"
+        # logger = logging.getLogger(__name__)
+        # logger.info(f"Job {job_id}: Post-processing started.")
+        # logger.info(f"Job {job_id}: Post-processing completed.")
+        # return "Done"
+        pass

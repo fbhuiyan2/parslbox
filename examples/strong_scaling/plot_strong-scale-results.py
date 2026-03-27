@@ -29,6 +29,7 @@ import matplotlib.style as mplstyle
 import matplotlib.ticker as ticker
 import numpy as np
 import pandas as pd
+from parslbox.apps.utils import report_status
 
 
 class LammpsStrongScaleAnalyzer:
@@ -253,16 +254,22 @@ class LammpsStrongScaleAnalyzer:
                 lines = f.readlines()
             
             # Search from bottom of file for performance line
-            performance_pattern = r'Performance:\s+([\d.]+)\s+ns/day,\s+([\d.]+)\s+hours/ns,\s+([\d.]+)\s+timesteps/s,\s+([\d.]+)\s+katom-step/s'
-            
+            # LAMMPS uses different unit prefixes: katom-step/s, Matom-step/s, Gatom-step/s, etc.
+            performance_pattern = r'Performance:\s+([\d.]+)\s+ns/day,\s+([\d.]+)\s+hours/ns,\s+([\d.]+)\s+timesteps/s,\s+([\d.]+)\s+(\w?)atom-step/s'
+
+            # Multipliers to normalize to katom-step/s
+            unit_to_katom = {'k': 1.0, 'M': 1e3, 'G': 1e6, '': 1e-3}
+
             for line in reversed(lines):
                 match = re.search(performance_pattern, line)
                 if match:
+                    prefix = match.group(5)
+                    multiplier = unit_to_katom.get(prefix, 1.0)
                     return {
                         'ns_per_day': float(match.group(1)),
                         'hours_per_ns': float(match.group(2)),
                         'timesteps_per_s': float(match.group(3)),
-                        'katom_step_per_s': float(match.group(4))
+                        'katom_step_per_s': float(match.group(4)) * multiplier
                     }
             
             print(f"⚠️  No performance data found in: {log_file}")
@@ -703,9 +710,16 @@ Examples:
         print(f"  📈 Efficiency plot: {efficiency_plot.name}")
         print(f"  📄 Data CSV: {data_csv.name}")
         print(f"  📝 Summary report: {summary_report.name}")
-        
+
+        # Report status to PBX based on whether expected .png files exist
+        if performance_plot.is_file() and efficiency_plot.is_file():
+            report_status("done")
+        else:
+            report_status("failed")
+
     except Exception as e:
         print(f"❌ Error: {e}")
+        report_status("failed")
         sys.exit(1)
 
 

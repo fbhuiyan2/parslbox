@@ -67,6 +67,15 @@ class JuliaApp(AppBase):
         """
         Check if Julia job completed successfully.
 
+        Reads the PBX_JOB_STATUS_REPORT file written by the user script.
+        If the file is not found, the job is marked as Failed.
+        The status file is deleted after reading.
+
+        Julia scripts should write the status file directly:
+            open("PBX_JOB_STATUS_REPORT", "w") do f
+                write(f, "Done")
+            end
+
         Args:
             job_id: The job ID
             job_path: Path to the job directory
@@ -81,9 +90,19 @@ class JuliaApp(AppBase):
         if error_message:
             logger.error(f"Job {job_id}: Julia script execution failed: {error_message}")
             return "Failed"
-        else:
-            logger.info(f"Job {job_id}: Julia script completed successfully.")
-            return "Done"
+
+        # Read status report file written by user script
+        from parslbox.apps.utils import PBX_STATUS_FILE
+        status_file = job_path / PBX_STATUS_FILE
+        if not status_file.is_file():
+            logger.warning(f"Job {job_id}: {PBX_STATUS_FILE} not found. Marking as Failed.")
+            return "Failed"
+        try:
+            status = status_file.read_text().strip()
+            logger.info(f"Job {job_id}: Status report: {status}")
+            return status
+        finally:
+            status_file.unlink(missing_ok=True)
 
     def postprocess(self, job_id: int, job_path: Path, db_path: Path) -> str:
         """
@@ -97,7 +116,8 @@ class JuliaApp(AppBase):
         Returns:
             str: Status after post-processing ('Done')
         """
-        logger = logging.getLogger(__name__)
-        logger.info(f"Job {job_id}: Post-processing started.")
-        logger.info(f"Job {job_id}: Post-processing completed.")
-        return "Done"
+        # logger = logging.getLogger(__name__)
+        # logger.info(f"Job {job_id}: Post-processing started.")
+        # logger.info(f"Job {job_id}: Post-processing completed.")
+        # return "Done"
+        pass

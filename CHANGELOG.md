@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.8.7] - 2026-03-27
+
+### Added
+
+#### Julia App
+- **New `JuliaApp`** (`parslbox/apps/julia.py`) — Executes user-provided Julia scripts via PBX. Set to `USES_MPI = False` with resource launcher constraining, matching the Python app pattern. Julia project environments can be activated via `env_file` or `--project` flag in `executable_path`
+
+#### Script-Driven Status Reporting for Python and Julia Apps
+- **New `report_status()` utility** (`parslbox/apps/utils.py`) — Allows user scripts to report job success or failure from within the script itself. Creates a `PBX_JOB_STATUS_REPORT` file in the job directory containing the status
+  - Usage: `from parslbox.apps.utils import report_status; report_status("done")`
+  - Validates against supported statuses: `done`, `failed` (case-insensitive)
+- **`PythonApp.check_success` reads status report file** — After execution, reads `PBX_JOB_STATUS_REPORT` from the job directory, returns the reported status, and deletes the file. If the file is not found, the job is marked as Failed
+- **`JuliaApp.check_success`** — Same status file checking logic. Julia scripts write the file directly: `open("PBX_JOB_STATUS_REPORT", "w") do f; write(f, "Done"); end`
+- **Scaling example scripts updated** — `plot_strong-scale-results.py` and `plot_weak-scale-results.py` now call `report_status("done")` after verifying `.png` output files exist, or `report_status("failed")` on error
+
+### Fixed
+
+#### Missing Python/Julia Executable in Command
+- **Fixed empty executable bug** in `PythonApp` and `JuliaApp` — When `executable_path` is not set in config, the base class passes `executable=''` (empty string) to `get_command_template()`. The previous `kwargs.get('executable', 'python')` default only applied when the key was absent, not when it was empty. Changed to `kwargs.get('executable') or 'python'` (and `'julia'`) so the default correctly activates for empty strings
+
+### New Files
+- `parslbox/apps/julia.py`
+- `parslbox/apps/utils.py`
+
+### Modified Files
+- `parslbox/apps/python.py` — Fixed executable default, added status file reading in `check_success`, commented out `postprocess` body
+- `examples/strong_scaling/plot_strong-scale-results.py` — Added `report_status` import and calls
+- `examples/weak_scaling/plot_weak-scale-results.py` — Added `report_status` import and calls
+
+---
+
 ## [0.8.5] - 2026-03-17
 
 ### Added

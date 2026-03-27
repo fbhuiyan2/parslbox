@@ -28,6 +28,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
 import pandas as pd
+from parslbox.apps.utils import report_status
 
 
 class LammpsWeakScaleAnalyzer:
@@ -192,16 +193,22 @@ class LammpsWeakScaleAnalyzer:
             with open(log_file, 'r') as f:
                 lines = f.readlines()
             
-            performance_pattern = r'Performance:\s+([\d.]+)\s+ns/day,\s+([\d.]+)\s+hours/ns,\s+([\d.]+)\s+timesteps/s,\s+([\d.]+)\s+katom-step/s'
-            
+            # LAMMPS uses different unit prefixes: katom-step/s, Matom-step/s, Gatom-step/s, etc.
+            performance_pattern = r'Performance:\s+([\d.]+)\s+ns/day,\s+([\d.]+)\s+hours/ns,\s+([\d.]+)\s+timesteps/s,\s+([\d.]+)\s+(\w?)atom-step/s'
+
+            # Multipliers to normalize to katom-step/s
+            unit_to_katom = {'k': 1.0, 'M': 1e3, 'G': 1e6, '': 1e-3}
+
             for line in reversed(lines):
                 match = re.search(performance_pattern, line)
                 if match:
+                    prefix = match.group(5)
+                    multiplier = unit_to_katom.get(prefix, 1.0)
                     return {
                         'ns_per_day': float(match.group(1)),
                         'hours_per_ns': float(match.group(2)),
                         'timesteps_per_s': float(match.group(3)),
-                        'katom_step_per_s': float(match.group(4))
+                        'katom_step_per_s': float(match.group(4)) * multiplier
                     }
             
             print(f"⚠️  No performance data found in: {log_file}")
@@ -605,9 +612,17 @@ Examples:
         for result in results:
             if result:
                 print(f"  📊 {result.name}")
-        
+
+        # Report status to PBX based on whether expected .png files exist
+        png_files = [r for r in results if r and r.suffix == '.png' and r.is_file()]
+        if png_files:
+            report_status("done")
+        else:
+            report_status("failed")
+
     except Exception as e:
         print(f"❌ Error: {e}")
+        report_status("failed")
         sys.exit(1)
 
 
