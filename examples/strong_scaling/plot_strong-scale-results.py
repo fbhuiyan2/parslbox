@@ -118,10 +118,16 @@ class LammpsStrongScaleAnalyzer:
             if max_value < 0.5:
                 major_tick_interval = 0.1
                 minor_tick_interval = 0.05  # 1 minor tick between majors (0.1/2 = 0.05)
-            elif max_value < 10:
+            elif max_value < 5:
+                ylim_max = math.ceil(max_value)  # Round to ceiling integer 
                 major_tick_interval = 1
                 minor_tick_interval = 0.5  # 1 minor tick between majors (1/2 = 0.5)
+            elif max_value < 10:
+                ylim_max = math.ceil(max_value / 10) * 10  # Round to nearest 10
+                major_tick_interval = 2
+                minor_tick_interval = 0.5  # 1 minor tick between majors (1/2 = 0.5)
             else:
+                ylim_max = math.ceil(max_value / 10) * 10  # Round to nearest 10
                 major_tick_interval = 5
                 minor_tick_interval = 2.5  # 1 minor tick between majors (5/2 = 2.5)
         else:
