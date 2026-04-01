@@ -300,8 +300,8 @@ def update_jobs(
 @app.command()
 def update(
     job_ids: Annotated[
-        List[int],
-        typer.Argument(help="ID(s) of the job(s) to update.")
+        List[str],
+        typer.Argument(help="ID(s) of the job(s) to update. Supports ranges (e.g., 1-5 8 14-20).")
     ],
     status: Annotated[
         Optional[str],
@@ -351,6 +351,13 @@ def update(
     """
     Updates one or more fields for a given set of jobs.
     """
+    from parslbox.commands.helpers.job_id_parser import parse_job_ids
+    try:
+        job_ids = parse_job_ids(job_ids)
+    except ValueError as e:
+        typer.secho(f"❌ Error: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
     try:
         # Handle CLI-specific interactive prompts and validations
         

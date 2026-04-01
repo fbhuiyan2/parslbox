@@ -39,7 +39,7 @@ def format_job_id_with_parents(job_id: int, parents: List[int], show_all: bool =
 
 @app.command()
 def info(
-    job_ids: List[int] = typer.Argument(..., help="ID(s) of the job(s) to get information about."),
+    job_ids: List[str] = typer.Argument(..., help="ID(s) of the job(s) to get information about. Supports ranges (e.g., 1-5 8 14-20)."),
     path: bool = typer.Option(False, "--path", "-p", help="Show only the path field."),
     ngpus: bool = typer.Option(False, "--ngpus", "-n", help="Show only the number of GPUs field."),
     app_name: bool = typer.Option(False, "--app", "-a", help="Show only the application field."),
@@ -55,6 +55,13 @@ def info(
     """
     Shows detailed information about specific jobs.
     """
+    from parslbox.commands.helpers.job_id_parser import parse_job_ids
+    try:
+        job_ids = parse_job_ids(job_ids)
+    except ValueError as e:
+        typer.secho(f"❌ Error: {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
     # Get jobs from database
     jobs = database.get_jobs_by_ids(path_utils.DB_FILE, job_ids)
     

@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Julia App
 - **New `JuliaApp`** (`parslbox/apps/julia.py`) — Executes user-provided Julia scripts via PBX. Set to `USES_MPI = False` with resource launcher constraining, matching the Python app pattern. Julia project environments can be activated via `env_file` or `--project` flag in `executable_path`
 
+#### Range Syntax for Job IDs
+- **`pbx update`, `pbx rm`, `pbx info` now support ranges** — e.g., `pbx update 1-5 8 14-20 --status Restart`. New `parse_job_ids()` utility in `parslbox/commands/helpers/job_id_parser.py` handles expansion, deduplication, and validation
+
 #### Script-Driven Status Reporting for Python and Julia Apps
 - **New `report_status()` utility** (`parslbox/apps/utils.py`) — Allows user scripts to report job success or failure from within the script itself. Creates a `PBX_JOB_STATUS_REPORT` file in the job directory containing the status
   - Usage: `from parslbox.apps.utils import report_status; report_status("done")`
@@ -30,9 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### New Files
 - `parslbox/apps/julia.py`
 - `parslbox/apps/utils.py`
+- `parslbox/commands/helpers/job_id_parser.py`
 
 ### Modified Files
 - `parslbox/apps/python.py` — Fixed executable default, added status file reading in `check_success`, commented out `postprocess` body
+- `parslbox/commands/update.py` — Job IDs argument accepts ranges
+- `parslbox/commands/rm.py` — Job IDs argument accepts ranges
+- `parslbox/commands/info.py` — Job IDs argument accepts ranges
 - `examples/strong_scaling/plot_strong-scale-results.py` — Added `report_status` import and calls
 - `examples/weak_scaling/plot_weak-scale-results.py` — Added `report_status` import and calls
 

@@ -8,7 +8,7 @@ app = typer.Typer()
 
 @app.command()
 def rm(
-    job_ids: List[str] = typer.Argument(..., help="ID(s) of the job(s) to remove, or 'all'.")
+    job_ids: List[str] = typer.Argument(..., help="ID(s) of the job(s) to remove, or 'all'. Supports ranges (e.g., 1-5 8 14-20).")
 ):
     """
     Removes one or more jobs from the database.
@@ -21,13 +21,14 @@ def rm(
             typer.echo("❌ Operation cancelled.")
             raise typer.Exit()
     else:
+        from parslbox.commands.helpers.job_id_parser import parse_job_ids
         try:
-            int_ids = [int(job_id) for job_id in job_ids]
+            int_ids = parse_job_ids(job_ids)
             count = database.remove_jobs_by_id(path_utils.DB_FILE, int_ids)
             if count > 0:
                 typer.secho(f"🗑️ Removed {count} job(s).", fg=typer.colors.YELLOW)
             else:
                 typer.secho("⚠️ No jobs found with the specified IDs.", fg=typer.colors.RED)
-        except ValueError:
-            typer.secho("❌ Error: Job IDs must be integers.", fg=typer.colors.RED)
+        except ValueError as e:
+            typer.secho(f"❌ Error: {e}", fg=typer.colors.RED)
             raise typer.Exit(code=1)
