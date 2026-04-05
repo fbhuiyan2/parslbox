@@ -11,13 +11,13 @@ class AddJobSchema(BaseModel):
         description="One or more paths to job directories, or 'all' to add all subdirectories in the current location.",
     )
     app: str = Field(
-        description="The application type. Options are 'lammps-kk', 'vasp' and 'python'.",
+        description="The application type. Built-in options are 'lammps-kk', 'vasp', 'python' and 'julia'. Custom apps may also be available.",
     )
     config: str = Field(
-        description="The name of the configuration to use. Options are 'crux', 'polaris', 'sophia', 'aurora_gpu' and 'aurora_tile'",
+        description="The name of the configuration to use. Options are 'crux', 'polaris', 'sophia', 'aurora-gpu' and 'aurora-tile'",
     )
-    tag: str = Field(
-        default="test",
+    tag: Optional[str] = Field(
+        default=None,
         description="An optional tag to categorize the job(s).",
     )
     input_file: Optional[str] = Field(
@@ -26,23 +26,26 @@ class AddJobSchema(BaseModel):
     )
     ngpus: int = Field(
         default=0,
-        description="Number of GPUs required for the job(s).",
+        ge=0,
+        description="Number of GPUs required for the job(s). Must be non-negative.",
     )
     nnodes: int = Field(
         default=1,
-        description="Number of nodes required for the job(s).",
+        ge=1,
+        description="Number of nodes required for the job(s). Must be at least 1.",
     )
     node_occupancy: Optional[float] = Field(
         default=None,
-        description="Node occupancy fraction for CPU-only jobs (0.0-1.0).",
-        ge=0.0,
+        description="Node occupancy fraction for CPU-only jobs. Must be between 0.0 (exclusive) and 1.0 (inclusive).",
+        gt=0.0,
         le=1.0,
     )
     ranks_per_node: Optional[int] = Field(
         default=None,
+        ge=1,
         description=(
             "Number of MPI ranks per node. For CPU jobs only; ignored for GPU jobs. "
-            "If not specified, defaults to cores_per_node * node_occupancy."
+            "If not specified, defaults to cores_per_node * node_occupancy. Must be a positive integer."
         ),
     )
     mpi_opts: Optional[str] = Field(
@@ -63,7 +66,7 @@ class AddJobSchema(BaseModel):
     )
     status: str = Field(
         default="Ready",
-        description="Initial status for the job(s).",
+        description="Initial status for the job(s). Valid statuses: Ready, Done, Failed, Restart, Running, Submitted, Warning.",
     )
 
 
@@ -93,7 +96,7 @@ class FilterJobsSchema(BaseModel):
 
 
 class ListJobsSchema(BaseModel):
-    """Schema for listing jobs with optional filters and limits."""
+    """Schema for listing jobs with full details and optional filters."""
 
     status: Optional[str] = Field(
         default=None,
@@ -107,13 +110,29 @@ class ListJobsSchema(BaseModel):
         default=None,
         description="Filter jobs by tag.",
     )
-    all_jobs: bool = Field(
-        default=False,
-        description="Show all jobs regardless of count.",
-    )
-    n: Optional[int] = Field(
+    path: Optional[str] = Field(
         default=None,
-        description="Number of jobs to show. Negative for last N jobs, 0 for all.",
+        description="Filter jobs by path (partial match).",
+    )
+    in_file: Optional[str] = Field(
+        default=None,
+        description="Filter jobs by input file (partial match).",
+    )
+
+
+class GetJobSchema(BaseModel):
+    """Schema for getting a single job's full details by ID."""
+
+    job_id: int = Field(
+        description="Job ID to retrieve.",
+    )
+
+
+class GetJobsByIdsSchema(BaseModel):
+    """Schema for getting multiple jobs' full details by their IDs."""
+
+    job_ids: List[int] = Field(
+        description="List of job IDs to retrieve.",
     )
 
 
@@ -121,7 +140,7 @@ class QSubSchema(BaseModel):
     """Schema for generating and submitting a PBS job via ParslBox."""
 
     config: str = Field(
-        description="The name of the configuration to use. Options are 'crux', 'polaris', 'sophia', 'aurora_gpu' and 'aurora_tile'",
+        description="The name of the configuration to use. Options are 'crux', 'polaris', 'sophia', 'aurora-gpu' and 'aurora-tile'",
     )
 
     job_name: str = Field(
@@ -132,9 +151,8 @@ class QSubSchema(BaseModel):
         description="PBS queue name.",
     )
 
-    select: int = Field(
-        ge=1,
-        description="Number of nodes to request (must be >= 1).",
+    select: str = Field(
+        description="PBS select specification. Can be a simple node count (e.g., '4') or a complex spec (e.g., '2:ncpus=32:ngpus=4').",
     )
 
     walltime: int = Field(
@@ -195,9 +213,8 @@ class SBatchSchema(BaseModel):
         description="SLURM partition name.",
     )
 
-    select: int = Field(
-        ge=1,
-        description="Number of nodes to request (must be >= 1).",
+    select: str = Field(
+        description="Number of nodes to request (e.g., '4').",
     )
 
     walltime: int = Field(
@@ -242,7 +259,7 @@ class SBatchSchema(BaseModel):
 class RemoveJobsSchema(BaseModel):
     """Schema for removing existing job in the database"""
 
-    job_ids: list[int] = Field(
+    job_ids: List[int] = Field(
         description="List of job IDs to remove",
     )
 
@@ -256,7 +273,7 @@ class UpdateJobSchema(BaseModel):
 
     status: Optional[str] = Field(
         default=None,
-        description="New status for the job.",
+        description="New status for the job. Valid statuses: Ready, Done, Failed, Restart, Running, Submitted, Warning.",
     )
 
     tag: Optional[str] = Field(

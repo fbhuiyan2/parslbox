@@ -1,11 +1,12 @@
-import uvicorn
-
 from mcp.server.fastmcp import FastMCP
 
 from parslbox.api import ParslBox
 from parslbox.mcp.schemas import (
     AddJobSchema,
     FilterJobsSchema,
+    GetJobSchema,
+    GetJobsByIdsSchema,
+    ListJobsSchema,
     QSubSchema,
     SBatchSchema,
     RemoveJobsSchema,
@@ -25,7 +26,10 @@ mcp = FastMCP(
         "- submit_slurm_job: submit SLURM jobs to the queue using an sbatch-style configuration.\n"
         "- remove_jobs: remove one or more jobs from the database.\n"
         "- update_job: modify fields of an existing job (status, tag, input file, resources, dependencies, etc.). Note: app cannot be changed after job creation.\n"
-        "- filter_jobs: filter jobs by status, app, tag, path, or input file and return their IDs.\n\n"
+        "- filter_jobs: filter jobs by status, app, tag, path, or input file and return their IDs.\n"
+        "- list_jobs: list jobs with full details, with optional filtering by status, app, tag, path, or input file.\n"
+        "- get_job: get a single job's full details by its ID.\n"
+        "- get_jobs: get multiple jobs' full details by their IDs.\n\n"
     ),
 )
 
@@ -213,8 +217,85 @@ def filter_jobs(params: FilterJobsSchema) -> str:
     return " ".join(str(jid) for jid in job_ids)
 
 
+@mcp.tool(
+    name="list_jobs",
+    description="List jobs with full details. Returns all job fields (job_id, app, path, status, resources, tag, etc.) with optional filtering.",
+)
+def list_jobs(params: ListJobsSchema) -> str:
+    input_dict = params.model_dump()
+    try:
+        jobs = pbx.list_jobs(**input_dict)
+    except Exception as e:
+        return f"Exception occurred when listing jobs. Exception: {e}"
+
+    if not jobs:
+        return "No jobs found matching the given filters."
+
+    # Format each job as a readable block
+    response_parts = [f"Found {len(jobs)} job(s):\n"]
+    for job in jobs:
+        parts = [f"  Job {job['job_id']}:"]
+        for key, value in job.items():
+            if key != "job_id":
+                parts.append(f"    {key}: {value}")
+        response_parts.append("\n".join(parts))
+
+    return "\n".join(response_parts)
+
+
+@mcp.tool(
+    name="get_job",
+    description="Get a single job's full details by its ID.",
+)
+def get_job(params: GetJobSchema) -> str:
+    try:
+        job = pbx.get_job(params.job_id)
+    except Exception as e:
+        return f"Exception occurred when getting job {params.job_id}. Exception: {e}"
+
+    # Format job as a readable block
+    parts = [f"Job {job['job_id']}:"]
+    for key, value in job.items():
+        if key != "job_id":
+            parts.append(f"  {key}: {value}")
+
+    return "\n".join(parts)
+
+
+@mcp.tool(
+    name="get_jobs",
+    description="Get multiple jobs' full details by their IDs.",
+)
+def get_jobs(params: GetJobsByIdsSchema) -> str:
+    try:
+        jobs = pbx.get_jobs_by_ids(params.job_ids)
+    except Exception as e:
+        return f"Exception occurred when getting jobs. Exception: {e}"
+
+    if not jobs:
+        return "No jobs found for the given IDs."
+
+    response_parts = [f"Found {len(jobs)} job(s):\n"]
+    for job in jobs:
+        parts = [f"  Job {job['job_id']}:"]
+        for key, value in job.items():
+            if key != "job_id":
+                parts.append(f"    {key}: {value}")
+        response_parts.append("\n".join(parts))
+
+    return "\n".join(response_parts)
+
+
 # Start MCP server
 app = mcp.streamable_http_app()
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=9795)
+    import sys
+
+    if "--stdio" in sys.argv:
+        # stdio mode: Claude Code launches and manages the process
+        mcp.run(transport="stdio")
+    else:
+        # HTTP mode: run as a standalone server
+        import uvicorn
+        uvicorn.run(app, host="127.0.0.1", port=9795)

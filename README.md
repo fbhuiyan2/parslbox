@@ -237,10 +237,33 @@ pbx.update_jobs(job_ids, status="Restart")
 ParslBox includes an MCP server for AI-agent integration. Install with `pip install ".[agentic]"` and start:
 
 ```bash
+# HTTP mode (standalone server on port 9795)
 python -m parslbox.mcp.mcp_server
+
+# stdio mode (for Claude Code integration)
+python -m parslbox.mcp.mcp_server --stdio
 ```
 
-Exposes tools for job management (add, remove, update, filter, submit via PBS/SLURM) over HTTP on port 9005. See [`examples/chemgraph_parslbox_example/`](examples/chemgraph_parslbox_example/) for a setup and client example.
+Exposed tools: `add_jobs`, `submit_pbs_job`, `submit_slurm_job`, `remove_job`, `update_job`, `filter_jobs`, `list_jobs`, `get_job`, `get_jobs`.
+
+### Claude Code Integration
+
+The project includes a `.mcp.json` for automatic MCP server discovery. When running Claude Code from the project directory, it will offer to connect to the ParslBox MCP server.
+
+For global access (any directory), add to `~/.claude/.mcp.json`:
+```json
+{
+  "mcpServers": {
+    "parslbox": {
+      "command": "/path/to/conda/envs/parslbox/bin/python",
+      "args": ["-m", "parslbox.mcp.mcp_server", "--stdio"],
+      "cwd": "/path/to/parslbox"
+    }
+  }
+}
+```
+
+See [`examples/chemgraph_parslbox_example/`](examples/chemgraph_parslbox_example/) for an HTTP client example.
 
 ## Commands Overview
 

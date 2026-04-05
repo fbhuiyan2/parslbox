@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.8.8] - 2026-04-05
+
+### Added
+
+#### MCP Server Enhancements
+- **3 new MCP tools** — `list_jobs`, `get_job`, `get_jobs` for retrieving full job details (all fields) via MCP. Previously, MCP clients could only get job IDs via `filter_jobs` but had no way to see actual job data
+- **`GetJobSchema` and `GetJobsByIdsSchema`** added to MCP schemas
+- **`ListJobsSchema` updated** — Now matches the `ParslBox.list_jobs()` API with `path` and `in_file` filters. Removed CLI-only `all_jobs` and `n` fields that didn't map to the API
+- **stdio transport support** — MCP server now supports `--stdio` flag for Claude Code integration (`python -m parslbox.mcp.mcp_server --stdio`). HTTP mode remains the default when run without the flag
+- **`.mcp.json` project config** — Added `.mcp.json` to project root with both stdio and HTTP server configurations for Claude Code auto-discovery
+
+### Fixed
+
+#### MCP Schema Corrections
+- **Config names fixed** — `aurora_gpu`/`aurora_tile` → `aurora-gpu`/`aurora-tile` in `AddJobSchema` and `QSubSchema` descriptions, matching actual `CONFIG_FACTORIES` keys. Previous values would cause `ValueError` at runtime
+- **`select` type fixed** — Changed from `int` to `str` in both `QSubSchema` and `SBatchSchema` to match the API, which accepts complex PBS select specs (e.g., `'2:ncpus=32:ngpus=4'`)
+- **`tag` default fixed** — Changed `AddJobSchema.tag` default from `"test"` to `None`, matching the `ParslBox.add_jobs()` API default
+- **`AddJobSchema` constraints aligned** — Added `ge=0` to `ngpus`, `ge=1` to `nnodes` and `ranks_per_node`, changed `node_occupancy` from `ge=0.0` to `gt=0.0`. Now consistent with `UpdateJobSchema` and core validators
+- **`RemoveJobsSchema` type annotation** — Changed `list[int]` to `List[int]` for consistency with all other schemas
+- **Valid status values documented** — Both `AddJobSchema` and `UpdateJobSchema` now list valid statuses (Ready, Done, Failed, Restart, Running, Submitted, Warning) in field descriptions
+- **App names updated** — Schema descriptions now list `lammps-kk`, `vasp`, `python`, `julia` (was `lammps`, `vasp`, `python`)
+
+### Modified Files
+- `parslbox/mcp/schemas.py` — All fixes above, plus new `GetJobSchema` and `GetJobsByIdsSchema`
+- `parslbox/mcp/mcp_server.py` — Added `list_jobs`, `get_job`, `get_jobs` tools; stdio transport support; updated imports and instructions
+- `.mcp.json` — New file for Claude Code MCP auto-discovery
+
+---
+
 ## [0.8.7] - 2026-03-27
 
 ### Added

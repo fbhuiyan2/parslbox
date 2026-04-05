@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "parslbox": {
+      "command": "python",
+      "args": ["-m", "parslbox.mcp.mcp_server", "--stdio"]
+    },
+    "parslbox-http": {
+      "url": "http://127.0.0.1:9795/mcp"
+    }
+  }
+}
