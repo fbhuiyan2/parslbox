@@ -204,6 +204,7 @@ Implement by inheriting from `AppBase` with `get_command_template()`. See [`pars
 | **crux** | PBS | 0 (CPU-only) | — | 256 | MPICH |
 | **lcrc-swing** | PBS | 8 | NVIDIA A100 | 64 | OpenMPI |
 | **lcrc-improv** | PBS | 0 (CPU-only) | — | 128 | OpenMPI |
+| **pinnacles-cenvalarc** | SLURM | 0 or 2 (auto-detected) | NVIDIA L40S / H200 NVL | 64 | srun |
 
 Each system defines its own MPI defaults, scheduler templates, and resource detection methods. New systems can be added by creating a config class inheriting from `BaseSystemConfig`.
 

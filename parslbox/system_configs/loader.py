@@ -10,6 +10,7 @@ from parslbox.system_configs.aurora_tile import AuroraTileConfig
 from parslbox.system_configs.aurora_gpu import AuroraGpuConfig
 from parslbox.system_configs.lcrc_swing import LcrcSwingConfig
 from parslbox.system_configs.lcrc_improv import LcrcImprovConfig
+from parslbox.system_configs.pinnacles_cenvalarc import PinnaclesCenvalarcConfig
 
 # Create a dictionary that maps the config name to its configuration class
 CONFIG_FACTORIES = {
@@ -20,6 +21,7 @@ CONFIG_FACTORIES = {
     "aurora-gpu": AuroraGpuConfig,
     "lcrc-swing": LcrcSwingConfig,
     "lcrc-improv": LcrcImprovConfig,
+    "pinnacles-cenvalarc": PinnaclesCenvalarcConfig,
     # To add a new system, create its module and add it here.
 }
 

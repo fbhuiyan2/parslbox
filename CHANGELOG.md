@@ -27,6 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Passed through `mpi_commands` dict as `PBX_MPI_ENV_SETUP`
   - Generated configs include the key (empty, with guiding comments) via `pbx config`
 
+#### Pinnacles CENVALARC System Config (First SLURM System)
+- **New `pinnacles-cenvalarc` system config** — UC Merced Pinnacles cluster (CENVALARC partition). ParslBox's first SLURM-based system configuration
+  - Single config handles both CPU and GPU partitions: `cenvalarc.compute`, `cenvalarc.bigmem`, `cenvalarc.gpu`
+  - All nodes: 64 cores (2× Intel 32-Core Xeon Gold 6530). GPU nodes: 2× NVIDIA (L40S or H200 NVL)
+  - Runtime GPU detection via `nvidia-smi -L` — returns 0 on CPU partitions (CPU-only mode), 2 on GPU partition
+  - SLURM scheduler with srun MPI backend, depth CPU binding, GPU wrapper support
+
 #### Dynamic Job Test Scripts
 - **`job_test/test_dynamic_jobs/`** — Test suite for `--dynamic` feature
   - `spawner.py`: Python job that prints affinity info and adds 5 `hello_affinity` child jobs at runtime
@@ -48,6 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Improved plot formatting and docstrings** in strong and weak scaling orchestrator and analysis scripts
 
 ### New Files
+- `parslbox/system_configs/pinnacles_cenvalarc.py`
 - `job_test/test_dynamic_jobs/spawner.py`
 - `job_test/test_dynamic_jobs/test_dynamic_orchestrator.py`
 - `job_test/test_dynamic_jobs/spawner_env.sh`
@@ -67,6 +75,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `examples/weak_scaling/lammps_weak_scale_orchestrator.py` — Updated docstring
 - `examples/strong_scaling/plot_strong-scale-results.py` — Tick sizes, axis params, legends
 - `examples/weak_scaling/plot_weak-scale-results.py` — Tick sizes, axis params, `_calculate_y_axis_params_performance`
+- `parslbox/system_configs/loader.py` — Registered `pinnacles-cenvalarc`
 - `tests/test_mpi_config_merge.py` — 10 new tests for `env_setup` parsing and merge behavior
 
 ---
