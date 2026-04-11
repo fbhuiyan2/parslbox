@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.0] - 2026-04-10
+
+### Added
+
+#### Dynamic Job Discovery (`--dynamic/--static`)
+- **`--dynamic` flag on `pbx run`, `pbx qsub`, `pbx sbatch`** — Enables periodic polling for newly added jobs during an active run session. Jobs added via `pbx add` (from another terminal or from within a running job script) are automatically discovered and executed without restarting the run
+  - `--dynamic` (default): polls the database every 60 seconds for new `Ready`/`Restart` jobs matching the same `--apps`/`--tags` filters
+  - `--static`: collect-once-and-exit behavior (previous default)
+  - When the last active future completes, an immediate discovery check runs before exiting — prevents premature exit when a completing job spawned child jobs
+  - Backlog-aware exit: if backlogged jobs exist (waiting on dependencies), the loop stays alive even with no active futures
+  - Failed jobs reset to Ready by the user (via `pbx update --status Ready` from another terminal) are re-discovered and re-run
+  - New app types discovered dynamically are loaded on-demand (app instance, config, MPI config)
+
+#### MPI Environment Setup (`env_setup` under `mpi:`)
+- **`env_setup` key in MPI configuration** — Shell commands (e.g., `module load openmpi`) that run before the app's `environment_setup` in the generated bash script. Useful for non-MPI apps (Python, Julia) that need `mpirun`/`mpiexec` loaded for the resource launcher
+  - Participates in the existing merge hierarchy: system-level → app-level override
+  - Added to `MPIConfig` dataclass, parsed in `mpi_config_from_dict()`
+  - Passed through `mpi_commands` dict as `PBX_MPI_ENV_SETUP`
+  - Generated configs include the key (empty, with guiding comments) via `pbx config`
+
+#### Dynamic Job Test Scripts
+- **`job_test/test_dynamic_jobs/`** — Test suite for `--dynamic` feature
+  - `spawner.py`: Python job that prints affinity info and adds 5 `hello_affinity` child jobs at runtime
+  - `test_dynamic_orchestrator.py`: Orchestrator that creates spawner jobs with configurable resource allocation
+  - `spawner_env.sh`: Shared environment file
+
+### Changed
+
+#### Bash Script Variable Naming
+- **Renamed variables in `_general_bash_app_engine()`** for clarity about their origin:
+  - `env_setup` → split into `env_setup_frm_appconfig` and `env_setup_frm_envfile`
+  - `env_exports` → `env_exports_frm_rsrc_mgr`
+  - `additional_setup` → `setup_frm_app`
+
+#### Config Generator Improvements
+- **`environment_setup` defaults** — Generated configs now include uncommented `module purge` and `module restore` with a comment explaining why (clean module environment for worker subprocesses)
+
+#### Scaling Scripts
+- **Improved plot formatting and docstrings** in strong and weak scaling orchestrator and analysis scripts
+
+### New Files
+- `job_test/test_dynamic_jobs/spawner.py`
+- `job_test/test_dynamic_jobs/test_dynamic_orchestrator.py`
+- `job_test/test_dynamic_jobs/spawner_env.sh`
+- `job_test/test_dynamic_jobs/hello_affinity.py`
+
+### Modified Files
+- `parslbox/commands/run.py` — `--dynamic/--static` flag, `discover_new_jobs()` function, modified main loop
+- `parslbox/commands/qsub.py` — `--dynamic/--static` flag forwarded to `submit_job()`
+- `parslbox/commands/sbatch.py` — `--dynamic/--static` flag forwarded to `submit_job()`
+- `parslbox/commands/helpers/submit_helpers.py` — `dynamic` parameter, `--static` in run options
+- `parslbox/resource_manager/job_tracker.py` — `register_jobs()` method for mid-run job registration
+- `parslbox/resource_manager/mpi_config.py` — `env_setup` field in `MPIConfig`
+- `parslbox/apps/appbase.py` — Renamed bash script variables, added `mpi_env_setup` injection
+- `parslbox/utils/pbx_config_template.py` — `env_setup` in MPI config docs
+- `parslbox/utils/config_generator.py` — `env_setup` key, `module purge/restore` defaults
+- `examples/strong_scaling/lammps_strong_scale_orchestrator.py` — Updated docstring
+- `examples/weak_scaling/lammps_weak_scale_orchestrator.py` — Updated docstring
+- `examples/strong_scaling/plot_strong-scale-results.py` — Tick sizes, axis params, legends
+- `examples/weak_scaling/plot_weak-scale-results.py` — Tick sizes, axis params, `_calculate_y_axis_params_performance`
+- `tests/test_mpi_config_merge.py` — 10 new tests for `env_setup` parsing and merge behavior
+
+---
+
 ## [0.8.8] - 2026-04-05
 
 ### Added

@@ -22,6 +22,7 @@ def submit_to_scheduler(
     loglevel: str = "info",
     config_path: Optional[Path] = None,
     sched_opts: Optional[List[str]] = None,
+    dynamic: bool = True,
 ):
     """
     Submit a PBS job via qsub. Thin wrapper around submit_job().
@@ -42,6 +43,7 @@ def submit_to_scheduler(
         sched_opts=sched_opts,
         scheduler_type="pbs",
         submit_command="qsub",
+        dynamic=dynamic,
     )
 
 
@@ -97,6 +99,10 @@ def qsub(
         Optional[List[str]],
         typer.Option("--sched-opts", help="Extra PBS directives (repeatable, e.g., --sched-opts '#PBS -l filesystems=home:eagle').")
     ] = None,
+    dynamic: Annotated[
+        bool,
+        typer.Option("--dynamic/--static", help="Dynamically discover new jobs during run (default: dynamic).")
+    ] = True,
 ):
     """
     Generate and submit a PBS job script for running parslbox workflows.
@@ -124,6 +130,7 @@ def qsub(
             retries=retries,
             loglevel=loglevel,
             sched_opts=sched_opts,
+            dynamic=dynamic,
         )
 
         # CLI-specific output formatting

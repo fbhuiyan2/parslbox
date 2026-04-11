@@ -214,6 +214,10 @@ def run(
         str,
         typer.Option("--loglevel", help="Logging level (debug, info, warning, error, critical)")
     ] = "info",
+    dynamic: Annotated[
+        bool,
+        typer.Option("--dynamic/--static", help="Dynamically discover new jobs during run (default: dynamic).")
+    ] = True,
 ):
     """
     Run Parsl workflows by discovering and executing application plugins.
@@ -273,6 +277,7 @@ def run(
         return
 
     njobs = len(filtered_jobs)
+    known_job_ids = set(job['job_id'] for job in filtered_jobs)
     logger.info(f"Found {njobs} jobs to execute.")
 
     # Track Parsl loading state for signal handler (must be defined before use)
@@ -445,17 +450,151 @@ def run(
     # Create mapping from futures to their metadata
     # Create new futures for rescheduled backlogged jobs in a while loop
     fut_to_item = {item['future']: item for item in futures}
-    
+
     logger.info(f"Starting to process {len(fut_to_item)} initial jobs...")
-    
+    if dynamic:
+        logger.info("Dynamic job discovery enabled (poll every 60s)")
+
     # Track last recovery attempt time for periodic node recovery
     last_recovery_attempt = time.time()
     recovery_interval = 60  # Attempt recovery every 60 seconds
-    
+
     # Track last flush time for periodic status buffer flush
     last_flush_time = time.time()
 
-    while fut_to_item:
+    # Track last dynamic discovery time
+    last_discovery_time = time.time()
+    discovery_interval = 60  # Check for new jobs every 60 seconds
+
+    def discover_new_jobs():
+        """
+        Check DB for new Ready/Restart jobs matching the same app/tag filters.
+
+        Discovers jobs added after the initial collection (e.g., by orchestrator
+        scripts or users running `pbx add` from another terminal). New jobs go
+        through the standard pipeline: dependency check -> resource allocation
+        -> submit or backlog.
+
+        Returns:
+            int: Number of new jobs discovered
+        """
+        new_runnable = database.get_jobs(db_path, status='Ready')
+        new_runnable += database.get_jobs(db_path, status='Restart')
+
+        new_jobs = []
+        for job in new_runnable:
+            job_id = job['job_id']
+            if job_id in known_job_ids:
+                # Check if user reset a failed job back to Ready from outside the batch job
+                tracked = job_tracker.get_job(job_id)
+                if not tracked:
+                    logger.warning(f"Job {job_id} in known_job_ids but missing from JobTracker — data inconsistency")
+                elif tracked['status'] == 'Failed' and job['status'] == 'Ready':
+                    job_tracker.update_job_status(job_id, 'Ready')
+                    new_jobs.append(job)
+                    logger.info(f"Dynamic discovery: Re-discovered job {job_id} (user reset from Failed to Ready)")
+                continue
+            passes_app = not app_filter or job['app'] in app_filter
+            passes_tag = not tag_filter or job['tag'] in tag_filter
+            if passes_app and passes_tag:
+                new_jobs.append(job)
+                known_job_ids.add(job_id)
+
+        if not new_jobs:
+            return 0
+
+        logger.info(f"Dynamic discovery: Found {len(new_jobs)} new jobs")
+
+        # Register new jobs with JobTracker
+        job_tracker.register_jobs(new_jobs)
+
+        # Load app contexts for any new app types
+        new_app_names = set(job['app'] for job in new_jobs) - set(app_instances.keys())
+        for app_name in new_app_names:
+            try:
+                from parslbox.apps.app_registry import get_app_instance
+                app_instances[app_name] = get_app_instance(app_name)
+                app_configs[app_name] = load_app_config(app_name=app_name, system_name=config_name)
+                mpi_configs[app_name] = load_mpi_config(
+                    system_name=config_name, app_name=app_name,
+                    system_config_class=system_config, yaml_config=full_yaml_config
+                )
+                logger.info(f"Loaded app context for dynamically discovered app '{app_name}'")
+            except Exception as e:
+                logger.error(f"Failed to load app '{app_name}' for dynamic jobs: {e}")
+                for job in new_jobs:
+                    if job['app'] == app_name:
+                        job_tracker.update_job_status(job['job_id'], "Failed")
+                        database.update_jobs(db_path, job_ids=[job['job_id']], status="Failed")
+                new_jobs = [j for j in new_jobs if j['app'] != app_name]
+
+        # Process new jobs: dependency check -> resource allocation -> submit/backlog
+        new_futures = []
+        for job in new_jobs:
+            job_id = job['job_id']
+            app_name = job['app']
+
+            if app_name not in app_instances:
+                continue
+
+            # Check dependencies
+            try:
+                if not job_tracker.are_parents_done(job_id):
+                    logger.info(f"Job {job_id}: Parent dependencies not satisfied, adding to backlog")
+                    resource_manager.add_to_backlog(job_id)
+                    continue
+            except Exception as e:
+                logger.error(f"Job {job_id}: Error checking dependencies: {e}")
+                job_tracker.update_job_status(job_id, "Failed")
+                database.update_jobs(db_path, job_ids=[job_id], status="Failed")
+                continue
+
+            # Allocate resources
+            try:
+                assignment = resource_manager.assign_resources(job)
+                logger.info(f"Job {job_id}: Allocated resources - {assignment.get_summary()}")
+
+                create_parsl_future(
+                    job, app_instances[app_name], app_configs[app_name], mpi_configs[app_name],
+                    config_name, db_path, scheduler, resource_manager, new_futures, system_config, status_buffer
+                )
+            except InsufficientResources as e:
+                logger.info(f"Job {job_id}: Resources unavailable, added to backlog: {e}")
+                continue
+            except Exception as e:
+                logger.error(f"Job {job_id}: Failed to allocate resources: {e}")
+                job_tracker.update_job_status(job_id, "Failed")
+                database.update_jobs(db_path, job_ids=[job_id], status="Failed")
+                continue
+
+        # Add new futures to tracking
+        for item in new_futures:
+            fut_to_item[item['future']] = item
+
+        # Flush status updates for new jobs
+        flushed = status_buffer.flush_all()
+        if flushed > 0:
+            logger.info(f"Dynamic discovery: Flushed {flushed} status updates")
+
+        return len(new_jobs)
+
+    while True:
+        # Exit check: no active futures
+        if not fut_to_item:
+            if not dynamic:
+                break
+            # Dynamic mode: immediate check for new jobs before exiting
+            new_count = discover_new_jobs()
+            if new_count > 0:
+                logger.info(f"Dynamic discovery: {new_count} new jobs found after last future completed, continuing run")
+                continue
+            # Check if backlog still has jobs (dependencies may resolve from external processes)
+            backlog_status = resource_manager.get_resource_status()
+            if backlog_status['backlogged_jobs'] > 0:
+                logger.debug(f"No active futures but {backlog_status['backlogged_jobs']} backlogged jobs, waiting...")
+                time.sleep(10)
+                continue
+            break  # No futures, no new jobs, no backlog — done
         try:
             current_time = time.time()
             
@@ -474,7 +613,12 @@ def run(
                 if recovered_nodes:
                     logger.info(f"Recovered {len(recovered_nodes)} nodes from quarantine: {recovered_nodes}")
                 last_recovery_attempt = current_time
-            
+
+            # Periodic dynamic job discovery
+            if dynamic and current_time - last_discovery_time >= discovery_interval:
+                discover_new_jobs()
+                last_discovery_time = current_time
+
             # Wait for any future to complete
             for fut in as_completed(list(fut_to_item.keys()), timeout=10):
                 # Check if future still exists (might have been processed already)

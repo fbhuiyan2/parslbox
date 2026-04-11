@@ -40,6 +40,7 @@ def submit_job(
     sched_opts: Optional[List[str]] = None,
     scheduler_type: str = "pbs",
     submit_command: str = "qsub",
+    dynamic: bool = True,
 ) -> Dict[str, Any]:
     """
     Core scheduler submission logic - used by both PBS (qsub) and SLURM (sbatch).
@@ -120,6 +121,8 @@ def submit_job(
         run_options.append(f"--retries {retries}")
     if loglevel != "info":  # Only add if not default
         run_options.append(f"--loglevel {loglevel}")
+    if not dynamic:  # Only add when disabling (default is dynamic)
+        run_options.append("--static")
 
     run_options_str = " ".join(run_options)
 

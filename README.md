@@ -26,6 +26,7 @@ ParslBox provides a CLI (`pbx`), a Python API, and an MCP server for AI-agent in
   - MPI backends: MPICH, OpenMPI, srun
 - **Scheduler support:** PBS (`pbx qsub`) and SLURM (`pbx sbatch`) with configurable `--sched-opts`
 - **Pre-configured HPC systems:** Polaris, Aurora (GPU & Tile modes), Sophia, Crux, LCRC Swing, LCRC Improv
+- **Dynamic job discovery:** `--dynamic` (default) polls for newly added jobs during a run session. New jobs matching the same `--apps`/`--tags` filters are picked up every 60s. Failed jobs reset to Ready by the user (via `pbx update --status Ready` from another terminal) are also re-discovered and re-run. Use `--static` for collect-once behavior
 - **Fault tolerance:** Node health tracking, quarantine, and auto-recovery
 - **Script-driven status reporting:** Python/Julia scripts report success/failure via `report_status()` utility
 - **Python API and MCP server** for programmatic and AI-agent integration
@@ -285,12 +286,13 @@ Note: Users submit via `pbx qsub` or `pbx sbatch`. These generate a `submit.sh` 
 
 - **pbx qsub** — Submit PBS job
   - Required: `--config/-c`, `--job-name/-N`, `--queue/-q`, `--select`, `--walltime/-T`, `--project/-A`
-  - Optional: `--run-dir`, `--apps/-a`, `--tags/-t`, `--retries`, `--sched-opts`
+  - Optional: `--run-dir`, `--apps/-a`, `--tags/-t`, `--retries`, `--sched-opts`, `--dynamic/--static`
   - `--sched-opts` adds extra `#PBS` directives (repeatable)
+  - `--dynamic` (default) enables live discovery of new jobs during the run; `--static` for collect-once behavior
 
 - **pbx sbatch** — Submit SLURM job
   - Required: `--config/-c`, `--job-name/-N`, `--partition/-p`, `--nodes`, `--walltime/-T`, `--account/-A`
-  - Optional: `--run-dir`, `--apps/-a`, `--tags/-t`, `--retries`, `--sched-opts`
+  - Optional: `--run-dir`, `--apps/-a`, `--tags/-t`, `--retries`, `--sched-opts`, `--dynamic/--static`
 
 - **pbx ls** — List jobs with filtering and pagination
   - Filters: `--status/-s`, `--app/-a`, `--tag/-t`
@@ -312,6 +314,7 @@ Note: Users submit via `pbx qsub` or `pbx sbatch`. These generate a `submit.sh` 
 - **pbx rm** — Remove jobs by IDs or ranges (e.g., `pbx rm 1-5 8`), or `pbx rm all` (with confirmation)
 
 - **pbx run** (internal) — Engine used by qsub/sbatch; not for direct use
+  - `--dynamic/--static` controls live job discovery (default: `--dynamic`)
 
 ## Configuration
 

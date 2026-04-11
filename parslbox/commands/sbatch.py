@@ -22,6 +22,7 @@ def submit_to_slurm(
     loglevel: str = "info",
     config_path: Optional[Path] = None,
     sched_opts: Optional[List[str]] = None,
+    dynamic: bool = True,
 ):
     """
     Submit a SLURM job via sbatch. Thin wrapper around submit_job().
@@ -42,6 +43,7 @@ def submit_to_slurm(
         sched_opts=sched_opts,
         scheduler_type="slurm",
         submit_command="sbatch",
+        dynamic=dynamic,
     )
 
 
@@ -95,6 +97,10 @@ def sbatch(
         Optional[List[str]],
         typer.Option("--sched-opts", help="Extra SLURM directives (repeatable, e.g., --sched-opts '#SBATCH --mem=64G').")
     ] = None,
+    dynamic: Annotated[
+        bool,
+        typer.Option("--dynamic/--static", help="Dynamically discover new jobs during run (default: dynamic).")
+    ] = True,
 ):
     """
     Generate and submit a SLURM job script for running parslbox workflows.
@@ -121,6 +127,7 @@ def sbatch(
             retries=retries,
             loglevel=loglevel,
             sched_opts=sched_opts,
+            dynamic=dynamic,
         )
 
         # CLI-specific output formatting

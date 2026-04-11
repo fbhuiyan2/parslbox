@@ -167,6 +167,30 @@ class JobTracker:
         logger.debug(f"Found {len(ready_jobs)} dependency-ready jobs out of {len(job_ids)} checked")
         return ready_jobs
     
+    def register_jobs(self, new_jobs: List[dict]) -> int:
+        """
+        Register new jobs into the tracker (for dynamic job discovery).
+
+        Only adds jobs not already in the registry.
+
+        Args:
+            new_jobs: List of job dictionaries from database
+
+        Returns:
+            Number of jobs actually added (excludes duplicates)
+        """
+        added = 0
+        for job in new_jobs:
+            job_id = job['job_id']
+            if job_id not in self.jobs:
+                self.jobs[job_id] = job.copy()
+                added += 1
+
+        if added > 0:
+            logger.info(f"Registered {added} new jobs in JobTracker (total: {len(self.jobs)})")
+
+        return added
+
     def get_job_count(self) -> int:
         """Get total number of jobs in tracker."""
         return len(self.jobs)
