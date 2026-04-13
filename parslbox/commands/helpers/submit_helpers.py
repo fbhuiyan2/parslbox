@@ -5,6 +5,7 @@ This module provides the core submit_job() function used by both
 qsub (PBS) and sbatch (SLURM) commands.
 """
 
+import re
 import subprocess
 import yaml
 import os
@@ -30,7 +31,7 @@ def submit_job(
     queue: str,
     select: str,
     walltime: int,
-    project: str,
+    project: Optional[str] = None,
     run_dir: Optional[Path] = None,
     apps: Optional[List[str]] = None,
     tags: Optional[List[str]] = None,
@@ -139,7 +140,7 @@ def submit_job(
         'queue': queue,
         'select': select,
         'walltime': walltime_formatted,
-        'project': project,
+        'project': project or '',
         'pbx_python_env_setup': pbx_python_env_setup,
         'pbx_env_vars': pbx_env_vars,
         'config': config_name,
@@ -151,6 +152,13 @@ def submit_job(
     # Get scheduler template and format it
     sched_template = config['schedulers'][scheduler_type]['template']
     rendered = sched_template.format(**template_vars)
+
+    # If no project was provided, remove the account/project directive line
+    if not project:
+        rendered = '\n'.join(
+            line for line in rendered.split('\n')
+            if not re.match(r'\s*#(PBS\s+-A|SBATCH\s+--account=)\s*$', line)
+        )
 
     # Get config-level sched_opts
     config_sched_opts = system_config.get('sched_opts', None)

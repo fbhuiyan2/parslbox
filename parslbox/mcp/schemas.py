@@ -160,8 +160,9 @@ class QSubSchema(BaseModel):
         description="Wall time in minutes (e.g., 90 for 1.5 hours).",
     )
 
-    project: str = Field(
-        description="Project/account name.",
+    project: Optional[str] = Field(
+        default=None,
+        description="Project/account name. Optional — omit if your cluster does not require one.",
     )
 
     run_dir: Optional[Path] = Field(
@@ -222,8 +223,9 @@ class SBatchSchema(BaseModel):
         description="Wall time in minutes (e.g., 90 for 1.5 hours).",
     )
 
-    project: str = Field(
-        description="Project/account name.",
+    project: Optional[str] = Field(
+        default=None,
+        description="Project/account name. Optional — omit if your cluster does not require one.",
     )
 
     run_dir: Optional[Path] = Field(

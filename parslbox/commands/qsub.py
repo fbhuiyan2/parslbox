@@ -14,7 +14,7 @@ def submit_to_scheduler(
     queue: str,
     select: str,
     walltime: int,
-    project: str,
+    project: Optional[str] = None,
     run_dir: Optional[Path] = None,
     apps: Optional[List[str]] = None,
     tags: Optional[List[str]] = None,
@@ -72,9 +72,9 @@ def qsub(
         typer.Option("--walltime", "-T", help="Wall time in minutes (e.g., 90 for 1.5 hours).")
     ],
     project: Annotated[
-        str,
+        Optional[str],
         typer.Option("--project", "-A", help="Project/account name.")
-    ],
+    ] = None,
     run_dir: Annotated[
         Optional[Path],
         typer.Option("--run-dir", help="Custom run directory (default: timestamped directory).")
