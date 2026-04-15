@@ -800,6 +800,106 @@ class TestMPICommandGeneration:
         assert "--cpus-per-task 8" in srun_cmd
         assert "--cpu-bind=cores" in srun_cmd
 
+    def test_subnode_gpu_srun_depth_binding(self):
+        """Test depth binding for sub-node GPU job uses per-GPU core share, not total cores.
+
+        Regression test: a 1-GPU job on a 4-GPU/32-core node must get
+        cores_per_rank = 32 // 4 = 8, not 32 // 1 = 32.
+        """
+        config = MockSystemConfig(mpi_cmd="srun")
+        rm = ResourceManager(config, job_tracker=None)
+
+        job = {'job_id': 1, 'num_nodes': 1, 'ngpus': 1, 'node_occupancy': 1.0}
+        assignment = rm.assign_resources(job)
+        spec = create_job_resource_spec(job)
+
+        mpi_config = MPIConfig(
+            backend=MPIBackend.SRUN,
+            cpu_bind_method="depth",
+            use_gpu_wrapper=True,
+        )
+        commands = build_mpi_command(mpi_config, config, assignment, spec)
+
+        srun_cmd = commands["PBX_SRUN_PREFIX"]
+        # 32 cores / 4 GPUs = 8 cores per rank
+        assert "--cpus-per-task 8" in srun_cmd
+        assert "--cpu-bind=cores" in srun_cmd
+
+    def test_subnode_gpu_mpich_depth_binding(self):
+        """Test MPICH depth binding for sub-node GPU job uses per-GPU core share.
+
+        Regression test: a 2-GPU job on a 4-GPU/32-core node must get
+        cores_per_rank = 32 // 4 = 8, not 32 // 2 = 16.
+        """
+        config = MockSystemConfig(mpi_cmd="mpiexec")
+        rm = ResourceManager(config, job_tracker=None)
+
+        job = {'job_id': 1, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0}
+        assignment = rm.assign_resources(job)
+        spec = create_job_resource_spec(job)
+
+        mpi_config = MPIConfig(
+            backend=MPIBackend.MPICH,
+            cpu_bind_method="depth",
+            use_gpu_wrapper=True,
+        )
+        commands = build_mpi_command(mpi_config, config, assignment, spec)
+
+        mpiexec_cmd = commands["PBX_MPIEXEC_PREFIX"]
+        # 32 cores / 4 GPUs = 8 cores per rank
+        assert "--depth 8" in mpiexec_cmd
+        assert "--cpu-bind depth" in mpiexec_cmd
+
+    def test_subnode_gpu_openmpi_depth_binding(self, resource_manager):
+        """Test OpenMPI depth binding for sub-node GPU job uses per-GPU core share.
+
+        Regression test: a 1-GPU job on a 4-GPU/32-core node must get
+        PE = 32 // 4 = 8, not 32 // 1 = 32.
+        """
+        job = {'job_id': 1, 'num_nodes': 1, 'ngpus': 1, 'node_occupancy': 1.0}
+        assignment = resource_manager.assign_resources(job)
+        spec = create_job_resource_spec(job)
+
+        mpi_config = MPIConfig(
+            backend=MPIBackend.OPENMPI,
+            cpu_bind_method="depth",
+            use_gpu_wrapper=True,
+        )
+        commands = build_mpi_command(mpi_config, resource_manager.system_config, assignment, spec)
+
+        mpirun_cmd = commands["PBX_MPI_PREFIX"]
+        # 32 cores / 4 GPUs = 8 cores per rank
+        assert "--map-by core:PE=8" in mpirun_cmd
+        assert "--bind-to core" in mpirun_cmd
+
+    def test_subnode_gpu_depth_binding_with_excluded_cores(self):
+        """Test depth binding for sub-node GPU job accounts for excluded cores.
+
+        On a 32-core/4-GPU node with cores [0,1,30,31] excluded,
+        effective_cores = 28, so cores_per_rank = 28 // 4 = 7.
+        """
+        config = MockSystemConfig(
+            cores_per_node=32, gpus_per_node=4, mpi_cmd="srun",
+            exclude_cores=[0, 1, 30, 31],
+        )
+        rm = ResourceManager(config, job_tracker=None)
+
+        job = {'job_id': 1, 'num_nodes': 1, 'ngpus': 1, 'node_occupancy': 1.0}
+        assignment = rm.assign_resources(job)
+        spec = create_job_resource_spec(job)
+
+        mpi_config = MPIConfig(
+            backend=MPIBackend.SRUN,
+            cpu_bind_method="depth",
+            use_gpu_wrapper=True,
+        )
+        commands = build_mpi_command(mpi_config, config, assignment, spec)
+
+        srun_cmd = commands["PBX_SRUN_PREFIX"]
+        # (32 - 4 excluded) / 4 GPUs = 7 cores per rank
+        assert "--cpus-per-task 7" in srun_cmd
+        assert "--cpu-bind=cores" in srun_cmd
+
     def test_gpu_wrapper_disabled_via_config(self, resource_manager):
         """Test that gpu-wrapper can be disabled via MPIConfig.disable."""
         job = {'job_id': 10, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0}

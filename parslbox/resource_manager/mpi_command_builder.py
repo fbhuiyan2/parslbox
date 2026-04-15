@@ -145,13 +145,18 @@ class MPICommandBuilder:
         """Build template context for substitution."""
         total_ranks = job_spec.get_total_ranks()
         
-        # Calculate cores per rank
-        excluded_cores = getattr(self.system_config, 'EXCLUDE_CORES', None) or []
-        effective_cores = self.system_config.CORES_PER_NODE - len(excluded_cores)
-        if job_spec.is_gpu_job() and self.system_config.GPUS_PER_NODE > 0:
-            # For GPU jobs, each rank gets the per-GPU share of cores
-            cores_per_rank = effective_cores // self.system_config.GPUS_PER_NODE
+        # Calculate cores per rank.
+        # Prefer the actual per-rank CPU assignment from the resource manager,
+        # which correctly handles sub-node GPU jobs (e.g., 1 GPU on a 2-GPU node
+        # gets 32 cores, not 64). Fall back to a simple calculation when no
+        # per-rank assignment exists.
+        # Note: this assumes all ranks have the same number of cores.
+        rank0_cores = assignment.get_cpu_assignments_for_rank(0)
+        if rank0_cores:
+            cores_per_rank = len(rank0_cores)
         else:
+            excluded_cores = getattr(self.system_config, 'EXCLUDE_CORES', None) or []
+            effective_cores = self.system_config.CORES_PER_NODE - len(excluded_cores)
             cores_per_rank = effective_cores // ranks_per_node if ranks_per_node > 0 else effective_cores
         
         context = {
