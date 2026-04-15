@@ -148,7 +148,11 @@ class MPICommandBuilder:
         # Calculate cores per rank
         excluded_cores = getattr(self.system_config, 'EXCLUDE_CORES', None) or []
         effective_cores = self.system_config.CORES_PER_NODE - len(excluded_cores)
-        cores_per_rank = effective_cores // ranks_per_node if ranks_per_node > 0 else effective_cores
+        if job_spec.is_gpu_job() and self.system_config.GPUS_PER_NODE > 0:
+            # For GPU jobs, each rank gets the per-GPU share of cores
+            cores_per_rank = effective_cores // self.system_config.GPUS_PER_NODE
+        else:
+            cores_per_rank = effective_cores // ranks_per_node if ranks_per_node > 0 else effective_cores
         
         context = {
             "total_ranks": str(total_ranks),
