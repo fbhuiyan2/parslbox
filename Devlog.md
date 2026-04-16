@@ -43,26 +43,8 @@ It serves as a quick reference for resolved problems and their solutions, separa
   - **Fix**: Restructured signal handler to 3 steps: (0) get active job IDs from in-memory `JobTracker` (only this instance's jobs — safe with concurrent PBX batch jobs), (1) flush status buffer to clear any stale entries, (2) direct `database.update_jobs()` to mark active jobs as "Killed". Direct DB write happens AFTER flush so nothing overwrites it. Added "killed" as a new valid job status.
 
 [2026-03-19]
-- **Bug**: MPI config `disable` list only applies to `mpi_extra` flags, not core `mpi_args`. In `MPICommandBuilder.build_command()`, the disable/add pipeline only processes flags from `_build_mpi_extra()`, while flags from `_build_mpi_args()` (like `--map-by ppr:N:node` for OpenMPI) bypass filtering entirely. This prevents users from disabling core flags, breaking workarounds for OpenMPI version differences (e.g., 4.1.x uses `--rankfile <path>` vs 5.x uses `--map-by rankfile:file=<path>`).
-  - **Current Workaround**: Set `cpu_bind_method: rankfile` (not `none`) to prevent default `--map-by` in core args, then use `disable: ["--map-by"]` to remove the 5.x syntax from `mpi_extra`, and `add: ["--rankfile {rankfile_path}"]` to add 4.1.x syntax.
-  - **Proposed Fix**: Apply `_apply_disable()` and `_apply_add()` to the combined `mpi_args + mpi_extra` list instead of just `mpi_extra`:
-    ```python
-    # Current (buggy):
-    mpi_args = self._build_mpi_args(...)
-    mpi_extra = self._build_mpi_extra(...)
-    mpi_extra = self._apply_disable(mpi_extra)  # Only filters mpi_extra
-    mpi_extra = self._apply_add(mpi_extra, context)
-    parts = [mpi_cmd] + mpi_args + mpi_extra
-    
-    # Proposed fix:
-    mpi_args = self._build_mpi_args(...)
-    mpi_extra = self._build_mpi_extra(...)
-    all_flags = mpi_args + mpi_extra
-    all_flags = self._apply_disable(all_flags)  # Filter ALL flags
-    all_flags = self._apply_add(all_flags, context)
-    parts = [mpi_cmd] + all_flags
-    ```
-  - **Impact**: This would make `disable` work as documented and expected — users could remove ANY MPI flag from the final command, regardless of where it was generated. Tests in `test_mpi_command_builder.py` verify disable/add functionality but don't catch this bug because they only test flags that go through `mpi_extra`.
+- **Bug (FIXED)**: MPI config `disable` list only applies to `mpi_extra` flags, not core `mpi_args`. In `MPICommandBuilder.build_command()`, the disable/add pipeline only processes flags from `_build_mpi_extra()`, while flags from `_build_mpi_args()` (like `--map-by ppr:N:node` for OpenMPI) bypass filtering entirely. This prevents users from disabling core flags, breaking workarounds for OpenMPI version differences (e.g., 4.1.x uses `--rankfile <path>` vs 5.x uses `--map-by rankfile:file=<path>`).
+  - **Fix applied**: `_apply_disable()` and `_apply_add()` now operate on the combined `mpi_args + mpi_extra` list in `build_command()`. Tests added for disabling core args across all three backends (OpenMPI, MPICH, srun).
 
 [2026-04-18]
 - **Bug**: Sub-node srun jobs fail with "Memory required by task is not available" because the first srun step reserves all node memory, leaving none for subsequent steps.

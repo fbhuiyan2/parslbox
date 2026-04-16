@@ -973,6 +973,108 @@ class TestMPICommandGeneration:
         cmd = commands["PBX_MPI_PREFIX"]
         assert "-hosts test-node-00" in cmd
 
+    def test_disable_core_arg_openmpi_map_by(self, resource_manager):
+        """Test that disable can remove --map-by from core mpi_args (OpenMPI).
+
+        Regression test for the bug where disable only applied to mpi_extra,
+        not core mpi_args. This is the OpenMPI 4.1.x vs 5.x workaround case:
+        disable the 5.x --map-by syntax and add the 4.1.x --rankfile syntax.
+        """
+        job = {'job_id': 20, 'num_nodes': 1, 'ngpus': 0, 'node_occupancy': 1.0, 'ranks_per_node': 4}
+        assignment = resource_manager.assign_resources(job)
+        spec = create_job_resource_spec(job)
+
+        mpi_config = MPIConfig(
+            backend=MPIBackend.OPENMPI,
+            cpu_bind_method="none",  # triggers --map-by ppr:N:node in core args
+            disable=["--map-by"],
+            add=["--rankfile /tmp/my_rankfile"],
+        )
+        commands = build_mpi_command(mpi_config, resource_manager.system_config, assignment, spec)
+
+        cmd = commands["PBX_MPI_PREFIX"]
+        assert "--map-by" not in cmd
+        assert "--rankfile /tmp/my_rankfile" in cmd
+        assert "-np 4" in cmd  # core arg that should remain
+
+    def test_disable_core_arg_srun_ntasks_per_node(self):
+        """Test that disable can remove --ntasks-per-node from core mpi_args (srun)."""
+        config = MockSystemConfig(mpi_cmd="srun")
+        rm = ResourceManager(config, job_tracker=None)
+
+        job = {'job_id': 21, 'num_nodes': 1, 'ngpus': 0, 'node_occupancy': 1.0, 'ranks_per_node': 4}
+        assignment = rm.assign_resources(job)
+        spec = create_job_resource_spec(job)
+
+        mpi_config = MPIConfig(
+            backend=MPIBackend.SRUN,
+            disable=["--ntasks-per-node"],
+        )
+        commands = build_mpi_command(mpi_config, config, assignment, spec)
+
+        cmd = commands["PBX_SRUN_PREFIX"]
+        assert "--ntasks-per-node" not in cmd
+        assert "-n 4" in cmd  # core arg that should remain
+
+    def test_disable_core_arg_mpich_ppn(self):
+        """Test that disable can remove --ppn from core mpi_args (MPICH)."""
+        config = MockSystemConfig(mpi_cmd="mpiexec")
+        rm = ResourceManager(config, job_tracker=None)
+
+        job = {'job_id': 22, 'num_nodes': 1, 'ngpus': 0, 'node_occupancy': 1.0, 'ranks_per_node': 4}
+        assignment = rm.assign_resources(job)
+        spec = create_job_resource_spec(job)
+
+        mpi_config = MPIConfig(
+            backend=MPIBackend.MPICH,
+            disable=["--ppn"],
+        )
+        commands = build_mpi_command(mpi_config, config, assignment, spec)
+
+        cmd = commands["PBX_MPIEXEC_PREFIX"]
+        assert "--ppn" not in cmd
+        assert "-n 4" in cmd  # core arg that should remain
+
+    def test_add_flags_srun(self):
+        """Test adding custom flags via add for srun backend."""
+        config = MockSystemConfig(mpi_cmd="srun")
+        rm = ResourceManager(config, job_tracker=None)
+
+        job = {'job_id': 23, 'num_nodes': 1, 'ngpus': 0, 'node_occupancy': 1.0, 'ranks_per_node': 4}
+        assignment = rm.assign_resources(job)
+        spec = create_job_resource_spec(job)
+
+        mpi_config = MPIConfig(
+            backend=MPIBackend.SRUN,
+            add=["--exclusive", "--mem=64G"],
+        )
+        commands = build_mpi_command(mpi_config, config, assignment, spec)
+
+        cmd = commands["PBX_SRUN_PREFIX"]
+        assert "--exclusive" in cmd
+        assert "--mem=64G" in cmd
+
+    def test_disable_and_add_combined_srun(self):
+        """Test disable + add working together for srun backend."""
+        config = MockSystemConfig(mpi_cmd="srun")
+        rm = ResourceManager(config, job_tracker=None)
+
+        job = {'job_id': 24, 'num_nodes': 1, 'ngpus': 0, 'node_occupancy': 1.0, 'ranks_per_node': 4}
+        assignment = rm.assign_resources(job)
+        spec = create_job_resource_spec(job)
+
+        mpi_config = MPIConfig(
+            backend=MPIBackend.SRUN,
+            disable=["--ntasks-per-node"],
+            add=["--exclusive"],
+        )
+        commands = build_mpi_command(mpi_config, config, assignment, spec)
+
+        cmd = commands["PBX_SRUN_PREFIX"]
+        assert "--ntasks-per-node" not in cmd
+        assert "--exclusive" in cmd
+        assert "-n 4" in cmd
+
 
 class TestRankfileGeneration:
     """Test rankfile generation for OpenMPI and MPICH."""

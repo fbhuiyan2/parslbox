@@ -81,22 +81,21 @@ class MPICommandBuilder:
         mpi_cmd = self.config.get_mpi_command()
         mpi_args = self._build_mpi_args(total_ranks, ranks_per_node)
         mpi_extra = self._build_mpi_extra(assignment, job_spec, job_path, context)
-        
-        # Apply disable rules first
-        mpi_extra = self._apply_disable(mpi_extra)
-        
-        # Apply add rules with template substitution
-        mpi_extra = self._apply_add(mpi_extra, context)
-        
+
+        # Apply disable/add to ALL flags so users can override core args too
+        all_flags = mpi_args + mpi_extra
+        all_flags = self._apply_disable(all_flags)
+        all_flags = self._apply_add(all_flags, context)
+
         # Add GPU wrapper if enabled
         wrapper = ""
         if self.config.use_gpu_wrapper and job_spec.is_gpu_job():
             wrapper = self._generate_gpu_wrapper(assignment, job_spec, job_path)
             if "gpu-wrapper" in " ".join(self.config.disable):
                 wrapper = ""  # Disabled via config
-        
+
         # Build final command
-        parts = [mpi_cmd] + mpi_args + mpi_extra
+        parts = [mpi_cmd] + all_flags
         if wrapper:
             parts.append(wrapper)
         
