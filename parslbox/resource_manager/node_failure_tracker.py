@@ -40,7 +40,7 @@ class NodeHealthTracker:
     health_status: NodeHealth = NodeHealth.HEALTHY
     
     # Configuration (can be overridden by system config)
-    max_consecutive_failures: int = 3
+    max_consecutive_failures: int = 4
     quarantine_duration: int = 600  # 10 minutes
     
     # Error patterns that indicate persistent node issues
@@ -56,7 +56,27 @@ class NodeHealthTracker:
         r"Text file busy",
         r"Input/output error",
         r"Device or resource busy",
-        r"No space left on device"
+        r"No space left on device",
+        # MPI rank/node failure patterns
+        r"rank \d+ died from signal",
+        r"rank \d+ exit\w* with (?:signal|code)",
+        r"mpirun.*detected.*terminated",
+        r"mpirun.*has exited with a non-zero exit code",
+        r"MPI_ABORT",
+        r"ORTE_ERROR_LOG",
+        r"srun.*error.*task.*exited with",
+        r"srun.*error.*Node failure",
+        r"PMI_FAIL",
+        # System-level node failure patterns
+        r"Segmentation fault",
+        r"Bus error",
+        r"Killed",
+        r"Out of memory",
+        r"OOM",
+        r"Cannot allocate memory",
+        r"CUDA.*error",
+        r"GPU.*error",
+        r"Xid.*error",
     ])
     
     def classify_error(self, error_message: str) -> ErrorType:
@@ -70,12 +90,12 @@ class NodeHealthTracker:
             ErrorType indicating how to handle the error
         """
         if not error_message:
-            return ErrorType.TRANSIENT
+            return ErrorType.JOB_SPECIFIC  # No error info = no evidence of node issue
         
         # Check for persistent error patterns
         for pattern in self.persistent_error_patterns:
             if re.search(pattern, error_message, re.IGNORECASE):
-                logger.debug(f"Classified error as PERSISTENT: {error_message}")
+                logger.debug(f"Classified error as PERSISTENT (matched pattern)")
                 return ErrorType.PERSISTENT
         
         # Check for job-specific patterns (input file issues, etc.)
@@ -89,12 +109,13 @@ class NodeHealthTracker:
         
         for pattern in job_specific_patterns:
             if re.search(pattern, error_message, re.IGNORECASE):
-                logger.debug(f"Classified error as JOB_SPECIFIC: {error_message}")
+                logger.debug(f"Classified error as JOB_SPECIFIC (matched pattern)")
                 return ErrorType.JOB_SPECIFIC
         
-        # Default to transient for unknown errors
-        logger.debug(f"Classified error as TRANSIENT: {error_message}")
-        return ErrorType.TRANSIENT
+        # Default to job-specific for unrecognized errors — don't blame the node
+        # unless we see a known node-level error pattern
+        logger.debug(f"Classified error as JOB_SPECIFIC (unrecognized): {error_message[:200]}")
+        return ErrorType.JOB_SPECIFIC
     
     def record_failure(self, error_message: str = None) -> bool:
         """
@@ -108,30 +129,30 @@ class NodeHealthTracker:
         """
         current_time = time.time()
         error_type = self.classify_error(error_message)
+        logger.info(f"Node health: error classified as {error_type.value}")
         
         self.total_failures += 1
         self.last_failure_time = current_time
-        self.last_failure_error = error_message
+        self.last_failure_error = error_message[:200] if error_message else error_message
         
         if error_type == ErrorType.PERSISTENT:
             # Persistent errors always increment consecutive failures
             self.consecutive_failures += 1
-            logger.warning(f"Node persistent error detected: {error_message}")
+            logger.warning(f"Node persistent error detected. Consecutive failures: {self.consecutive_failures}/{self.max_consecutive_failures}")
         elif error_type == ErrorType.TRANSIENT:
             # Transient errors increment consecutive failures but with lower weight
             self.consecutive_failures += 1
-            logger.info(f"Node transient error detected: {error_message}")
+            logger.info(f"Node transient error detected. Consecutive failures: {self.consecutive_failures}/{self.max_consecutive_failures}")
         else:  # JOB_SPECIFIC
             # Job-specific errors don't count toward node health
-            logger.info(f"Job-specific error detected (not counting toward node health): {error_message}")
+            logger.info(f"Job-specific error detected (not counting toward node health)")
             return False
         
         # Check if we should quarantine
         if self.consecutive_failures >= self.max_consecutive_failures:
             self.health_status = NodeHealth.QUARANTINED
             self.quarantine_start_time = current_time
-            logger.error(f"Node quarantined after {self.consecutive_failures} consecutive failures. "
-                        f"Last error: {error_message}")
+            logger.error(f"Node quarantined after {self.consecutive_failures} consecutive failures")
             return True
         elif self.consecutive_failures >= self.max_consecutive_failures // 2:
             self.health_status = NodeHealth.SUSPECTED
@@ -203,7 +224,7 @@ class NodeFailureTracker:
     Provides centralized node health management and quarantine coordination.
     """
     
-    def __init__(self, max_consecutive_failures: int = 3, quarantine_duration: int = 300):
+    def __init__(self, max_consecutive_failures: int = 4, quarantine_duration: int = 300):
         """
         Initialize the failure tracker.
         

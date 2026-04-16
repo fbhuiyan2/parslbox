@@ -55,7 +55,7 @@ class ResourceManager:
         )
         
         # Initialize node failure tracker for fault tolerance
-        max_failures = getattr(system_config, 'MAX_CONSECUTIVE_FAILURES', 3)
+        max_failures = getattr(system_config, 'MAX_CONSECUTIVE_FAILURES', 4)
         quarantine_duration = getattr(system_config, 'QUARANTINE_DURATION', 600)  # 10 minutes
         self.failure_tracker = NodeFailureTracker(max_failures, quarantine_duration)
         

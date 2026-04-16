@@ -18,6 +18,7 @@ from parslbox.utils import path_utils
 from parslbox.utils.logging_utils import setup_logging, validate_log_level
 from parslbox.utils.pbx_config_utils import load_app_config, is_app_configured, load_full_config
 from parslbox.database import database
+from parslbox.resource_manager.node_failure_tracker import NodeHealth
 from parslbox.resource_manager.mpi_config import load_mpi_config
 from parslbox.resource_manager.mpi_command_builder import build_mpi_command, build_resource_launcher
 from parslbox.resource_manager.exceptions import InsufficientResources
@@ -579,25 +580,9 @@ def run(
         return len(new_jobs)
 
     while True:
-        # Exit check: no active futures
-        if not fut_to_item:
-            if not dynamic:
-                break
-            # Dynamic mode: immediate check for new jobs before exiting
-            new_count = discover_new_jobs()
-            if new_count > 0:
-                logger.info(f"Dynamic discovery: {new_count} new jobs found after last future completed, continuing run")
-                continue
-            # Check if backlog still has jobs (dependencies may resolve from external processes)
-            backlog_status = resource_manager.get_resource_status()
-            if backlog_status['backlogged_jobs'] > 0:
-                logger.debug(f"No active futures but {backlog_status['backlogged_jobs']} backlogged jobs, waiting...")
-                time.sleep(10)
-                continue
-            break  # No futures, no new jobs, no backlog — done
         try:
             current_time = time.time()
-            
+
             # Periodic status buffer flush (safety net for walltime termination)
             if current_time - last_flush_time >= flush_interval:
                 flushed = status_buffer.flush_all()
@@ -606,7 +591,7 @@ def run(
                 else:
                     logger.debug(f"Periodic flush: No pending updates")
                 last_flush_time = current_time
-            
+
             # Periodically attempt to recover quarantined nodes
             if current_time - last_recovery_attempt >= recovery_interval:
                 recovered_nodes = resource_manager.attempt_node_recovery()
@@ -624,7 +609,7 @@ def run(
                 # Check if future still exists (might have been processed already)
                 if fut not in fut_to_item:
                     continue
-                    
+
                 item = fut_to_item.pop(fut)
                 job = item['job']
                 app_instance = item['app_instance']
@@ -632,7 +617,7 @@ def run(
                 resource_manager = item['resource_manager']
                 job_id = job['job_id']
                 job_path = Path(job['path'])
-                
+
                 # Capture execution result and any errors
                 error_message = None
                 try:
@@ -641,111 +626,158 @@ def run(
                 except Exception as e:
                     error_message = str(e)
                     logger.error(f"Job {job_id}: Execution error occurred: {error_message}")
-                
+
                 # Always call check_success, let app decide based on error_message
                 job_status = app_instance.check_success(
-                    job_id=job_id, 
-                    job_path=job_path, 
+                    job_id=job_id,
+                    job_path=job_path,
                     db_path=db_path,
                     error_message=error_message
                 )
-                
+
                 # Validate and normalize the status from check_success
                 job_status = validate_and_normalize_status(job_status, job_id)
-                
+
                 # If job succeeded, run post-processing
                 if job_status == "Done":
                     logger.info(f"Job {job_id}: Success check passed. Running post-processing...")
                     try:
                         final_status = app_instance.postprocess(job_id=job_id, job_path=job_path, db_path=db_path)
-                        
+
                         # Validate and use postprocess result if it returns a valid status
                         if final_status:
                             validated_final_status = validate_and_normalize_status(final_status, job_id)
                             job_status = validated_final_status
                         # If postprocess returns None/empty, keep the check_success result
-                        
+
                     except Exception as e:
                         logger.error(f"Job {job_id}: Post-processing failed: {e}")
                         job_status = "Failed"
                 else:
                     logger.info(f"Job {job_id}: Success check failed. Skipping post-processing.")
-                
+
                 # Update JobTracker and buffer final status update
                 job_tracker.update_job_status(job_id, job_status)
                 status_buffer.add_status_update(job_id, status=job_status)
                 logger.info(f"Job {job_id}: Final status set to '{job_status}' (buffered).")
-                
+
                 # Free resources with health tracking based on job outcome
                 try:
                     job_succeeded = (job_status == "Done")
+
+                    # For failed jobs, read stderr to get actual error context for node health tracking
+                    stderr_error = None
+                    if not job_succeeded:
+                        stderr_file = job_path / f"pbx_job_{job_id}.err"
+                        try:
+                            if stderr_file.is_file():
+                                stderr_content = stderr_file.read_text(errors='replace')
+                                # Get last 50 lines — sufficient to capture error signatures
+                                stderr_tail = '\n'.join(stderr_content.splitlines()[-50:])
+                                if stderr_tail.strip():
+                                    stderr_error = stderr_tail
+                        except Exception as e:
+                            logger.debug(f"Job {job_id}: Could not read stderr file: {e}")
+
+                        logger.info(f"Job {job_id}: Checking stderr for node health classification")
+
                     resource_manager.free_resources_with_health_check(
-                        job_id=job_id, 
-                        job_succeeded=job_succeeded, 
-                        error_message=error_message if not job_succeeded else None
+                        job_id=job_id,
+                        job_succeeded=job_succeeded,
+                        error_message=stderr_error
                     )
                     logger.info(f"Job {job_id}: Finished running. Freed allocated resources.")
-                    
-                    # Filter backlog by dependency satisfaction using JobTracker, then schedule
-                    try:
-                        dependency_ready_jobs = resource_manager.get_dependency_ready_jobs_from_backlog()
-                        
-                        # Schedule only dependency-ready jobs
-                        rescheduled_jobs = resource_manager.schedule_backlog(dependency_ready_jobs)
-                    except Exception as e:
-                        logger.error(f"Error during backlog scheduling: {e}")
-                        rescheduled_jobs = []
-                    
-                    # Create Parsl futures for rescheduled jobs
-                    for rescheduled_job in rescheduled_jobs:
-                        rescheduled_app_name = rescheduled_job['app']
-                        rescheduled_job_id = rescheduled_job['job_id']
-                        
-                        if rescheduled_app_name in app_instances:
-                            logger.info(f"Creating Parsl future for rescheduled job {rescheduled_job_id}")
-                            new_futures = []
-                            success = create_parsl_future(
-                                rescheduled_job, 
-                                app_instances[rescheduled_app_name], 
-                                app_configs[rescheduled_app_name],
-                                mpi_configs[rescheduled_app_name],
-                                config_name, db_path, scheduler, resource_manager, 
-                                new_futures, system_config, status_buffer
-                            )
-                            
-                            # Add each new future to tracking dict
-                            for new_item in new_futures:
-                                new_fut = new_item['future']
-                                fut_to_item[new_fut] = new_item
-                                logger.info(f"Added rescheduled job {rescheduled_job_id} to tracking (total active: {len(fut_to_item)})")
-                        else:
-                            logger.error(f"App context not found for rescheduled job {rescheduled_job_id}")
-                            job_tracker.update_job_status(rescheduled_job_id, "Failed")
-                            database.update_jobs(db_path, job_ids=[rescheduled_job_id], status="Failed")
-                    
-                    # FLUSH POINT 2: After processing completed job and rescheduling
-                    # Batch update final statuses and new "Running" statuses
-                    updated_count = status_buffer.flush_all()
-                    if updated_count > 0:
-                        logger.debug(f"Batch updated status for {updated_count} jobs after job {job_id} completion")
-                    
-                    # Log comprehensive status after rescheduling
+
+                    # Log status after freeing resources
                     status = resource_manager.get_resource_status()
-                    dependency_ready_count = len(dependency_ready_jobs) if 'dependency_ready_jobs' in locals() else 0
-                    logger.info(f"Run Status: jobs running {len(fut_to_item)}, jobs backlogged {status['backlogged_jobs']}, dependency ready jobs {dependency_ready_count}")
+                    logger.info(f"Run Status: jobs running {len(fut_to_item)}, jobs backlogged {status['backlogged_jobs']}")
                     available_cores_percnt = status['available_cpu_capacity'] / status['available_nodes'] if status['available_nodes'] > 0 else 0
                     logger.info(f"Resource Status: Total {status['available_gpus']} GPUs and {available_cores_percnt:.2f} % of all cores available on {status['available_nodes']} nodes")
-                            
+
                 except Exception as e:
-                    logger.error(f"Job {job_id}: Failed to free resources or schedule backlog: {e}")
-                
+                    logger.error(f"Job {job_id}: Failed to free resources: {e}")
+
                 # Break to refresh as_completed() with new futures
                 break
-                        
+
         except TimeoutError:
-            # No futures completed in timeout period, continue waiting
-            logger.debug(f"Waiting for {len(fut_to_item)} jobs to complete...")
-            continue
+            # No futures completed in timeout period
+            pass
+
+        # Schedule dependency-ready backlog jobs (runs every iteration)
+        try:
+            dependency_ready_jobs = resource_manager.get_dependency_ready_jobs_from_backlog()
+            rescheduled_jobs = resource_manager.schedule_backlog(dependency_ready_jobs)
+        except Exception as e:
+            logger.error(f"Error during backlog scheduling: {e}")
+            dependency_ready_jobs = []
+            rescheduled_jobs = []
+
+        # Create Parsl futures for rescheduled jobs
+        for rescheduled_job in rescheduled_jobs:
+            rescheduled_app_name = rescheduled_job['app']
+            rescheduled_job_id = rescheduled_job['job_id']
+
+            if rescheduled_app_name in app_instances:
+                logger.info(f"Creating Parsl future for rescheduled job {rescheduled_job_id}")
+                new_futures = []
+                success = create_parsl_future(
+                    rescheduled_job,
+                    app_instances[rescheduled_app_name],
+                    app_configs[rescheduled_app_name],
+                    mpi_configs[rescheduled_app_name],
+                    config_name, db_path, scheduler, resource_manager,
+                    new_futures, system_config, status_buffer
+                )
+
+                # Add each new future to tracking dict
+                for new_item in new_futures:
+                    new_fut = new_item['future']
+                    fut_to_item[new_fut] = new_item
+                    logger.info(f"Added rescheduled job {rescheduled_job_id} to tracking (total active: {len(fut_to_item)})")
+            else:
+                logger.error(f"App context not found for rescheduled job {rescheduled_job_id}")
+                job_tracker.update_job_status(rescheduled_job_id, "Failed")
+                database.update_jobs(db_path, job_ids=[rescheduled_job_id], status="Failed")
+
+        # Log status after scheduling, only if jobs were rescheduled
+        if rescheduled_jobs:
+            status = resource_manager.get_resource_status()
+            # Recount dep-ready jobs — scheduled jobs were removed from backlog
+            dependency_ready_count = len(resource_manager.get_dependency_ready_jobs_from_backlog())
+            logger.info(f"Run Status: jobs running {len(fut_to_item)}, jobs backlogged {status['backlogged_jobs']}, dependency ready jobs {dependency_ready_count}")
+            available_cores_percnt = status['available_cpu_capacity'] / status['available_nodes'] if status['available_nodes'] > 0 else 0
+            logger.info(f"Resource Status: Total {status['available_gpus']} GPUs and {available_cores_percnt:.2f} % of all cores available on {status['available_nodes']} nodes")
+
+        # Flush status buffer (runs every iteration as safety net)
+        updated_count = status_buffer.flush_all()
+        if updated_count > 0:
+            logger.debug(f"Batch updated status for {updated_count} jobs")
+
+        # Exit check: no active futures — should we keep waiting or exit?
+        if not fut_to_item:
+            has_quarantined = any(
+                n.health_tracker.health_status == NodeHealth.QUARANTINED
+                for n in resource_manager.nodes
+            )
+            # Recount dep-ready jobs (fresh after scheduling may have consumed some)
+            dep_ready_jobs = resource_manager.get_dependency_ready_jobs_from_backlog()
+
+            if dynamic:
+                # Dynamic mode: check for new jobs first
+                new_count = discover_new_jobs()
+                if new_count > 0:
+                    continue
+
+            if dep_ready_jobs and has_quarantined:
+                # Jobs waiting + sick nodes — keep looping for recovery
+                logger.debug(f"No active futures but {len(dep_ready_jobs)} dep-ready jobs waiting on quarantined node recovery")
+                time.sleep(10)
+                continue
+
+            # No dep-ready jobs or no quarantined nodes — done
+            logger.info("No active futures and no recoverable work remaining — run complete.")
+            break
 
     logger.info("All jobs completed, including rescheduled ones")
     
