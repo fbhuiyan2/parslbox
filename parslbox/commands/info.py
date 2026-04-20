@@ -51,6 +51,7 @@ def info(
     env_file: bool = typer.Option(False, "--envfile", "-e", help="Show only the environment file field."),
     parents: bool = typer.Option(False, "--parents", "-P", help="Show all parent dependencies without truncation."),
     req: Optional[str] = typer.Option(None, "--req", "-r", help="Calculate resource requirements for a target system (e.g., polaris, crux, sophia)."),
+    cmdline: Optional[str] = typer.Option(None, "--cmdline", "-c", help="Show MPI/srun command line for a target system (e.g., polaris, crux, sophia)."),
 ):
     """
     Shows detailed information about specific jobs.
@@ -164,17 +165,23 @@ def info(
                 row_data.append(str(value))
         table.add_row(*row_data)
     
-    console.print(table)
-    
-    # Show summary
-    if len(jobs) == 1:
-        console.print(f"[green]Showing information for 1 job.[/green]")
-    else:
-        console.print(f"[green]Showing information for {len(jobs)} jobs.[/green]")
+    # Print table unless --req or --cmdline is used (those have their own output)
+    if not req and not cmdline:
+        console.print(table)
+
+        # Show summary
+        if len(jobs) == 1:
+            console.print(f"[green]Showing information for 1 job.[/green]")
+        else:
+            console.print(f"[green]Showing information for {len(jobs)} jobs.[/green]")
 
     # Resource requirement analysis
     if req:
         _print_resource_requirements(jobs, req)
+
+    # Command line preview
+    if cmdline:
+        _print_cmdline(jobs, cmdline)
 
 
 def _print_resource_requirements(jobs: list, system_name: str):
@@ -335,3 +342,135 @@ def _calc_cpu_nodes(cpu_jobs: list) -> tuple:
     opt = multinode_nodes + math.ceil(total_occupancy)  # CPU can't pack tighter than occupancy
 
     return (sim, opt)
+
+
+def _print_cmdline(jobs: list, system_name: str):
+    """Print MPI/srun command line preview for jobs."""
+    from parslbox.system_configs.loader import get_system_config, get_available_systems
+    from parslbox.resource_manager.mpi_config import load_mpi_config
+    from parslbox.resource_manager.mpi_command_builder import MPICommandBuilder
+    from parslbox.resource_manager.models import create_job_resource_spec
+    from parslbox.utils.pbx_config_utils import load_full_config
+    import tempfile
+    import shutil
+
+    # Validate system name
+    available = get_available_systems()
+    if system_name not in available:
+        console.print(f"\n[red]Unknown system '{system_name}'. Available: {', '.join(available)}[/red]")
+        return
+
+    sys_config = get_system_config(system_name)
+    gpus_per_node = sys_config.GPUS_PER_NODE
+    cores_per_node = sys_config.CORES_PER_NODE
+    excluded_cores = getattr(sys_config, 'EXCLUDE_CORES', None) or []
+    effective_cores = cores_per_node - len(excluded_cores)
+
+    # Load MPI config from config.yaml (per-app, since MPI settings can differ per app)
+    full_config = load_full_config()
+    mpi_configs = {}  # cache per app_name
+
+    # Use a temp directory for any generated files (rankfiles, gpu wrappers)
+    tmp_dir = tempfile.mkdtemp(prefix="pbx_cmdline_preview_")
+
+    try:
+        # Build table
+        table = Table("ID", "Resources", "Command", expand=True)
+        table.columns[2].no_wrap = False
+        table.columns[2].overflow = "fold"
+
+        for job in jobs:
+            job_spec = create_job_resource_spec(job)
+            app_name = job['app']
+
+            # Load or reuse MPI config for this app
+            if app_name not in mpi_configs:
+                try:
+                    mpi_cfg = load_mpi_config(
+                        system_name=system_name,
+                        app_name=app_name,
+                        system_config_class=sys_config,
+                        yaml_config=full_config
+                    )
+                    mpi_configs[app_name] = mpi_cfg
+                except Exception as e:
+                    mpi_configs[app_name] = None
+                    table.add_row(str(job['job_id']), "?", f"[red]Error loading MPI config for app '{app_name}': {e}[/red]")
+                    continue
+
+            mpi_cfg = mpi_configs[app_name]
+            if mpi_cfg is None:
+                table.add_row(str(job['job_id']), "?", f"[red]MPI config unavailable for app '{app_name}'[/red]")
+                continue
+
+            # Build resource string
+            if job_spec.ngpus > 0:
+                res_str = f"{job_spec.num_nodes}N/{job_spec.ngpus}G"
+            elif job_spec.node_occupancy < 1.0:
+                res_str = f"{job_spec.num_nodes}N/{job_spec.node_occupancy}occ"
+            else:
+                res_str = f"{job_spec.num_nodes}N/CPU"
+
+            # Create synthetic assignment
+            assignment = _create_synthetic_assignment(job_spec, gpus_per_node, effective_cores)
+
+            # Build command (use tmp_dir for any generated files)
+            builder = MPICommandBuilder(mpi_cfg, sys_config)
+            try:
+                cmd = builder.build_command(assignment, job_spec, job_path=tmp_dir)
+            except Exception as e:
+                cmd = f"[error: {e}]"
+
+            table.add_row(str(job['job_id']), res_str, cmd)
+
+        console.print()
+        console.print(f"[bold]Command line preview for {system_name}[/bold] "
+                      f"(hostnames are placeholders):")
+        console.print(table)
+
+    finally:
+        # Clean up temp directory with generated files
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _create_synthetic_assignment(job_spec, gpus_per_node, effective_cores):
+    """Create a synthetic ResourceAssignment with placeholder hostnames for command preview."""
+    from parslbox.resource_manager.models import ResourceAssignment
+
+    num_nodes = job_spec.num_nodes
+    node_ids = [f"node-{i}" for i in range(num_nodes)]
+    hostnames = [f"host-{i}" for i in range(num_nodes)]
+
+    # Calculate ranks per node
+    if job_spec.is_gpu_job():
+        if num_nodes > 1:
+            ranks_per_node = job_spec.ngpus // num_nodes
+        else:
+            ranks_per_node = job_spec.ngpus
+    else:
+        ranks_per_node = job_spec.ranks_per_node
+
+    cores_per_rank = effective_cores // ranks_per_node if ranks_per_node > 0 else effective_cores
+
+    # Build per-node GPU and CPU assignments
+    gpu_assignments = []
+    cpu_assignments = []
+    for node_idx in range(num_nodes):
+        node_gpus = {}
+        node_cpus = {}
+        for rank in range(ranks_per_node):
+            if job_spec.is_gpu_job():
+                node_gpus[rank] = [rank]  # GPU ID = rank index within node
+            start_core = rank * cores_per_rank
+            node_cpus[rank] = list(range(start_core, start_core + cores_per_rank))
+        gpu_assignments.append(node_gpus)
+        cpu_assignments.append(node_cpus)
+
+    return ResourceAssignment(
+        job_id=job_spec.job_id,
+        node_ids=node_ids,
+        hostnames=hostnames,
+        gpu_assignments=gpu_assignments,
+        cpu_assignments=cpu_assignments,
+        node_occupancy=job_spec.node_occupancy,
+    )
