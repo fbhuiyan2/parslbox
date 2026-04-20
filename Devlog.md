@@ -63,3 +63,8 @@ It serves as a quick reference for resolved problems and their solutions, separa
     parts = [mpi_cmd] + all_flags
     ```
   - **Impact**: This would make `disable` work as documented and expected — users could remove ANY MPI flag from the final command, regardless of where it was generated. Tests in `test_mpi_command_builder.py` verify disable/add functionality but don't catch this bug because they only test flags that go through `mpi_extra`.
+
+[2026-04-18]
+- **Bug**: Sub-node srun jobs fail with "Memory required by task is not available" because the first srun step reserves all node memory, leaving none for subsequent steps.
+  - **Fix**: Added `--mem=0` to srun args in `_build_mpi_args()` (mpi_command_builder.py). `--mem=0` grants each job step access to all available job memory on the node, preventing the default behavior where the first step reserves all memory.
+  - **Note**: `--mem=0` can lead to memory failures if multiple sub-node jobs on the same node consume a lot of memory simultaneously (no per-step memory limit). A safer approach is to use `--mem-per-cpu` with a `MEMORY_PER_NODE` value added to the system config, calculated as `memory_per_node / cores_per_node`. This covers both CPU and GPU systems and enforces per-step memory limits.

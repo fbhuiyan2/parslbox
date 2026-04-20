@@ -242,9 +242,13 @@ class MPICommandBuilder:
         
         elif backend == MPIBackend.SRUN:
             # SRUN minimal: -n N --ntasks-per-node M
+            # --mem=0 grants each step access to all available job memory
+            # on the node, preventing "Memory required by task is not
+            # available" errors for sub-node jobs.
             return [
                 "-n", str(total_ranks),
-                "--ntasks-per-node", str(ranks_per_node)
+                "--ntasks-per-node", str(ranks_per_node),
+                "--mem=0"
             ]
         
         return []
