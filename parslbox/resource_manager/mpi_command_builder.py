@@ -277,10 +277,47 @@ class MPICommandBuilder:
             elif backend == MPIBackend.SRUN:
                 extra.extend(["--nodelist", hostlist])
         
+        # For srun sub-node GPU jobs, declare the GPU share for this step
+        # so SLURM can partition GPUs between concurrent steps on the same
+        # node. Without --gres, the first step claims all job GPUs and
+        # subsequent steps fail with "Invalid gres specification".
+        # --gpu-bind=none prevents SLURM from overriding CUDA_VISIBLE_DEVICES
+        # (PBX handles GPU assignment via wrappers/env vars).
+        # Full-node and multi-node GPU jobs don't need this — they use all
+        # GPUs on their nodes by default.
+        if backend == MPIBackend.SRUN and job_spec.is_gpu_job():
+            job_type = job_spec.detect_job_type(self.system_config)
+            if job_type == "subnode_gpu":
+                ranks_per_node = int(context["ranks_per_node"])
+                extra.extend([f"--gres=gpu:{ranks_per_node}", "--gpu-bind=none"])
+
         # CPU binding
         extra.extend(self._build_cpu_bind_flags(assignment, job_spec, job_path, context))
-        
+
+        # For Slurm sub-node jobs, constrain the step to just the assigned
+        # slice of the allocation so concurrent steps do not over-claim memory.
+        if self._should_add_srun_exact(job_spec):
+            extra.append("--exact")
+
         return extra
+
+    def _should_add_srun_exact(self, job_spec: 'JobResourceSpec') -> bool:
+        """Return True when SRUN should scope the step to a sub-node allocation."""
+        if self.config.backend != MPIBackend.SRUN:
+            return False
+
+        if hasattr(job_spec, "detect_job_type"):
+            job_type = job_spec.detect_job_type(self.system_config)
+            return job_type in {"subnode_cpu", "subnode_gpu"}
+
+        if getattr(job_spec, "num_nodes", 1) != 1:
+            return False
+
+        if job_spec.is_gpu_job():
+            gpus_per_node = getattr(self.system_config, "GPUS_PER_NODE", job_spec.ngpus)
+            return job_spec.ngpus < gpus_per_node
+
+        return getattr(job_spec, "node_occupancy", 1.0) < 1.0
     
     def _build_cpu_bind_flags(
         self,
@@ -550,14 +587,21 @@ def build_resource_launcher(
     """
     from parslbox.resource_manager.models import JobResourceSpec, ResourceAssignment
 
+    excluded_cores = getattr(system_config, "EXCLUDE_CORES", None) or []
+    effective_cores = system_config.CORES_PER_NODE - len(excluded_cores)
+
     # Synthetic spec to make MPICommandBuilder produce -n 1 --ppn 1.
     # The actual job can be any size — PBX always launches 1 process
     # since the app handles its own parallelism (USES_MPI=False).
+    # node_occupancy starts at 1.0 and is recalculated below from the
+    # actual core assignment, so the srun step is scoped to exactly the
+    # resources the resource manager allocated (not the original request,
+    # which may differ due to excluded cores or rounding).
     single_spec = JobResourceSpec(
         job_id=job_spec.job_id,
         num_nodes=1,
         ngpus=0,  # No GPU handling via MPI — use env vars instead
-        node_occupancy=job_spec.node_occupancy,
+        node_occupancy=1.0,
         ranks_per_node=1,
     )
 
@@ -567,6 +611,11 @@ def build_resource_launcher(
         for rank, cores in assignment.cpu_assignments[0].items():
             all_cores.extend(cores)
     all_cores = sorted(set(all_cores))
+
+    # Recalculate occupancy from actual assigned cores so that
+    # _should_add_srun_exact correctly identifies sub-node jobs.
+    if len(assignment.node_ids) == 1 and all_cores and effective_cores > 0:
+        single_spec.node_occupancy = min(1.0, len(all_cores) / effective_cores)
 
     # Preserve ALL nodes/hostnames for the hostlist,
     # but only rank 0 on node 0 has CPU assignments

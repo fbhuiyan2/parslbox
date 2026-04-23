@@ -36,6 +36,7 @@ class TestMPICommandBuilder:
         # Mock system config
         self.mock_system_config = Mock()
         self.mock_system_config.CORES_PER_NODE = 64
+        self.mock_system_config.GPUS_PER_NODE = 4
         self.mock_system_config.EXCLUDE_CORES = []
 
         # Default MPI config (MPICH, minimal)
@@ -217,6 +218,47 @@ class TestMPICommandBuilder:
         assert "-n 1200" in command
         assert "--ntasks-per-node 12" in command
         assert "--ntasks-per-node 1200" not in command
+
+    # --- SRUN GPU gres tests ---
+
+    def test_srun_subnode_gpu_job_has_gres_flags(self):
+        """SRUN sub-node GPU job: assert --gres=gpu:N and --gpu-bind=none."""
+        self.mock_job_spec.is_gpu_job.return_value = True
+        self.mock_job_spec.ngpus = 2
+        self.mock_job_spec.num_nodes = 1
+        self.mock_job_spec.get_total_ranks.return_value = 2
+        self.mock_job_spec.detect_job_type.return_value = "subnode_gpu"
+
+        config = MPIConfig(backend=MPIBackend.SRUN)
+        builder = MPICommandBuilder(config, self.mock_system_config)
+        command = builder.build_command(self.mock_assignment, self.mock_job_spec)
+
+        assert "--gres=gpu:2" in command
+        assert "--gpu-bind=none" in command
+
+    def test_srun_cpu_job_no_gres_flags(self):
+        """SRUN CPU job: assert no --gres or --gpu-bind."""
+        self.mock_job_spec.is_gpu_job.return_value = False
+
+        config = MPIConfig(backend=MPIBackend.SRUN)
+        builder = MPICommandBuilder(config, self.mock_system_config)
+        command = builder.build_command(self.mock_assignment, self.mock_job_spec)
+
+        assert "--gres" not in command
+        assert "--gpu-bind" not in command
+
+    def test_openmpi_gpu_job_no_gres_flags(self):
+        """OpenMPI GPU job: assert no --gres (srun-only flag)."""
+        self.mock_job_spec.is_gpu_job.return_value = True
+        self.mock_job_spec.ngpus = 2
+        self.mock_job_spec.get_total_ranks.return_value = 2
+
+        config = MPIConfig(backend=MPIBackend.OPENMPI)
+        builder = MPICommandBuilder(config, self.mock_system_config)
+        command = builder.build_command(self.mock_assignment, self.mock_job_spec)
+
+        assert "--gres" not in command
+        assert "--gpu-bind" not in command
 
     # --- Hostlist tests ---
 

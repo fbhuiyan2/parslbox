@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.1] - 2026-04-22
+
+### Added
+
+#### srun GPU Resource Partitioning (`--gres=gpu:N --gpu-bind=none`)
+- **Sub-node GPU jobs now declare their GPU share** via `--gres=gpu:N` in srun commands. Without this, the first srun step implicitly claims all job GPUs and concurrent sub-node steps fail with `srun: error: Invalid generic resource (gres) specification`
+- **`--gpu-bind=none`** prevents SLURM from overriding `CUDA_VISIBLE_DEVICES`, which would clash with PBX's own GPU assignment via wrappers and env vars
+- Only added for sub-node GPU jobs; full-node and multi-node GPU jobs use all node GPUs by default
+
+#### `--exact` Flag Restored for srun Sub-node Jobs
+- **`--exact` was present in the deprecated `mpi_launcher_depr.py`** (added in v0.8.1) but was not carried over when `mpi_command_builder.py` replaced it. Now restored via `_should_add_srun_exact()` helper that checks job type (`subnode_cpu` or `subnode_gpu`)
+- Prevents srun steps from accessing more resources than allocated, enabling correct sub-node isolation on SLURM
+
+### Fixed
+
+#### `build_resource_launcher` Node Occupancy
+- **`node_occupancy` now recalculated from actual assigned cores** instead of passing through the original job request. Accounts for excluded cores and rounding, ensuring `_should_add_srun_exact()` correctly identifies sub-node jobs
+
+### Modified Files
+- `parslbox/resource_manager/mpi_command_builder.py` — `--gres`/`--gpu-bind=none` for sub-node GPU, `--exact` via `_should_add_srun_exact()`, cores_per_rank from assignment, resource launcher occupancy fix
+- `tests/test_comprehensive_resource_manager.py` — Tests for gres flags, `--exact`, depth binding with sub-node GPU and excluded cores
+- `tests/test_mpi_command_builder.py` — Unit tests for gres flags, `GPUS_PER_NODE` in mock config
+
+---
+
 ## [0.9.0] - 2026-04-10
 
 ### Added
