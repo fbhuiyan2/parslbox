@@ -1,11 +1,9 @@
 {
   "mcpServers": {
     "parslbox": {
-      "command": "python",
-      "args": ["-m", "parslbox.mcp.mcp_server", "--stdio"]
-    },
-    "parslbox-http": {
-      "url": "http://127.0.0.1:9795/mcp"
+      "command": "/path/to/your/parslbox_env/bin/python",
+      "args": ["-m", "parslbox.mcp.mcp_server", "--stdio"],
+      "cwd": "/path/to/parslbox-repo-dir"
     }
   }
 }
