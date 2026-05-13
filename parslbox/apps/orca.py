@@ -15,6 +15,12 @@ class OrcaApp(AppBase):
     ORCA requires:
     - A .nodes file listing hostnames and available slots per host
     - A --host argument passed through the command line
+
+    MPI config note: Since ORCA ignores pbx's mpi_prefix, most mpi:
+    settings (backend, use_hostlist, cpu_bind_method, add, disable)
+    have no effect. The only setting that matters is use_short_hostnames,
+    which controls whether hostnames in the .nodes file and --host arg
+    are stripped of their domain suffix.
     """
 
     INPUT_REQUIRED = True
