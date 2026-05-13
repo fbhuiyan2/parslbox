@@ -339,8 +339,15 @@ def add(
             input_info = f" (input: {final_input_file})" if final_input_file else " (no input file)"
             typer.secho(f"✅ Added {len(job_ids)} job(s) with IDs: {', '.join(map(str, job_ids))}{input_info}", fg=typer.colors.GREEN)
                 
+        if app == "orca" and job_ids:
+            typer.secho(
+                "Note: Ensure that %pal nprocs in your ORCA input matches the total ranks "
+                "assigned to this job (ranks_per_node * nnodes). PBX does not check this.",
+                fg=typer.colors.YELLOW
+            )
+
         typer.echo("---")  # Separator
-        
+
         # Summary with both successes and failures
         if success_count > 0 and failed_jobs:
             typer.secho(f"Summary: Successfully added {success_count} job(s), {len(failed_jobs)} failed.", fg=typer.colors.BLUE)

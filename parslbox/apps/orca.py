@@ -37,10 +37,12 @@ class OrcaApp(AppBase):
         nodes_file = in_file.rsplit('.', 1)[0] + '.nodes'
 
         hostnames = hostnames_str.split(',') if hostnames_str else []
-        nodes_content = '\\n'.join(f"{h} slots={cores_per_node}" for h in hostnames)
+        nodes_content = '\n'.join(f"{h} slots={cores_per_node}" for h in hostnames)
         host_arg = ','.join(f"{h}:{cores_per_node}" for h in hostnames)
 
-        return f"""echo '{nodes_content}' > {nodes_file}
+        return f"""cat > {nodes_file} << 'ORCA_NODES_EOF'
+{nodes_content}
+ORCA_NODES_EOF
 echo "INFO: ORCA nodes file: {nodes_file}"
 echo "INFO: ORCA host arg: --host {host_arg}"
 {executable} ./{in_file} "--host {host_arg}"
