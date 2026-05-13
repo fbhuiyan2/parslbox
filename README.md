@@ -9,7 +9,7 @@
 ▒▒▒▒▒         ▒▒▒▒▒▒▒▒ ▒▒▒▒▒     ▒▒▒▒▒▒  ▒▒▒▒▒ ▒▒▒▒▒▒▒▒▒▒▒   ▒▒▒▒▒▒  ▒▒▒▒▒ ▒▒▒▒▒
 ```
 
-Your autopilot for HPC job orchestration. ParslBox manages multi-application workflows (LAMMPS, VASP, Python, Julia, custom apps) across PBS and SLURM clusters with resource-aware scheduling, dependency tracking, and fault tolerance.
+Your autopilot for HPC job orchestration. ParslBox manages multi-application workflows (LAMMPS, VASP, ORCA, Python, Julia, custom apps) across PBS and SLURM clusters with resource-aware scheduling, dependency tracking, and fault tolerance.
 
 ParslBox provides a CLI (`pbx`), a Python API, and an MCP server for AI-agent integration.
 
@@ -17,7 +17,7 @@ ParslBox provides a CLI (`pbx`), a Python API, and an MCP server for AI-agent in
 
 - **Job database:** Persistent SQLite tracking for job paths, resource requirements, dependencies, and status across sessions. Multiple isolated databases via `PBX_DB_PATH`
 - **Job lifecycle:** add, update, filter, run with dependency support (parent IDs, parent tags)
-- **Built-in apps:** LAMMPS, VASP, Python, Julia — plus pluggable custom apps
+- **Built-in apps:** LAMMPS, VASP, ORCA, Python, Julia — plus pluggable custom apps
 - **Resource-aware execution:**
   - Pack multiple sub-node jobs onto shared nodes (GPU or CPU)
   - Run multi-node MPI jobs with exclusive node allocation
@@ -144,8 +144,11 @@ pbx rm $(pbx filter --status done)
 |-----|-----|----------------|---------------|---------------|
 | **lammps** | Yes | Yes | `in.lammps` | Checks for "Total wall time:" in `log.lammps` |
 | **vasp** | Yes | No | — | Auto-selects `vasp_gpu` or `vasp_std` |
+| **orca** | Internal | Yes | `input.inp` | Checks for "ORCA TERMINATED NORMALLY" in `.out` files |
 | **python** | No | Yes | — | Reads `PBX_JOB_STATUS_REPORT` file via `report_status()` |
 | **julia** | No | Yes | — | Reads `PBX_JOB_STATUS_REPORT` file |
+
+ORCA manages its own MPI parallelism via a bundled OpenMPI — pbx does not wrap it with `mpirun`. Instead, pbx generates a `.nodes` file and passes `--host` to ORCA's internal launcher. Parallelism is controlled by `%pal nprocs N end` in the ORCA input file. Ensure ORCA's directory is first on `PATH` so its bundled `mpirun` takes priority over the system MPI.
 
 Non-MPI apps (Python, Julia) are automatically constrained to their assigned node/resources via a resource launcher. Scripts can access the MPI command via the `PBX_MPI_PREFIX` environment variable if needed.
 

@@ -114,6 +114,13 @@ def create_parsl_future(job, app_instance, app_config, mpi_config, config_name, 
         if mpi_config.env_setup:
             mpi_commands['PBX_MPI_ENV_SETUP'] = mpi_config.env_setup
 
+        # Expose host/core info for apps that manage their own MPI (e.g., ORCA)
+        hostnames = list(assignment.hostnames)
+        if mpi_config.use_short_hostnames:
+            hostnames = [h.split('.')[0] for h in hostnames]
+        mpi_commands['PBX_HOSTNAMES'] = ','.join(hostnames)
+        mpi_commands['PBX_CORES_PER_NODE'] = str(system_config.CORES_PER_NODE)
+
         logger.info(f"Job {job_id}: Generated MPI command - {mpi_commands.get('PBX_MPI_PREFIX', 'None')}")
 
         # For non-MPI apps, generate a resource launcher to constrain
