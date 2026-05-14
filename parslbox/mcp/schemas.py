@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Union
 
 
 class AddJobSchema(BaseModel):
@@ -155,9 +155,8 @@ class QSubSchema(BaseModel):
         description="PBS select specification. Can be a simple node count (e.g., '4') or a complex spec (e.g., '2:ncpus=32:ngpus=4').",
     )
 
-    walltime: int = Field(
-        gt=0,
-        description="Wall time in minutes (e.g., 90 for 1.5 hours).",
+    walltime: Union[int, float, str] = Field(
+        description="Wall time (default: minutes). Supports h/d suffixes (e.g., 90, 4.25h, 3.5d).",
     )
 
     project: Optional[str] = Field(
@@ -218,9 +217,8 @@ class SBatchSchema(BaseModel):
         description="Number of nodes to request (e.g., '4').",
     )
 
-    walltime: int = Field(
-        gt=0,
-        description="Wall time in minutes (e.g., 90 for 1.5 hours).",
+    walltime: Union[int, float, str] = Field(
+        description="Wall time (default: minutes). Supports h/d suffixes (e.g., 90, 4.25h, 3.5d).",
     )
 
     project: Optional[str] = Field(

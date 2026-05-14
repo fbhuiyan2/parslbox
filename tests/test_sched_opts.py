@@ -758,5 +758,96 @@ class TestSystemDefaultSchedOpts:
             assert "#PBS -l filesystems=home:eagle" in script
 
 
+# ============================================================
+# Tests for parse_walltime() and minutes_to_hms()
+# ============================================================
+
+from parslbox.commands.helpers.qsub_cmd_helpers import parse_walltime, minutes_to_hms
+
+
+class TestParseWalltime:
+    """Unit tests for parse_walltime()."""
+
+    def test_plain_integer_minutes(self):
+        assert parse_walltime("90") == 90.0
+
+    def test_plain_float_minutes(self):
+        assert parse_walltime("90.5") == 90.5
+
+    def test_explicit_m_suffix(self):
+        assert parse_walltime("120m") == 120.0
+
+    def test_hours_integer(self):
+        assert parse_walltime("2h") == 120.0
+
+    def test_hours_fractional(self):
+        assert parse_walltime("4.25h") == 255.0
+
+    def test_hours_half(self):
+        assert parse_walltime("0.5h") == 30.0
+
+    def test_days_integer(self):
+        assert parse_walltime("1d") == 1440.0
+
+    def test_days_fractional(self):
+        assert parse_walltime("3.5d") == 5040.0
+
+    def test_uppercase_suffix(self):
+        assert parse_walltime("2H") == 120.0
+        assert parse_walltime("1D") == 1440.0
+        assert parse_walltime("60M") == 60.0
+
+    def test_whitespace_stripped(self):
+        assert parse_walltime("  90  ") == 90.0
+        assert parse_walltime(" 2h ") == 120.0
+
+    def test_empty_raises(self):
+        with pytest.raises(ValueError):
+            parse_walltime("")
+
+    def test_invalid_raises(self):
+        with pytest.raises(ValueError):
+            parse_walltime("abc")
+
+    def test_no_number_raises(self):
+        with pytest.raises(ValueError):
+            parse_walltime("h")
+
+
+class TestMinutesToHms:
+    """Unit tests for minutes_to_hms()."""
+
+    def test_exact_hours(self):
+        assert minutes_to_hms(120) == "02:00:00"
+
+    def test_hours_and_minutes(self):
+        assert minutes_to_hms(90) == "01:30:00"
+
+    def test_fractional_minutes_with_seconds(self):
+        assert minutes_to_hms(90.5) == "01:30:30"
+
+    def test_zero(self):
+        assert minutes_to_hms(0) == "00:00:00"
+
+    def test_large_value(self):
+        assert minutes_to_hms(5040) == "84:00:00"
+
+    def test_quarter_hour(self):
+        assert minutes_to_hms(255) == "04:15:00"
+
+    def test_float_from_hours_conversion(self):
+        """4.25h -> 255 min -> 04:15:00"""
+        assert minutes_to_hms(parse_walltime("4.25h")) == "04:15:00"
+
+    def test_float_from_days_conversion(self):
+        """3.5d -> 5040 min -> 84:00:00"""
+        assert minutes_to_hms(parse_walltime("3.5d")) == "84:00:00"
+
+    def test_one_third_hour(self):
+        """1/3 hour = 20 min exactly"""
+        result = minutes_to_hms(20)
+        assert result == "00:20:00"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

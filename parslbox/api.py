@@ -6,7 +6,7 @@ allowing programmatic access to job management, execution, and monitoring.
 """
 
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Union
 import sqlite3
 import logging
 import os
@@ -33,6 +33,7 @@ from parslbox.commands.add import add_jobs
 from parslbox.commands.update import update_jobs
 from parslbox.commands.qsub import submit_to_scheduler
 from parslbox.commands.sbatch import submit_to_slurm
+from parslbox.commands.helpers.qsub_cmd_helpers import parse_walltime
 import parsl
 
 
@@ -428,7 +429,7 @@ class ParslBox:
         job_name: str,
         queue: str,
         select: str,
-        walltime: int,
+        walltime: Union[int, float, str],
         project: Optional[str] = None,
         run_dir: Optional[Path] = None,
         apps: Optional[List[str]] = None,
@@ -445,7 +446,7 @@ class ParslBox:
             job_name: PBS job name
             queue: PBS queue name
             select: PBS select specification (e.g., '4', '2:ncpus=32:ngpus=4', '1:ncpus=16+2:ncpus=32:ngpus=2')
-            walltime: Wall time in minutes
+            walltime: Wall time (default: minutes). Supports h/d suffixes (e.g., 90, 4.25h, 3.5d)
             project: Project/account name
             run_dir: Custom run directory (default: timestamped)
             apps: List of apps to run
@@ -462,13 +463,14 @@ class ParslBox:
             FileNotFoundError: If qsub command is not found
         """
         try:
+            walltime_minutes = parse_walltime(str(walltime))
             # Use the core function with API-specific settings
             result = submit_to_scheduler(
                 config_name=config,
                 job_name=job_name,
                 queue=queue,
                 select=select,
-                walltime=walltime,
+                walltime=walltime_minutes,
                 project=project,
                 run_dir=run_dir,
                 apps=apps,
@@ -492,7 +494,7 @@ class ParslBox:
         job_name: str,
         queue: str,
         select: str,
-        walltime: int,
+        walltime: Union[int, float, str],
         project: Optional[str] = None,
         run_dir: Optional[Path] = None,
         apps: Optional[List[str]] = None,
@@ -509,7 +511,7 @@ class ParslBox:
             job_name: SLURM job name
             queue: SLURM partition name
             select: Number of nodes
-            walltime: Wall time in minutes
+            walltime: Wall time (default: minutes). Supports h/d suffixes (e.g., 90, 4.25h, 3.5d)
             project: Project/account name
             run_dir: Custom run directory (default: timestamped)
             apps: List of apps to run
@@ -526,12 +528,13 @@ class ParslBox:
             FileNotFoundError: If sbatch command is not found
         """
         try:
+            walltime_minutes = parse_walltime(str(walltime))
             result = submit_to_slurm(
                 config_name=config,
                 job_name=job_name,
                 queue=queue,
                 select=select,
-                walltime=walltime,
+                walltime=walltime_minutes,
                 project=project,
                 run_dir=run_dir,
                 apps=apps,

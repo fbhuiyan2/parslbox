@@ -30,7 +30,7 @@ def submit_job(
     job_name: str,
     queue: str,
     select: str,
-    walltime: int,
+    walltime: float,
     project: Optional[str] = None,
     run_dir: Optional[Path] = None,
     apps: Optional[List[str]] = None,
@@ -51,7 +51,7 @@ def submit_job(
         job_name: Job name
         queue: Queue/partition name
         select: Resource selection (nodes for SLURM, select spec for PBS)
-        walltime: Wall time in minutes
+        walltime: Wall time in minutes (supports float for fractional minutes)
         project: Project/account name
         run_dir: Custom run directory (default: timestamped)
         apps: List of apps to run

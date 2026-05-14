@@ -4,6 +4,7 @@ from typing import Optional, List
 from typing_extensions import Annotated
 
 from parslbox.commands.helpers.submit_helpers import submit_job, ValidationError
+from parslbox.commands.helpers.qsub_cmd_helpers import parse_walltime
 
 app = typer.Typer()
 
@@ -66,8 +67,8 @@ def sbatch(
         typer.Option("--select", help="Number of nodes to request.")
     ],
     walltime: Annotated[
-        int,
-        typer.Option("--walltime", "-T", help="Wall time in minutes (e.g., 90 for 1.5 hours).")
+        str,
+        typer.Option("--walltime", "-T", help="Wall time (default: minutes). Supports h/d suffixes (e.g., 90, 4.25h, 3.5d).")
     ],
     project: Annotated[
         Optional[str],
@@ -113,13 +114,14 @@ def sbatch(
         # Convert CLI string arguments to lists for core function
         apps_list = apps.split(',') if apps else None
         tags_list = tags.split(',') if tags else None
+        walltime_minutes = parse_walltime(walltime)
 
         result = submit_to_slurm(
             config_name=config_name,
             job_name=job_name,
             queue=queue,
             select=select,
-            walltime=walltime,
+            walltime=walltime_minutes,
             project=project,
             run_dir=run_dir,
             apps=apps_list,

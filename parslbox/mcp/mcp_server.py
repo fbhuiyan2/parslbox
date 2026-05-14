@@ -76,6 +76,7 @@ def add_jobs(params: AddJobSchema) -> str:
         "Submit a PBS job via ParslBox.qsub.\n\n"
         "Takes configuration (system config name, job name, queue, select, walltime, project) "
         "plus optional run directory, apps, tags, retries, and sched_opts for extra PBS directives. "
+        "Walltime defaults to minutes; supports h/d suffixes (e.g., 90, 4.25h, 3.5d). "
         "Returns a short message describing whether submission succeeded."
     ),
 )
@@ -111,6 +112,7 @@ def submit_pbs_job(params: QSubSchema) -> str:
         "Submit a SLURM job via ParslBox.sbatch.\n\n"
         "Takes configuration (system config name, job name, partition, nodes, walltime, project) "
         "plus optional run directory, apps, tags, retries, and sched_opts for extra SLURM directives. "
+        "Walltime defaults to minutes; supports h/d suffixes (e.g., 90, 4.25h, 3.5d). "
         "Returns a short message describing whether submission succeeded."
     ),
 )

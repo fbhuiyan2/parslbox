@@ -290,6 +290,7 @@ Note: Users submit via `pbx qsub` or `pbx sbatch`. These generate a `submit.sh` 
 
 - **pbx qsub** — Submit PBS job
   - Required: `--config/-c`, `--job-name/-N`, `--queue/-q`, `--select`, `--walltime/-T`, `--project/-A`
+  - `--walltime` defaults to minutes; supports `h` (hours) and `d` (days) suffixes (e.g., `90`, `4.25h`, `3.5d`)
   - Optional: `--run-dir`, `--apps/-a`, `--tags/-t`, `--retries`, `--sched-opts`, `--dynamic/--static`
   - `--sched-opts` adds extra `#PBS` directives (repeatable)
   - `--dynamic` (default) enables live discovery of new jobs during the run; `--static` for collect-once behavior

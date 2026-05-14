@@ -4,11 +4,31 @@ from parslbox.utils import path_utils
 import yaml
 from typing import Optional
 
-def minutes_to_hms(minutes: int) -> str:
+def parse_walltime(value: str) -> float:
+    """Parse walltime string to minutes. Supports plain numbers (minutes),
+    h suffix (hours), and d suffix (days). Examples: '90', '4.25h', '3.5d'."""
+    value = value.strip()
+    if not value:
+        raise ValueError("Walltime cannot be empty")
+
+    suffix = value[-1].lower()
+    if suffix == 'h':
+        return float(value[:-1]) * 60
+    elif suffix == 'd':
+        return float(value[:-1]) * 1440
+    elif suffix == 'm':
+        return float(value[:-1])
+    else:
+        return float(value)
+
+
+def minutes_to_hms(minutes: float) -> str:
     """Convert minutes to HH:MM:SS format for PBS/SLURM."""
-    hours = minutes // 60
-    mins = minutes % 60
-    return f"{hours:02d}:{mins:02d}:00"
+    total_seconds = round(minutes * 60)
+    hours = total_seconds // 3600
+    mins = (total_seconds % 3600) // 60
+    secs = total_seconds % 60
+    return f"{hours:02d}:{mins:02d}:{secs:02d}"
 
 
 def get_default_run_dir() -> Path:
