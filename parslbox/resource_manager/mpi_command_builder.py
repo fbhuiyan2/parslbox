@@ -1,8 +1,8 @@
 """
-Simplified MPI Command Builder for ParslBox
+MPI Command Builder for ParslBox
 
-This module generates MPI commands using the new "start simple, opt-in complexity" approach.
-Commands start with minimal flags and users opt-in to advanced features.
+Generates MPI launch commands for three backends: OpenMPI (mpirun),
+MPICH (mpiexec), and SLURM (srun).
 
 Command Structure:
     {mpi_cmd} {mpi_args} {mpi_extra} {wrapper} {exe} {exe_args}
@@ -10,10 +10,47 @@ Command Structure:
 Where:
     - mpi_cmd: The launcher command (mpirun, mpiexec, srun)
     - mpi_args: Core MPI flags (ranks, ranks per node)
-    - mpi_extra: Optional advanced flags (CPU binding, hostlist, etc.)
-    - wrapper: Optional GPU wrapper script
+    - mpi_extra: Optional advanced flags (CPU binding, hostlist, GPU flags)
+    - wrapper: Optional GPU wrapper script (openmpi/mpich only)
     - exe: The executable
     - exe_args: Application arguments
+
+srun Backend Design:
+    The srun backend uses native SLURM flags for GPU and CPU binding
+    instead of wrapper scripts. Key design decisions:
+
+    GPU binding:
+    - Full/multi-node jobs: --gpus-per-node=N --gpu-bind=map_gpu:0,1,...,N-1
+      All GPUs on each assigned node are used, so explicit mapping is safe.
+    - Sub-node jobs: --gpus-per-task=1
+      SLURM assigns specific GPU IDs at runtime. The --exact flag ensures
+      concurrent steps get non-overlapping GPUs from the node's pool.
+
+    GPU ID tracking — pbx vs SLURM:
+    - The pbx resource manager tracks GPU *counts* per node for capacity
+      accounting (how many GPUs are free), but the specific GPU IDs it
+      records may differ from what SLURM actually assigns to each step.
+      This mismatch is expected and harmless.
+    - Do NOT inject CUDA_VISIBLE_DEVICES or use --gpu-bind=map_gpu with
+      pbx-assigned GPU IDs for sub-node jobs. That would conflict with
+      SLURM's own allocation via --exact. SLURM manages the partitioning.
+    - CUDA_VISIBLE_DEVICES env var injection (in models.py get_env_vars)
+      is intentionally muted for srun backend for this reason.
+
+    CPU binding:
+    - Uses --cpus-per-task=N --cpu-bind=cores|threads (configurable via
+      cpu_bind_method: "cores" or "threads" in MPI config).
+    - "depth" also works for backward compatibility, mapping to --cpu-bind=cores.
+
+    Memory:
+    - Sub-node GPU jobs: --mem-per-gpu={DRAM_PER_NODE // GPUS_PER_NODE}G
+      Proportional memory allocation prevents steps from claiming all
+      node memory and serializing concurrent sub-node jobs.
+    - Full/multi-node: no memory flag needed (step gets full node).
+
+    Sub-node isolation:
+    - --exact constrains the step to exactly the requested resources.
+    - -u enables unbuffered output for sub-node steps.
 """
 
 import logging
@@ -272,22 +309,30 @@ class MPICommandBuilder:
             elif backend == MPIBackend.SRUN:
                 extra.extend(["--nodelist", hostlist])
         
-        # Native SLURM GPU and memory flags for srun
+        # Native SLURM GPU and memory flags for srun.
+        #
+        # Sub-node GPU allocation model:
+        #   pbx resource manager tracks GPU *counts* per node (capacity),
+        #   NOT specific GPU IDs. SLURM assigns actual GPU IDs at runtime.
+        #   The --exact flag ensures each srun step reserves exactly the
+        #   GPUs it requests, so concurrent steps get non-overlapping GPUs.
+        #   The pbx-tracked GPU IDs may differ from what SLURM assigns —
+        #   this is expected and harmless. Do NOT inject CUDA_VISIBLE_DEVICES
+        #   or --gpu-bind=map_gpu with pbx-assigned IDs for sub-node jobs.
+        #
+        # Full/multi-node GPU: all GPUs on assigned nodes are used, so
+        #   --gpu-bind=map_gpu:0,1,...,N-1 is safe (pbx and SLURM agree).
         if backend == MPIBackend.SRUN and job_spec.is_gpu_job():
             job_type = job_spec.detect_job_type(self.system_config)
             gpus_per_node = getattr(self.system_config, "GPUS_PER_NODE", 0)
 
             if job_type == "subnode_gpu":
-                # Sub-node: each rank gets 1 GPU via --gpus-per-task
                 extra.append("--gpus-per-task=1")
-                # Memory: partition DRAM proportionally per GPU
                 dram = getattr(self.system_config, "DRAM_PER_NODE", None)
                 if dram and gpus_per_node > 0:
                     mem_per_gpu = dram // gpus_per_node
                     extra.append(f"--mem-per-gpu={mem_per_gpu}G")
             else:
-                # Full-node / multi-node: declare all GPUs per node
-                # and map each rank to its corresponding GPU
                 if gpus_per_node > 0:
                     gpu_map = ",".join(str(i) for i in range(gpus_per_node))
                     extra.extend([
