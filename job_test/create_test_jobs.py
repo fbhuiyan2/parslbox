@@ -7,12 +7,24 @@ It creates directory structures, copies necessary files, and adds jobs to pbx wi
 resource configurations and parent dependencies.
 
 Usage:
-    python create_test_jobs.py <config_name> [--lammps N] [--python script_name N] [--vasp N]
+    python create_test_jobs.py <config_name> [--lammps N] [--python SCRIPT N] [--vasp N]
+                                             [--tag TAG] [--lmp-exm-dir DIR]
+
+Arguments:
+    config_name             System configuration name (e.g., polaris, crux, sophia)
+
+Flags:
+    --lammps N              Create N LAMMPS friction jobs
+    --python SCRIPT N       Create N Python jobs using SCRIPT
+    --vasp N                Create N VASP jobs
+    --tag TAG               Tag to apply to all created jobs (default: 'test')
+    --lmp-exm-dir DIR       Custom LAMMPS examples directory path (overrides auto-detection)
 
 Examples:
     python create_test_jobs.py polaris --lammps 10 --python hello_affinity.py 5 --vasp 8
-    python create_test_jobs.py crux --lammps 5
-    python create_test_jobs.py polaris --python test_script.py 3 --vasp 4
+    python create_test_jobs.py crux --lammps 5 --tag scaling_test
+    python create_test_jobs.py polaris --python test_script.py 3 --vasp 4 --tag my_run
+    python create_test_jobs.py sophia --lammps 8 --lmp-exm-dir /path/to/lammps/examples
 """
 
 import argparse
