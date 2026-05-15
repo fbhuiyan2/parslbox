@@ -183,9 +183,9 @@ class ConfigGenerator:
         # cpu_bind_method
         cpu_bind = mpi_config.get("cpu_bind_method", "none")
         if cpu_bind and cpu_bind != "none":
-            output += f"    cpu_bind_method: {cpu_bind}     # Options: none, rankfile, list, depth, depth <N>\n"
+            output += f"    cpu_bind_method: {cpu_bind}     # Options: none, rankfile, list, depth, depth <N>, cores, threads (srun)\n"
         else:
-            output += "    # cpu_bind_method: none    # Options: none, rankfile, list, depth, depth <N>\n"
+            output += "    # cpu_bind_method: none    # Options: none, rankfile, list, depth, depth <N>, cores, threads (srun)\n"
 
         # add
         add_list = mpi_config.get("add")

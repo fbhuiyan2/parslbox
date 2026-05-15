@@ -38,6 +38,7 @@ class TestMPICommandBuilder:
         self.mock_system_config.CORES_PER_NODE = 64
         self.mock_system_config.GPUS_PER_NODE = 4
         self.mock_system_config.EXCLUDE_CORES = []
+        self.mock_system_config.DRAM_PER_NODE = 256
 
         # Default MPI config (MPICH, minimal)
         self.mpi_config = MPIConfig(backend=MPIBackend.MPICH)
@@ -221,8 +222,8 @@ class TestMPICommandBuilder:
 
     # --- SRUN GPU gres tests ---
 
-    def test_srun_subnode_gpu_job_has_gres_flags(self):
-        """SRUN sub-node GPU job: assert --gres=gpu:N and --gpu-bind=none."""
+    def test_srun_subnode_gpu_job_native_flags(self):
+        """SRUN sub-node GPU job: --gpus-per-task, --mem-per-gpu, --exact, -u."""
         self.mock_job_spec.is_gpu_job.return_value = True
         self.mock_job_spec.ngpus = 2
         self.mock_job_spec.num_nodes = 1
@@ -233,11 +234,48 @@ class TestMPICommandBuilder:
         builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
-        assert "--gres=gpu:2" in command
-        assert "--gpu-bind=none" in command
+        assert "--gpus-per-task=1" in command
+        assert "--mem-per-gpu=64G" in command  # 256 // 4
+        assert "--exact" in command
+        assert " -u" in command
+        assert "--gres" not in command
+        assert "--gpu-bind=none" not in command
 
-    def test_srun_cpu_job_no_gres_flags(self):
-        """SRUN CPU job: assert no --gres or --gpu-bind."""
+    def test_srun_fullnode_gpu_job_native_flags(self):
+        """SRUN full-node GPU job: --gpus-per-node and --gpu-bind=map_gpu."""
+        self.mock_job_spec.is_gpu_job.return_value = True
+        self.mock_job_spec.ngpus = 4
+        self.mock_job_spec.num_nodes = 1
+        self.mock_job_spec.get_total_ranks.return_value = 4
+        self.mock_job_spec.detect_job_type.return_value = "fullnode_gpu"
+
+        config = MPIConfig(backend=MPIBackend.SRUN)
+        builder = MPICommandBuilder(config, self.mock_system_config)
+        command = builder.build_command(self.mock_assignment, self.mock_job_spec)
+
+        assert "--gpus-per-node=4" in command
+        assert "--gpu-bind=map_gpu:0,1,2,3" in command
+        assert "--exact" not in command
+        assert "--gpus-per-task" not in command
+
+    def test_srun_multinode_gpu_job_native_flags(self):
+        """SRUN multi-node GPU job: --gpus-per-node and --gpu-bind=map_gpu."""
+        self.mock_job_spec.is_gpu_job.return_value = True
+        self.mock_job_spec.ngpus = 8
+        self.mock_job_spec.num_nodes = 2
+        self.mock_job_spec.get_total_ranks.return_value = 8
+        self.mock_job_spec.detect_job_type.return_value = "multinode_gpu"
+
+        config = MPIConfig(backend=MPIBackend.SRUN)
+        builder = MPICommandBuilder(config, self.mock_system_config)
+        command = builder.build_command(self.mock_assignment, self.mock_job_spec)
+
+        assert "--gpus-per-node=4" in command
+        assert "--gpu-bind=map_gpu:0,1,2,3" in command
+        assert "--exact" not in command
+
+    def test_srun_cpu_job_no_gpu_flags(self):
+        """SRUN CPU job: no GPU-related flags."""
         self.mock_job_spec.is_gpu_job.return_value = False
 
         config = MPIConfig(backend=MPIBackend.SRUN)
@@ -246,9 +284,11 @@ class TestMPICommandBuilder:
 
         assert "--gres" not in command
         assert "--gpu-bind" not in command
+        assert "--gpus-per-node" not in command
+        assert "--gpus-per-task" not in command
 
-    def test_openmpi_gpu_job_no_gres_flags(self):
-        """OpenMPI GPU job: assert no --gres (srun-only flag)."""
+    def test_openmpi_gpu_job_no_slurm_gpu_flags(self):
+        """OpenMPI GPU job: no SLURM GPU flags."""
         self.mock_job_spec.is_gpu_job.return_value = True
         self.mock_job_spec.ngpus = 2
         self.mock_job_spec.get_total_ranks.return_value = 2
@@ -259,6 +299,7 @@ class TestMPICommandBuilder:
 
         assert "--gres" not in command
         assert "--gpu-bind" not in command
+        assert "--gpus-per-node" not in command
 
     # --- Hostlist tests ---
 
@@ -355,6 +396,24 @@ class TestMPICommandBuilder:
         assert "--map-by core:PE=" in command
         assert "--bind-to core" in command
 
+    def test_cpu_bind_cores_srun(self):
+        """SRUN cores binding: --cpus-per-task N --cpu-bind=cores."""
+        config = MPIConfig(backend=MPIBackend.SRUN, cpu_bind_method="cores")
+        builder = MPICommandBuilder(config, self.mock_system_config)
+        command = builder.build_command(self.mock_assignment, self.mock_job_spec)
+
+        assert "--cpus-per-task" in command
+        assert "--cpu-bind=cores" in command
+
+    def test_cpu_bind_threads_srun(self):
+        """SRUN threads binding: --cpus-per-task N --cpu-bind=threads."""
+        config = MPIConfig(backend=MPIBackend.SRUN, cpu_bind_method="threads")
+        builder = MPICommandBuilder(config, self.mock_system_config)
+        command = builder.build_command(self.mock_assignment, self.mock_job_spec)
+
+        assert "--cpus-per-task" in command
+        assert "--cpu-bind=threads" in command
+
     # --- GPU wrapper tests ---
 
     @patch('parslbox.resource_manager.mpi_command_builder.generate_mpich_gpu_wrapper')
@@ -397,6 +456,21 @@ class TestMPICommandBuilder:
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "wrapper" not in command
+
+    def test_srun_skips_gpu_wrapper(self):
+        """SRUN backend skips GPU wrapper — uses native SLURM GPU binding."""
+        self.mock_job_spec.is_gpu_job.return_value = True
+        self.mock_job_spec.ngpus = 4
+        self.mock_job_spec.num_nodes = 1
+        self.mock_job_spec.get_total_ranks.return_value = 4
+        self.mock_job_spec.detect_job_type.return_value = "fullnode_gpu"
+
+        config = MPIConfig(backend=MPIBackend.SRUN, use_gpu_wrapper=True)
+        builder = MPICommandBuilder(config, self.mock_system_config)
+        command = builder.build_command(self.mock_assignment, self.mock_job_spec)
+
+        assert "wrapper" not in command
+        assert "--gpus-per-node=4" in command
 
     # --- Disable/Add override tests ---
 

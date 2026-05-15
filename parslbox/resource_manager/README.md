@@ -86,8 +86,12 @@ MPI flags are built modularly and then optionally filtered/extended by overrides
 
 ### srun (SLURM)
 - Basic layout:
-  - `--ntasks <total_ranks> --ntasks-per-node <ranks_per_node_or_ngpus> --nodelist <hostlist> --nodes <num_nodes>`
-- Binding specifics are left to SLURM/MPI defaults for the target system.
+  - `-n <total_ranks> --ntasks-per-node <ranks_per_node>`
+- CPU binding: `--cpus-per-task <cores_per_rank> --cpu-bind=cores` (or `--cpu-bind=threads`)
+- GPU jobs (full/multi-node): `--gpus-per-node=<N> --gpu-bind=map_gpu:0,1,...,N-1`
+- GPU jobs (sub-node): `--gpus-per-task=1 --mem-per-gpu=<DRAM/GPUs>G`
+- Sub-node jobs: `--exact -u` for resource isolation and unbuffered output
+- No GPU wrapper scripts — SLURM handles GPU binding natively
 
 ## Overrides (Minimal and Intuitive)
 

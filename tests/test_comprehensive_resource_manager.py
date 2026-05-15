@@ -45,7 +45,7 @@ class MockSystemConfig:
 
     def __init__(self, cores_per_node=32, gpus_per_node=4, num_nodes=2,
                  worker_cpu_affinity=None, mpi_cmd="mpirun", exclude_cores=None,
-                 gpu_type="nvidia"):
+                 gpu_type="nvidia", dram_per_node=256):
         self.CORES_PER_NODE = cores_per_node
         self.GPUS_PER_NODE = gpus_per_node
         self.SCHEDULER = "PBS"
@@ -53,6 +53,7 @@ class MockSystemConfig:
         self.WORKER_CPU_AFFINITY = worker_cpu_affinity
         self.EXCLUDE_CORES = exclude_cores
         self.GPU_TYPE = gpu_type
+        self.DRAM_PER_NODE = dram_per_node
         self._num_nodes = num_nodes
         self._total_gpus = num_nodes * gpus_per_node
 
@@ -900,14 +901,8 @@ class TestMPICommandGeneration:
         assert "--cpus-per-task 7" in srun_cmd
         assert "--cpu-bind=cores" in srun_cmd
 
-    def test_srun_subnode_gpu_gres_flags(self):
-        """Test that srun GPU jobs include --gres=gpu:N and --gpu-bind=none.
-
-        Without --gres, SLURM allocates all job GPUs to the first step,
-        causing 'Invalid gres specification' for concurrent sub-node steps.
-        --gpu-bind=none prevents SLURM from overriding CUDA_VISIBLE_DEVICES
-        (PBX manages GPU assignment via wrappers/env vars).
-        """
+    def test_srun_subnode_gpu_native_flags(self):
+        """Test that srun sub-node GPU jobs use native SLURM GPU flags."""
         config = MockSystemConfig(mpi_cmd="srun")
         rm = ResourceManager(config, job_tracker=None)
 
@@ -917,39 +912,38 @@ class TestMPICommandGeneration:
 
         mpi_config = MPIConfig(
             backend=MPIBackend.SRUN,
-            cpu_bind_method="depth",
-            use_gpu_wrapper=True,
+            cpu_bind_method="cores",
             use_hostlist=True,
         )
         commands = build_mpi_command(mpi_config, config, assignment, spec)
 
         srun_cmd = commands["PBX_SRUN_PREFIX"]
-        assert "--gres=gpu:1" in srun_cmd
-        assert "--gpu-bind=none" in srun_cmd
+        assert "--gpus-per-task=1" in srun_cmd
+        assert "--mem-per-gpu=64G" in srun_cmd  # 256 // 4
+        assert "--exact" in srun_cmd
+        assert " -u" in srun_cmd
+        assert "--gres" not in srun_cmd
 
-    def test_srun_fullnode_gpu_no_gres_flags(self, resource_manager):
-        """Test that full-node srun GPU jobs do NOT get --gres or --gpu-bind.
-
-        Full-node jobs use all GPUs on the node by default — no need to
-        partition via --gres, and no contention with other steps.
-        """
+    def test_srun_fullnode_gpu_native_flags(self, resource_manager):
+        """Test that full-node srun GPU jobs use --gpus-per-node and --gpu-bind=map_gpu."""
         job = {'job_id': 31, 'num_nodes': 1, 'ngpus': 4, 'node_occupancy': 1.0}
         assignment = resource_manager.assign_resources(job)
         spec = create_job_resource_spec(job)
 
         mpi_config = MPIConfig(
             backend=MPIBackend.SRUN,
-            cpu_bind_method="depth",
-            use_gpu_wrapper=True,
+            cpu_bind_method="cores",
         )
         commands = build_mpi_command(mpi_config, resource_manager.system_config, assignment, spec)
 
         srun_cmd = commands["PBX_SRUN_PREFIX"]
+        assert "--gpus-per-node=4" in srun_cmd
+        assert "--gpu-bind=map_gpu:0,1,2,3" in srun_cmd
         assert "--gres" not in srun_cmd
-        assert "--gpu-bind" not in srun_cmd
+        assert "--exact" not in srun_cmd
 
-    def test_srun_cpu_job_no_gres_flags(self):
-        """Test that CPU-only srun jobs do NOT include --gres or --gpu-bind."""
+    def test_srun_cpu_job_no_gpu_flags(self):
+        """Test that CPU-only srun jobs do NOT include GPU-related flags."""
         config = MockSystemConfig(mpi_cmd="srun")
         rm = ResourceManager(config, job_tracker=None)
 
@@ -963,9 +957,11 @@ class TestMPICommandGeneration:
         srun_cmd = commands["PBX_SRUN_PREFIX"]
         assert "--gres" not in srun_cmd
         assert "--gpu-bind" not in srun_cmd
+        assert "--gpus-per-node" not in srun_cmd
+        assert "--gpus-per-task" not in srun_cmd
 
-    def test_srun_gpu_gres_disable_override(self):
-        """Test that --gpu-bind=none can be disabled via MPI config."""
+    def test_srun_gpu_disable_override(self):
+        """Test that native GPU flags can be disabled via MPI config."""
         config = MockSystemConfig(mpi_cmd="srun")
         rm = ResourceManager(config, job_tracker=None)
 
@@ -975,14 +971,12 @@ class TestMPICommandGeneration:
 
         mpi_config = MPIConfig(
             backend=MPIBackend.SRUN,
-            use_gpu_wrapper=True,
-            disable=["--gpu-bind=none"],
+            disable=["gpus-per-task"],
         )
         commands = build_mpi_command(mpi_config, config, assignment, spec)
 
         srun_cmd = commands["PBX_SRUN_PREFIX"]
-        assert "--gres=gpu:1" in srun_cmd
-        assert "--gpu-bind" not in srun_cmd
+        assert "gpus-per-task" not in srun_cmd
 
     def test_srun_subnode_gpu_has_exact(self):
         """Test that srun sub-node GPU jobs include --exact."""
@@ -1593,8 +1587,11 @@ def test_mpi_command_generation_workflow():
         cmd = commands["PBX_MPI_PREFIX"]
         assert "2" in cmd  # total ranks
 
-        # Verify GPU wrapper is in the command
-        assert "gpu_wrapper" in cmd
+        # Verify GPU wrapper: present for openmpi/mpich, skipped for srun
+        if backend == MPIBackend.SRUN:
+            assert "gpu_wrapper" not in cmd
+        else:
+            assert "gpu_wrapper" in cmd
 
 
 if __name__ == "__main__":

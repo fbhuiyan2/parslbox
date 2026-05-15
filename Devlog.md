@@ -1,6 +1,6 @@
 # Devlog
 
-**Current Version: 0.8.5**
+**Current Version: 0.9.2**
 
 ## Purpose
 This file tracks bug fixes and development issues encountered during ParslBox development. 
@@ -49,4 +49,8 @@ It serves as a quick reference for resolved problems and their solutions, separa
 [2026-04-18]
 - **Bug**: Sub-node srun jobs fail with "Memory required by task is not available" because the first srun step reserves all node memory, leaving none for subsequent steps.
   - **Fix**: Added `--mem=0` to srun args in `_build_mpi_args()` (mpi_command_builder.py). `--mem=0` grants each job step access to all available job memory on the node, preventing the default behavior where the first step reserves all memory.
-  - **Note**: `--mem=0` can lead to memory failures if multiple sub-node jobs on the same node consume a lot of memory simultaneously (no per-step memory limit). A safer approach is to use `--mem-per-cpu` with a `MEMORY_PER_NODE` value added to the system config, calculated as `memory_per_node / cores_per_node`. This covers both CPU and GPU systems and enforces per-step memory limits.
+  - **Superseded**: `--mem=0` replaced with `--mem-per-gpu={DRAM_PER_NODE // GPUS_PER_NODE}G` in v0.9.2 for proper per-step memory partitioning.
+
+[2026-05-15]
+- **Refactor**: Rewrote srun backend to use native SLURM GPU/memory flags instead of wrapper scripts and `--mem=0`. Sub-node GPU jobs now use `--gpus-per-task=1 --mem-per-gpu=XG`, full/multi-node use `--gpus-per-node=N --gpu-bind=map_gpu:0,1,...`. GPU wrapper scripts and `CUDA_VISIBLE_DEVICES` injection are skipped for srun. Added `cores` and `threads` as srun-native `cpu_bind_method` options (replaces misleading `depth` for SLURM).
+- **Feature**: Added NERSC Perlmutter GPU and CPU system configs with `DRAM_PER_NODE` base class attribute.

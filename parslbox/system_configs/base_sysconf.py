@@ -44,7 +44,8 @@ class SystemConfig(ABC):
     WORKER_CPU_AFFINITY: Optional[str] = None
     EXCLUDE_CORES: Optional[List[int]] = None
     GPU_TYPE: str     # GPU type: 'cuda', 'intel', None, etc.
-    
+    DRAM_PER_NODE: Optional[int] = None  # DRAM per node in GB
+
     def __init__(self):
         """
         Initialize and validate system configuration.

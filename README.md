@@ -353,7 +353,7 @@ Using separate `PBX_DB_PATH` and/or `PBX_CONFIG_PATH` allows multiple isolated d
 ParslBox generates MPI launch commands with CPU binding flags appropriate for each job type (subnode, fullnode, multinode) and scheduler:
 
 - **PBS systems (mpiexec/MPICH, mpirun/OpenMPI):** Configurable via `cpu_bind_method` in the `mpi:` config section. Options: `none`, `rankfile`, `list`, `depth`. The `rankfile` and `list` methods provide GPU-affinity-aware core assignments.
-- **SLURM systems (srun):** Automatic CPU binding with `--cpus-per-task=D --cpu-bind=cores` for all job types, plus `--exact` for subnode jobs. GPU jobs use wrapper scripts that detect SLURM rank via `SLURM_PROCID`/`SLURM_LOCALID`.
+- **SLURM systems (srun):** Native SLURM resource binding. CPU binding via `--cpus-per-task=D --cpu-bind=cores|threads` (configurable with `cpu_bind_method: cores` or `threads`). GPU jobs use native SLURM flags: `--gpus-per-node` + `--gpu-bind=map_gpu` for full/multi-node, `--gpus-per-task` + `--mem-per-gpu` for sub-node. Sub-node jobs include `--exact` and `-u` for proper resource isolation.
 
 Details: [`parslbox/resource_manager/README.md`](parslbox/resource_manager/README.md)
 

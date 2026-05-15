@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.2] - 2026-05-15
+
+### Added
+
+#### NERSC Perlmutter System Configs
+- **`perlmutter-gpu`**: 1x AMD EPYC 7763 (128 logical cores), 4x NVIDIA A100 GPUs, 256 GB DRAM, `#SBATCH -C gpu` default constraint (overridable to `gpu&hbm80g` for 80 GB HBM nodes)
+- **`perlmutter-cpu`**: 2x AMD EPYC 7763 (256 logical cores), 512 GB DRAM, `#SBATCH -C cpu` default constraint
+- **`DRAM_PER_NODE`** attribute added to `SystemConfig` base class for memory-aware job scheduling
+
+#### ORCA Application
+- Added ORCA quantum chemistry application support
+
+#### Native SLURM srun Backend
+- **Replaced wrapper scripts with native SLURM GPU binding** for srun:
+  - Sub-node GPU: `--gpus-per-task=1 --mem-per-gpu={DRAM/GPUs}G`
+  - Full/multi-node GPU: `--gpus-per-node=N --gpu-bind=map_gpu:0,1,...,N-1`
+- **Removed `--mem=0`** — sub-node GPU jobs now use `--mem-per-gpu` for proportional memory allocation, fixing serialization of concurrent sub-node steps
+- **Added `-u` (unbuffered)** for all sub-node srun jobs
+- **`CUDA_VISIBLE_DEVICES` injection muted** for srun backend — SLURM handles GPU binding natively
+- **New `cpu_bind_method` options**: `cores` and `threads` for srun (maps to `--cpu-bind=cores` and `--cpu-bind=threads`). Replaces misleading `depth` terminology for SLURM systems
+
+---
+
 ## [0.9.1] - 2026-04-22
 
 ### Added
@@ -15,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Sub-node GPU jobs now declare their GPU share** via `--gres=gpu:N` in srun commands. Without this, the first srun step implicitly claims all job GPUs and concurrent sub-node steps fail with `srun: error: Invalid generic resource (gres) specification`
 - **`--gpu-bind=none`** prevents SLURM from overriding `CUDA_VISIBLE_DEVICES`, which would clash with PBX's own GPU assignment via wrappers and env vars
 - Only added for sub-node GPU jobs; full-node and multi-node GPU jobs use all node GPUs by default
+- **Superseded in v0.9.2** by native SLURM GPU flags (`--gpus-per-task`, `--gpus-per-node`, `--gpu-bind=map_gpu`)
 
 #### `--exact` Flag Restored for srun Sub-node Jobs
 - **`--exact` was present in the deprecated `mpi_launcher_depr.py`** (added in v0.8.1) but was not carried over when `mpi_command_builder.py` replaced it. Now restored via `_should_add_srun_exact()` helper that checks job type (`subnode_cpu` or `subnode_gpu`)

@@ -43,7 +43,9 @@ class MPIConfig:
         use_gpu_wrapper: Whether to generate GPU assignment wrapper script
         use_hostlist: Whether to explicitly pass hostlist to MPI command
         use_short_hostnames: Whether to strip domain from hostnames
-        cpu_bind_method: CPU binding method (none, rankfile, list, depth, depth <N>)
+        cpu_bind_method: CPU binding method (none, rankfile, list, depth, depth <N>,
+                         cores, threads). cores/threads are srun-native: they map to
+                         --cpu-bind=cores and --cpu-bind=threads respectively.
         disable: List of flags/substrings to remove from command
         add: List of flags to append to command (supports templates)
         env_setup: Optional shell commands to run before app's environment_setup
@@ -106,6 +108,14 @@ class MPIConfig:
     def is_list_binding(self) -> bool:
         """Check if using list-based CPU binding."""
         return self.cpu_bind_method == "list"
+
+    def is_cores_binding(self) -> bool:
+        """Check if using srun-native cores CPU binding."""
+        return self.cpu_bind_method == "cores"
+
+    def is_threads_binding(self) -> bool:
+        """Check if using srun-native threads CPU binding."""
+        return self.cpu_bind_method == "threads"
 
 
 # Default MPI configurations per backend

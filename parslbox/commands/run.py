@@ -113,6 +113,8 @@ def create_parsl_future(job, app_instance, app_config, mpi_config, config_name, 
         # Add MPI env_setup to the commands dict so it reaches the bash engine
         if mpi_config.env_setup:
             mpi_commands['PBX_MPI_ENV_SETUP'] = mpi_config.env_setup
+        # Pass backend so downstream code can adapt (e.g., skip GPU env vars for srun)
+        mpi_commands['PBX_MPI_BACKEND'] = mpi_config.backend.value
 
         # Expose host/core info for apps that manage their own MPI (e.g., ORCA)
         hostnames = list(assignment.hostnames)

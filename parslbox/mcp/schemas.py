@@ -250,7 +250,7 @@ class SBatchSchema(BaseModel):
     sched_opts: Optional[List[str]] = Field(
         default=None,
         description=(
-            "List of extra SLURM scheduler directives (e.g., ['#SBATCH --mem=64G', '#SBATCH --gres=gpu:4']). "
+            "List of extra SLURM scheduler directives (e.g., ['#SBATCH --mem=64G', '#SBATCH -C gpu&hbm80g']). "
             "Directives matching a template key override it; new directives are appended."
         ),
     )

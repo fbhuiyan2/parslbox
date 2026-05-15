@@ -469,28 +469,35 @@ class ResourceAssignment:
         """Check if this is a single-node assignment."""
         return len(self.node_ids) == 1
     
-    def get_env_vars(self) -> Dict[str, str]:
+    def get_env_vars(self, mpi_backend: Optional[str] = None) -> Dict[str, str]:
         """
         Generate environment variables for this assignment.
-        
+
+        Args:
+            mpi_backend: MPI backend name (e.g., "srun"). When "srun",
+                GPU env vars are skipped because SLURM handles GPU
+                binding natively via --gpus-per-node/--gpus-per-task.
+
         Returns:
             Dictionary of environment variable name -> value
         """
         env_vars = {}
-        
+
+        # Skip GPU env vars for srun — SLURM handles GPU binding natively
+        if mpi_backend == "srun":
+            return env_vars
+
         # For single-node jobs with GPUs, set CUDA_VISIBLE_DEVICES
         if self.is_single_node() and self.gpu_assignments[0]:
-            # Collect all GPU IDs from all ranks on the first node
             all_gpu_ids = []
             for rank, gpu_list in self.gpu_assignments[0].items():
                 all_gpu_ids.extend(gpu_list)
-            
+
             if all_gpu_ids:
                 gpu_ids_str = ",".join(map(str, sorted(set(all_gpu_ids))))
                 env_vars["CUDA_VISIBLE_DEVICES"] = gpu_ids_str
-                # For Intel GPUs
                 env_vars["ZE_AFFINITY_MASK"] = gpu_ids_str
-        
+
         return env_vars
     
     def get_mpi_hostlist(self) -> str:

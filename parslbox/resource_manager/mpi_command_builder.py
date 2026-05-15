@@ -87,9 +87,9 @@ class MPICommandBuilder:
         all_flags = self._apply_disable(all_flags)
         all_flags = self._apply_add(all_flags, context)
 
-        # Add GPU wrapper if enabled
+        # Add GPU wrapper if enabled (srun uses native SLURM GPU binding instead)
         wrapper = ""
-        if self.config.use_gpu_wrapper and job_spec.is_gpu_job():
+        if self.config.use_gpu_wrapper and job_spec.is_gpu_job() and self.config.backend != MPIBackend.SRUN:
             wrapper = self._generate_gpu_wrapper(assignment, job_spec, job_path)
             if "gpu-wrapper" in " ".join(self.config.disable):
                 wrapper = ""  # Disabled via config
@@ -240,14 +240,9 @@ class MPICommandBuilder:
             ]
         
         elif backend == MPIBackend.SRUN:
-            # SRUN minimal: -n N --ntasks-per-node M
-            # --mem=0 grants each step access to all available job memory
-            # on the node, preventing "Memory required by task is not
-            # available" errors for sub-node jobs.
             return [
                 "-n", str(total_ranks),
                 "--ntasks-per-node", str(ranks_per_node),
-                "--mem=0"
             ]
         
         return []
@@ -277,27 +272,36 @@ class MPICommandBuilder:
             elif backend == MPIBackend.SRUN:
                 extra.extend(["--nodelist", hostlist])
         
-        # For srun sub-node GPU jobs, declare the GPU share for this step
-        # so SLURM can partition GPUs between concurrent steps on the same
-        # node. Without --gres, the first step claims all job GPUs and
-        # subsequent steps fail with "Invalid gres specification".
-        # --gpu-bind=none prevents SLURM from overriding CUDA_VISIBLE_DEVICES
-        # (PBX handles GPU assignment via wrappers/env vars).
-        # Full-node and multi-node GPU jobs don't need this — they use all
-        # GPUs on their nodes by default.
+        # Native SLURM GPU and memory flags for srun
         if backend == MPIBackend.SRUN and job_spec.is_gpu_job():
             job_type = job_spec.detect_job_type(self.system_config)
+            gpus_per_node = getattr(self.system_config, "GPUS_PER_NODE", 0)
+
             if job_type == "subnode_gpu":
-                ranks_per_node = int(context["ranks_per_node"])
-                extra.extend([f"--gres=gpu:{ranks_per_node}", "--gpu-bind=none"])
+                # Sub-node: each rank gets 1 GPU via --gpus-per-task
+                extra.append("--gpus-per-task=1")
+                # Memory: partition DRAM proportionally per GPU
+                dram = getattr(self.system_config, "DRAM_PER_NODE", None)
+                if dram and gpus_per_node > 0:
+                    mem_per_gpu = dram // gpus_per_node
+                    extra.append(f"--mem-per-gpu={mem_per_gpu}G")
+            else:
+                # Full-node / multi-node: declare all GPUs per node
+                # and map each rank to its corresponding GPU
+                if gpus_per_node > 0:
+                    gpu_map = ",".join(str(i) for i in range(gpus_per_node))
+                    extra.extend([
+                        f"--gpus-per-node={gpus_per_node}",
+                        f"--gpu-bind=map_gpu:{gpu_map}",
+                    ])
 
         # CPU binding
         extra.extend(self._build_cpu_bind_flags(assignment, job_spec, job_path, context))
 
-        # For Slurm sub-node jobs, constrain the step to just the assigned
-        # slice of the allocation so concurrent steps do not over-claim memory.
+        # For Slurm sub-node jobs, add --exact to constrain the step to
+        # its assigned slice, and -u for unbuffered output.
         if self._should_add_srun_exact(job_spec):
-            extra.append("--exact")
+            extra.extend(["--exact", "-u"])
 
         return extra
 
@@ -341,7 +345,10 @@ class MPICommandBuilder:
         
         if method.startswith("depth"):
             return self._build_depth_binding(context)
-        
+
+        if method in ("cores", "threads"):
+            return self._build_srun_native_binding(method, context)
+
         logger.warning(f"Unknown cpu_bind_method: {method}, ignoring")
         return []
     
@@ -438,9 +445,15 @@ class MPICommandBuilder:
         
         elif backend == MPIBackend.SRUN:
             return ["--cpus-per-task", str(depth), "--cpu-bind=cores"]
-        
+
         return []
-    
+
+    def _build_srun_native_binding(self, method: str, context: Dict[str, str]) -> list:
+        """Build srun-native CPU binding flags (cores or threads)."""
+        cpus_per_task = int(context["cores_per_rank"])
+        return ["--cpus-per-task", str(cpus_per_task), f"--cpu-bind={method}"]
+
+
     def _apply_disable(self, flags: list) -> list:
         """Apply disable rules to remove flags."""
         if not self.config.disable:
