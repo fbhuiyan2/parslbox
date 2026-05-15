@@ -691,8 +691,19 @@ def build_resource_launcher(
         node_occupancy=assignment.node_occupancy,
     )
 
-    # Reuse the existing command builder
-    builder = MPICommandBuilder(mpi_config, system_config)
+    # For srun multi-node non-MPI jobs: add --nodes=N and remove
+    # --ntasks-per-node so srun reserves all assigned nodes but
+    # launches only 1 process.
+    launcher_config = mpi_config
+    if mpi_config.backend == MPIBackend.SRUN and n_nodes > 1:
+        from dataclasses import replace
+        launcher_config = replace(
+            mpi_config,
+            add=list(mpi_config.add) + [f"--nodes={n_nodes}"],
+            disable=list(mpi_config.disable) + ["--ntasks-per-node"],
+        )
+
+    builder = MPICommandBuilder(launcher_config, system_config)
     prefix = builder.build_command(launcher_assignment, single_spec, job_path)
 
     logger.info(f"Job {assignment.job_id}: Resource launcher: {prefix}")

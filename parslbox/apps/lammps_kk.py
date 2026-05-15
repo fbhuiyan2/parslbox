@@ -37,9 +37,10 @@ class LammpsKokkosApp(AppBase):
         total_gpus = kwargs['total_gpus']
         app_config = kwargs['app_config']
         
-        # Check if wrapper script is being used for GPU assignment
-        # If wrapper script is used, each rank sees only 1 GPU via CUDA_VISIBLE_DEVICES
-        if total_gpus > 0 and '.sh' in mpi_prefix and 'wrapper' in mpi_prefix:
+        # Check if each rank sees only 1 GPU:
+        # - wrapper script: sets CUDA_VISIBLE_DEVICES per rank
+        # - map_gpu: srun --gpu-bind=map_gpu binds 1 GPU per rank
+        if total_gpus > 0 and ('map_gpu' in mpi_prefix or ('.sh' in mpi_prefix and 'wrapper' in mpi_prefix)):
             # Wrapper script is being used - each rank sees 1 GPU
             lammps_gpu_count = 1
         else:

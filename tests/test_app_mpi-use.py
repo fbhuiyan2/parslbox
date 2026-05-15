@@ -92,8 +92,24 @@ class TestBuildResourceLauncher:
         assert "-np 1" in launcher
         assert "-np 4" not in launcher
 
-    def test_srun_always_n1(self):
-        """SRUN produces -n 1 --ntasks-per-node 1."""
+    def test_srun_single_node_n1(self):
+        """SRUN single-node produces -n 1 --ntasks-per-node 1."""
+        config = MPIConfig(backend=MPIBackend.SRUN)
+        sys_config = self._make_system_config()
+
+        job_spec = self._make_job_spec(num_nodes=1, ranks_per_node=4)
+        assignment = self._make_assignment(
+            node_ids=["n0"],
+            hostnames=["node0"],
+        )
+
+        launcher = build_resource_launcher(config, sys_config, assignment, job_spec)
+
+        assert "-n 1" in launcher
+        assert "--ntasks-per-node 1" in launcher
+
+    def test_srun_multinode_uses_nodes_flag(self):
+        """SRUN multi-node non-MPI: -n 1 --nodes=N, no --ntasks-per-node."""
         config = MPIConfig(backend=MPIBackend.SRUN)
         sys_config = self._make_system_config()
 
@@ -106,7 +122,8 @@ class TestBuildResourceLauncher:
         launcher = build_resource_launcher(config, sys_config, assignment, job_spec)
 
         assert "-n 1" in launcher
-        assert "--ntasks-per-node 1" in launcher
+        assert "--nodes=3" in launcher
+        assert "--ntasks-per-node" not in launcher
 
     # --- CPU core consolidation ---
 
