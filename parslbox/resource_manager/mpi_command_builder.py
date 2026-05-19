@@ -22,35 +22,35 @@ srun Backend Design:
     GPU binding:
     - Full/multi-node jobs: --gpus-per-node=N --gpu-bind=map_gpu:0,1,...,N-1
       All GPUs on each assigned node are used, so explicit mapping is safe.
-    - Sub-node jobs: --gpus-per-task=1
-      SLURM assigns specific GPU IDs at runtime. The --exact flag ensures
-      concurrent steps get non-overlapping GPUs from the node's pool.
+    - Sub-node jobs: --gpu-bind=map_gpu:{pbx_assigned_gpu_ids}
+      pbx passes the exact GPU IDs from its resource manager so concurrent
+      steps get non-overlapping GPUs.
 
-    GPU ID tracking — pbx vs SLURM:
-    - The pbx resource manager tracks GPU *counts* per node for capacity
-      accounting (how many GPUs are free), but the specific GPU IDs it
-      records may differ from what SLURM actually assigns to each step.
-      This mismatch is expected and harmless.
-    - Do NOT inject CUDA_VISIBLE_DEVICES or use --gpu-bind=map_gpu with
-      pbx-assigned GPU IDs for sub-node jobs. That would conflict with
-      SLURM's own allocation via --exact. SLURM manages the partitioning.
+    GPU ID tracking:
+    - pbx GPU ID tracking IS load-bearing for sub-node srun jobs. The
+      resource manager assigns specific GPU IDs (e.g., 0,1 for job A and
+      2,3 for job B) and these are passed directly to --gpu-bind=map_gpu.
+    - SLURM does NOT auto-partition GPUs between concurrent steps via
+      --exact or --gpus-per-task on all systems (verified on Perlmutter).
     - CUDA_VISIBLE_DEVICES env var injection (in models.py get_env_vars)
-      is intentionally muted for srun backend for this reason.
+      is muted for srun — GPU binding is handled entirely via --gpu-bind.
 
     CPU binding:
-    - Uses --cpus-per-task=N --cpu-bind=cores|threads (configurable via
-      cpu_bind_method: "cores" or "threads" in MPI config).
-    - "depth" also works for backward compatibility, mapping to --cpu-bind=cores.
+    - Full/multi-node: --cpus-per-task=N --cpu-bind=cores|threads
+      (configurable via cpu_bind_method: "cores" or "threads").
+    - Sub-node: --cpu-bind=mask_cpu:{hex_bitmask} computed from
+      pbx-assigned core IDs. This provides true CPU isolation between
+      concurrent steps — --cpu-bind=cores does NOT partition CPUs
+      between steps on SLURM (all steps get the same first N cores).
 
-    Memory:
-    - Sub-node GPU jobs: --mem-per-gpu={DRAM_PER_NODE // GPUS_PER_NODE}G
-      Proportional memory allocation prevents steps from claiming all
-      node memory and serializing concurrent sub-node jobs.
-    - Full/multi-node: no memory flag needed (step gets full node).
+    Concurrent sub-node steps:
+    - --overlap allows multiple srun steps to run on the same node
+      simultaneously. Without it, steps serialize even with explicit
+      resource binding. Do NOT use --exact (serializes steps) or
+      --exclusive (also serializes).
 
-    Sub-node isolation:
-    - --exact constrains the step to exactly the requested resources.
-    - -u enables unbuffered output for sub-node steps.
+    All srun jobs include -N {num_nodes} to prevent SLURM from
+    spreading tasks to unassigned nodes.
 """
 
 import logging
@@ -70,6 +70,14 @@ if TYPE_CHECKING:
     from parslbox.system_configs.base_sysconf import SystemConfig
 
 logger = logging.getLogger(__name__)
+
+
+def cores_to_hex_mask(core_ids: list) -> str:
+    """Convert a list of CPU core IDs to a hex bitmask string for --cpu-bind=mask_cpu."""
+    mask = 0
+    for core in core_ids:
+        mask |= (1 << core)
+    return hex(mask)
 
 
 class MPICommandBuilder:
@@ -116,7 +124,8 @@ class MPICommandBuilder:
         
         # Build command parts
         mpi_cmd = self.config.get_mpi_command()
-        mpi_args = self._build_mpi_args(total_ranks, ranks_per_node)
+        num_nodes = getattr(job_spec, "num_nodes", 1)
+        mpi_args = self._build_mpi_args(total_ranks, ranks_per_node, num_nodes)
         mpi_extra = self._build_mpi_extra(assignment, job_spec, job_path, context)
 
         # Apply disable/add to ALL flags so users can override core args too
@@ -246,7 +255,7 @@ class MPICommandBuilder:
         else:
             return generate_mpich_gpu_wrapper(assignment, self.system_config, job_spec, job_path)
     
-    def _build_mpi_args(self, total_ranks: int, ranks_per_node: int) -> list:
+    def _build_mpi_args(self, total_ranks: int, ranks_per_node: int, num_nodes: int = 1) -> list:
         """
         Build minimal MPI arguments based on backend.
         
@@ -278,6 +287,7 @@ class MPICommandBuilder:
         
         elif backend == MPIBackend.SRUN:
             return [
+                "-N", str(num_nodes),
                 "-n", str(total_ranks),
                 "--ntasks-per-node", str(ranks_per_node),
             ]
@@ -309,29 +319,32 @@ class MPICommandBuilder:
             elif backend == MPIBackend.SRUN:
                 extra.extend(["--nodelist", hostlist])
         
-        # Native SLURM GPU and memory flags for srun.
+        # Native SLURM GPU binding for srun.
         #
-        # Sub-node GPU allocation model:
-        #   pbx resource manager tracks GPU *counts* per node (capacity),
-        #   NOT specific GPU IDs. SLURM assigns actual GPU IDs at runtime.
-        #   The --exact flag ensures each srun step reserves exactly the
-        #   GPUs it requests, so concurrent steps get non-overlapping GPUs.
-        #   The pbx-tracked GPU IDs may differ from what SLURM assigns —
-        #   this is expected and harmless. Do NOT inject CUDA_VISIBLE_DEVICES
-        #   or --gpu-bind=map_gpu with pbx-assigned IDs for sub-node jobs.
+        # Sub-node GPU jobs:
+        #   pbx passes the actual assigned GPU IDs via --gpu-bind=map_gpu
+        #   so concurrent steps get non-overlapping GPUs. CPU isolation
+        #   uses --cpu-bind=mask_cpu with a hex bitmask computed from
+        #   pbx-assigned core IDs. --overlap allows concurrent steps.
         #
-        # Full/multi-node GPU: all GPUs on assigned nodes are used, so
-        #   --gpu-bind=map_gpu:0,1,...,N-1 is safe (pbx and SLURM agree).
+        # Full/multi-node GPU jobs:
+        #   All GPUs on assigned nodes are used, so --gpu-bind=map_gpu:0,1,...,N-1
+        #   maps each rank to its corresponding GPU.
+        is_subnode = self._is_subnode_srun(job_spec)
+
         if backend == MPIBackend.SRUN and job_spec.is_gpu_job():
             job_type = job_spec.detect_job_type(self.system_config)
             gpus_per_node = getattr(self.system_config, "GPUS_PER_NODE", 0)
 
             if job_type == "subnode_gpu":
-                extra.append("--gpus-per-task=1")
-                dram = getattr(self.system_config, "DRAM_PER_NODE", None)
-                if dram and gpus_per_node > 0:
-                    mem_per_gpu = dram // gpus_per_node
-                    extra.append(f"--mem-per-gpu={mem_per_gpu}G")
+                # Collect pbx-assigned GPU IDs for this step
+                gpu_ids = []
+                for node_idx in range(len(assignment.node_ids)):
+                    for rank in assignment.get_ranks_for_node(node_idx):
+                        gpu_ids.extend(assignment.get_gpu_assignments_for_rank(rank))
+                if gpu_ids:
+                    gpu_map = ",".join(str(g) for g in gpu_ids)
+                    extra.append(f"--gpu-bind=map_gpu:{gpu_map}")
             else:
                 if gpus_per_node > 0:
                     gpu_map = ",".join(str(i) for i in range(gpus_per_node))
@@ -340,18 +353,21 @@ class MPICommandBuilder:
                         f"--gpu-bind=map_gpu:{gpu_map}",
                     ])
 
-        # CPU binding
-        extra.extend(self._build_cpu_bind_flags(assignment, job_spec, job_path, context))
+        # CPU binding: sub-node srun uses mask_cpu for isolation between
+        # concurrent steps; full/multi-node uses the configured method.
+        if is_subnode:
+            extra.extend(self._build_srun_mask_cpu(assignment))
+        else:
+            extra.extend(self._build_cpu_bind_flags(assignment, job_spec, job_path, context))
 
-        # For Slurm sub-node jobs, add --exact to constrain the step to
-        # its assigned slice, and -u for unbuffered output.
-        if self._should_add_srun_exact(job_spec):
-            extra.extend(["--exact", "-u"])
+        # Sub-node srun: --overlap allows concurrent steps on the same node
+        if is_subnode:
+            extra.append("--overlap")
 
         return extra
 
-    def _should_add_srun_exact(self, job_spec: 'JobResourceSpec') -> bool:
-        """Return True when SRUN should scope the step to a sub-node allocation."""
+    def _is_subnode_srun(self, job_spec: 'JobResourceSpec') -> bool:
+        """Return True when this is a sub-node srun job."""
         if self.config.backend != MPIBackend.SRUN:
             return False
 
@@ -367,6 +383,9 @@ class MPICommandBuilder:
             return job_spec.ngpus < gpus_per_node
 
         return getattr(job_spec, "node_occupancy", 1.0) < 1.0
+
+    # Keep old name as alias for backward compatibility in tests
+    _should_add_srun_exact = _is_subnode_srun
     
     def _build_cpu_bind_flags(
         self,
@@ -498,6 +517,21 @@ class MPICommandBuilder:
         cpus_per_task = int(context["cores_per_rank"])
         return ["--cpus-per-task", str(cpus_per_task), f"--cpu-bind={method}"]
 
+    def _build_srun_mask_cpu(self, assignment: 'ResourceAssignment') -> list:
+        """Build --cpu-bind=mask_cpu for srun sub-node jobs.
+
+        Computes a per-rank hex bitmask from pbx-assigned core IDs so
+        concurrent srun steps get non-overlapping CPU sets.
+        """
+        masks = []
+        for node_idx in range(len(assignment.node_ids)):
+            for rank in assignment.get_ranks_for_node(node_idx):
+                cores = assignment.get_cpu_assignments_for_rank(rank)
+                if cores:
+                    masks.append(cores_to_hex_mask(cores))
+        if masks:
+            return [f"--cpu-bind=mask_cpu:{','.join(masks)}"]
+        return []
 
     def _apply_disable(self, flags: list) -> list:
         """Apply disable rules to remove flags."""

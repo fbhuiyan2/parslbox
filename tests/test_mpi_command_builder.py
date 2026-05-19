@@ -223,7 +223,7 @@ class TestMPICommandBuilder:
     # --- SRUN GPU gres tests ---
 
     def test_srun_subnode_gpu_job_native_flags(self):
-        """SRUN sub-node GPU job: --gpus-per-task, --mem-per-gpu, --exact, -u."""
+        """SRUN sub-node GPU: map_gpu with pbx IDs, mask_cpu, --overlap."""
         self.mock_job_spec.is_gpu_job.return_value = True
         self.mock_job_spec.ngpus = 2
         self.mock_job_spec.num_nodes = 1
@@ -234,45 +234,47 @@ class TestMPICommandBuilder:
         builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
-        assert "--gpus-per-task=1" in command
-        assert "--mem-per-gpu=64G" in command  # 256 // 4
-        assert "--exact" in command
-        assert " -u" in command
-        assert "--gres" not in command
-        assert "--gpu-bind=none" not in command
+        assert "--gpu-bind=map_gpu:" in command
+        assert "--cpu-bind=mask_cpu:" in command
+        assert "--overlap" in command
+        assert "--exact" not in command
+        assert "--gpus-per-task" not in command
+        assert "--mem-per-gpu" not in command
 
     def test_srun_fullnode_gpu_job_native_flags(self):
-        """SRUN full-node GPU job: --gpus-per-node and --gpu-bind=map_gpu."""
+        """SRUN full-node GPU: --gpus-per-node and --gpu-bind=map_gpu:0,1,2,3."""
         self.mock_job_spec.is_gpu_job.return_value = True
         self.mock_job_spec.ngpus = 4
         self.mock_job_spec.num_nodes = 1
         self.mock_job_spec.get_total_ranks.return_value = 4
         self.mock_job_spec.detect_job_type.return_value = "fullnode_gpu"
 
-        config = MPIConfig(backend=MPIBackend.SRUN)
+        config = MPIConfig(backend=MPIBackend.SRUN, cpu_bind_method="cores")
         builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "--gpus-per-node=4" in command
         assert "--gpu-bind=map_gpu:0,1,2,3" in command
-        assert "--exact" not in command
+        assert "--overlap" not in command
         assert "--gpus-per-task" not in command
+        assert "-N 1" in command
 
     def test_srun_multinode_gpu_job_native_flags(self):
-        """SRUN multi-node GPU job: --gpus-per-node and --gpu-bind=map_gpu."""
+        """SRUN multi-node GPU: --gpus-per-node and --gpu-bind=map_gpu:0,1,2,3."""
         self.mock_job_spec.is_gpu_job.return_value = True
         self.mock_job_spec.ngpus = 8
         self.mock_job_spec.num_nodes = 2
         self.mock_job_spec.get_total_ranks.return_value = 8
         self.mock_job_spec.detect_job_type.return_value = "multinode_gpu"
 
-        config = MPIConfig(backend=MPIBackend.SRUN)
+        config = MPIConfig(backend=MPIBackend.SRUN, cpu_bind_method="cores")
         builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
         assert "--gpus-per-node=4" in command
         assert "--gpu-bind=map_gpu:0,1,2,3" in command
-        assert "--exact" not in command
+        assert "--overlap" not in command
+        assert "-N 2" in command
 
     def test_srun_cpu_job_no_gpu_flags(self):
         """SRUN CPU job: no GPU-related flags."""
@@ -282,7 +284,6 @@ class TestMPICommandBuilder:
         builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
-        assert "--gres" not in command
         assert "--gpu-bind" not in command
         assert "--gpus-per-node" not in command
         assert "--gpus-per-task" not in command
@@ -297,7 +298,6 @@ class TestMPICommandBuilder:
         builder = MPICommandBuilder(config, self.mock_system_config)
         command = builder.build_command(self.mock_assignment, self.mock_job_spec)
 
-        assert "--gres" not in command
         assert "--gpu-bind" not in command
         assert "--gpus-per-node" not in command
 

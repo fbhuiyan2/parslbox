@@ -801,12 +801,8 @@ class TestMPICommandGeneration:
         assert "--cpus-per-task 8" in srun_cmd
         assert "--cpu-bind=cores" in srun_cmd
 
-    def test_subnode_gpu_srun_depth_binding(self):
-        """Test depth binding for sub-node GPU job uses per-GPU core share, not total cores.
-
-        Regression test: a 1-GPU job on a 4-GPU/32-core node must get
-        cores_per_rank = 32 // 4 = 8, not 32 // 1 = 32.
-        """
+    def test_subnode_gpu_srun_uses_mask_cpu(self):
+        """Test sub-node GPU srun uses mask_cpu for CPU isolation."""
         config = MockSystemConfig(mpi_cmd="srun")
         rm = ResourceManager(config, job_tracker=None)
 
@@ -816,15 +812,13 @@ class TestMPICommandGeneration:
 
         mpi_config = MPIConfig(
             backend=MPIBackend.SRUN,
-            cpu_bind_method="depth",
-            use_gpu_wrapper=True,
+            cpu_bind_method="cores",
         )
         commands = build_mpi_command(mpi_config, config, assignment, spec)
 
         srun_cmd = commands["PBX_SRUN_PREFIX"]
-        # 32 cores / 4 GPUs = 8 cores per rank
-        assert "--cpus-per-task 8" in srun_cmd
-        assert "--cpu-bind=cores" in srun_cmd
+        assert "--cpu-bind=mask_cpu:" in srun_cmd
+        assert "--overlap" in srun_cmd
 
     def test_subnode_gpu_mpich_depth_binding(self):
         """Test MPICH depth binding for sub-node GPU job uses per-GPU core share.
@@ -897,12 +891,12 @@ class TestMPICommandGeneration:
         commands = build_mpi_command(mpi_config, config, assignment, spec)
 
         srun_cmd = commands["PBX_SRUN_PREFIX"]
-        # (32 - 4 excluded) / 4 GPUs = 7 cores per rank
-        assert "--cpus-per-task 7" in srun_cmd
-        assert "--cpu-bind=cores" in srun_cmd
+        # Sub-node srun uses mask_cpu for CPU isolation
+        assert "--cpu-bind=mask_cpu:" in srun_cmd
+        assert "--overlap" in srun_cmd
 
     def test_srun_subnode_gpu_native_flags(self):
-        """Test that srun sub-node GPU jobs use native SLURM GPU flags."""
+        """Test that srun sub-node GPU jobs use map_gpu with pbx IDs and mask_cpu."""
         config = MockSystemConfig(mpi_cmd="srun")
         rm = ResourceManager(config, job_tracker=None)
 
@@ -918,11 +912,11 @@ class TestMPICommandGeneration:
         commands = build_mpi_command(mpi_config, config, assignment, spec)
 
         srun_cmd = commands["PBX_SRUN_PREFIX"]
-        assert "--gpus-per-task=1" in srun_cmd
-        assert "--mem-per-gpu=64G" in srun_cmd  # 256 // 4
-        assert "--exact" in srun_cmd
-        assert " -u" in srun_cmd
-        assert "--gres" not in srun_cmd
+        assert "--gpu-bind=map_gpu:" in srun_cmd
+        assert "--cpu-bind=mask_cpu:" in srun_cmd
+        assert "--overlap" in srun_cmd
+        assert "--exact" not in srun_cmd
+        assert "--gpus-per-task" not in srun_cmd
 
     def test_srun_fullnode_gpu_native_flags(self, resource_manager):
         """Test that full-node srun GPU jobs use --gpus-per-node and --gpu-bind=map_gpu."""
@@ -971,15 +965,15 @@ class TestMPICommandGeneration:
 
         mpi_config = MPIConfig(
             backend=MPIBackend.SRUN,
-            disable=["gpus-per-task"],
+            disable=["gpu-bind"],
         )
         commands = build_mpi_command(mpi_config, config, assignment, spec)
 
         srun_cmd = commands["PBX_SRUN_PREFIX"]
-        assert "gpus-per-task" not in srun_cmd
+        assert "gpu-bind" not in srun_cmd
 
-    def test_srun_subnode_gpu_has_exact(self):
-        """Test that srun sub-node GPU jobs include --exact."""
+    def test_srun_subnode_gpu_has_overlap(self):
+        """Test that srun sub-node GPU jobs include --overlap."""
         config = MockSystemConfig(mpi_cmd="srun")
         rm = ResourceManager(config, job_tracker=None)
 
@@ -987,13 +981,14 @@ class TestMPICommandGeneration:
         assignment = rm.assign_resources(job)
         spec = create_job_resource_spec(job)
 
-        mpi_config = MPIConfig(backend=MPIBackend.SRUN, use_gpu_wrapper=True)
+        mpi_config = MPIConfig(backend=MPIBackend.SRUN)
         commands = build_mpi_command(mpi_config, config, assignment, spec)
 
-        assert "--exact" in commands["PBX_SRUN_PREFIX"]
+        assert "--overlap" in commands["PBX_SRUN_PREFIX"]
+        assert "--exact" not in commands["PBX_SRUN_PREFIX"]
 
-    def test_srun_subnode_cpu_has_exact(self):
-        """Test that srun sub-node CPU jobs include --exact."""
+    def test_srun_subnode_cpu_has_overlap(self):
+        """Test that srun sub-node CPU jobs include --overlap."""
         config = MockSystemConfig(mpi_cmd="srun")
         rm = ResourceManager(config, job_tracker=None)
 
@@ -1004,10 +999,11 @@ class TestMPICommandGeneration:
         mpi_config = MPIConfig(backend=MPIBackend.SRUN)
         commands = build_mpi_command(mpi_config, config, assignment, spec)
 
-        assert "--exact" in commands["PBX_SRUN_PREFIX"]
+        assert "--overlap" in commands["PBX_SRUN_PREFIX"]
+        assert "--exact" not in commands["PBX_SRUN_PREFIX"]
 
-    def test_srun_fullnode_no_exact(self):
-        """Test that srun full-node jobs do NOT include --exact."""
+    def test_srun_fullnode_no_overlap(self):
+        """Test that srun full-node jobs do NOT include --overlap."""
         config = MockSystemConfig(mpi_cmd="srun")
         rm = ResourceManager(config, job_tracker=None)
 
@@ -1015,10 +1011,10 @@ class TestMPICommandGeneration:
         assignment = rm.assign_resources(job)
         spec = create_job_resource_spec(job)
 
-        mpi_config = MPIConfig(backend=MPIBackend.SRUN, use_gpu_wrapper=True)
+        mpi_config = MPIConfig(backend=MPIBackend.SRUN)
         commands = build_mpi_command(mpi_config, config, assignment, spec)
 
-        assert "--exact" not in commands["PBX_SRUN_PREFIX"]
+        assert "--overlap" not in commands["PBX_SRUN_PREFIX"]
 
     def test_gpu_wrapper_disabled_via_config(self, resource_manager):
         """Test that gpu-wrapper can be disabled via MPIConfig.disable."""
