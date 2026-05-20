@@ -52,22 +52,21 @@ class PerlmutterCpuConfig(SystemConfig):
         Args:
             run_dir: Path for Parsl's run directory.
             retries: Number of retries for failed Parsl apps.
-            max_workers: Optional override for workers per node.
+            max_workers: Optional override for total workers across all nodes.
+                         If None, uses MAX_WORKERS_PER_NODE * nodes.
+                         If provided, will be capped at MAX_WORKERS_PER_NODE * nodes.
 
         Returns:
             Config: A Parsl configuration object.
         """
         nodes, _ = self.detect_resources()
 
-        if nodes == 0:
-            nodes = 1
-
-        workers_per_node = self.MAX_WORKERS_PER_NODE
-
         if max_workers is not None:
-            workers_per_node = min(max_workers, workers_per_node)
+            max_workers_per_node = min(max_workers, self.MAX_WORKERS_PER_NODE * nodes)
+        else:
+            max_workers_per_node = self.MAX_WORKERS_PER_NODE * nodes
 
-        cores_per_worker = self.CORES_PER_NODE / workers_per_node
+        cores_per_worker = self.CORES_PER_NODE / max_workers_per_node
 
         return Config(
             executors=[
@@ -77,7 +76,7 @@ class PerlmutterCpuConfig(SystemConfig):
                     heartbeat_threshold=300,
                     worker_debug=True,
                     available_accelerators=0,
-                    max_workers_per_node=workers_per_node,
+                    max_workers_per_node=max_workers_per_node,
                     cores_per_worker=cores_per_worker,
                     prefetch_capacity=0,
                     provider=LocalProvider(
@@ -92,7 +91,7 @@ class PerlmutterCpuConfig(SystemConfig):
         )
 
     def get_default_sched_opts(self) -> str:
-        return "#SBATCH -C cpu"
+        return "#SBATCH --constraint=cpu"
 
     def get_default_mpi_config_yaml(self) -> dict:
         return {

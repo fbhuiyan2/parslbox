@@ -78,38 +78,24 @@ class PinnaclesCenvalarcConfig(SystemConfig):
         """
         Generate Parsl configuration for Pinnacles CENVALARC.
 
-        Dynamically adjusts workers based on detected resources:
-        - GPU partition: workers = GPUs per node (2)
-        - CPU partition: workers = 2 (sensible default for CPU jobs)
-
         Args:
             run_dir: Path for Parsl's run directory.
             retries: Number of retries for failed Parsl apps.
-            max_workers: Optional override for workers per node.
+            max_workers: Optional override for total workers across all nodes.
+                         If None, uses MAX_WORKERS_PER_NODE * nodes.
+                         If provided, will be capped at MAX_WORKERS_PER_NODE * nodes.
 
         Returns:
             Config: A Parsl configuration object.
         """
-        nodes, total_gpus = self.detect_resources()
+        nodes, _ = self.detect_resources()
 
-        if nodes == 0:
-            nodes = 1
-
-        detected_gpus_per_node = total_gpus // nodes if nodes > 0 else 0
-
-        # Determine workers per node based on detected resources
-        if detected_gpus_per_node > 0:
-            # GPU partition: one worker per GPU
-            workers_per_node = detected_gpus_per_node
-        else:
-            # CPU partition: default to 2 workers
-            workers_per_node = 2
-
-        # Apply max_workers override if provided
         if max_workers is not None:
-            workers_per_node = min(max_workers, workers_per_node)
+            max_workers_per_node = min(max_workers, self.MAX_WORKERS_PER_NODE * nodes)
+        else:
+            max_workers_per_node = self.MAX_WORKERS_PER_NODE * nodes
 
-        cores_per_worker = self.CORES_PER_NODE / workers_per_node
+        cores_per_worker = self.CORES_PER_NODE / max_workers_per_node
 
         return Config(
             executors=[
@@ -119,7 +105,7 @@ class PinnaclesCenvalarcConfig(SystemConfig):
                     heartbeat_threshold=300,
                     worker_debug=True,
                     available_accelerators=0,
-                    max_workers_per_node=workers_per_node,
+                    max_workers_per_node=max_workers_per_node,
                     cores_per_worker=cores_per_worker,
                     prefetch_capacity=0,
                     provider=LocalProvider(
