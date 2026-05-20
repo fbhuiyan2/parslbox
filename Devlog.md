@@ -1,6 +1,6 @@
 # Devlog
 
-**Current Version: 0.9.2**
+**Current Version: 0.9.3**
 
 ## Purpose
 This file tracks bug fixes and development issues encountered during ParslBox development. 
@@ -52,5 +52,10 @@ It serves as a quick reference for resolved problems and their solutions, separa
   - **Superseded**: `--mem=0` replaced with `--mem-per-gpu={DRAM_PER_NODE // GPUS_PER_NODE}G` in v0.9.2 for proper per-step memory partitioning.
 
 [2026-05-15]
-- **Refactor**: Rewrote srun backend to use native SLURM GPU/memory flags instead of wrapper scripts and `--mem=0`. Sub-node GPU jobs now use `--gpus-per-task=1 --mem-per-gpu=XG`, full/multi-node use `--gpus-per-node=N --gpu-bind=map_gpu:0,1,...`. GPU wrapper scripts and `CUDA_VISIBLE_DEVICES` injection are skipped for srun. Added `cores` and `threads` as srun-native `cpu_bind_method` options (replaces misleading `depth` for SLURM).
+- **Refactor**: Rewrote srun backend to use native SLURM GPU/memory flags instead of wrapper scripts and `--mem=0`. Added `cores` and `threads` as srun-native `cpu_bind_method` options (replaces misleading `depth` for SLURM).
 - **Feature**: Added NERSC Perlmutter GPU and CPU system configs with `DRAM_PER_NODE` base class attribute.
+
+[2026-05-19]
+- **Refactor**: Reworked srun sub-node mechanism after Perlmutter testing. `--gpus-per-task` and `--exact` don't partition resources between concurrent steps on Perlmutter. Replaced with `--gpu-bind=map_gpu:{pbx_ids}` + `--cpu-bind=mask_cpu:{hex}` + `--overlap`. Added `-N {nodes}` to all srun jobs. Removed `--mem-per-gpu` (not supported on Perlmutter).
+- **Feature**: Configurable `ranks_per_node` for GPU jobs. Removed hardcoded 1-rank-per-GPU. Per-app defaults via `get_default_ranks_per_node()`. Multi-GPU per rank uses `--gpu-bind=mask_gpu`. Simplified `get_total_ranks()` and `_calculate_ranks_per_node()`.
+- **Change**: Python and Julia apps switched to `USES_MPI=True` with `ranks_per_node=1` default. Scripts are now launched via srun/mpirun with 1 rank per node, works with or without mpi4py/MPI.jl.

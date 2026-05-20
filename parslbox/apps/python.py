@@ -15,30 +15,32 @@ class PythonApp(AppBase):
     # App configuration
     INPUT_REQUIRED = True
     DFLT_INPUT = None
-    USES_MPI = False  # Python scripts don't use MPI for parallelization.
-                      # PBX wraps the command with a resource launcher to
-                      # constrain execution to assigned resources.
-    
+    USES_MPI = True   # Launches via srun/mpirun so scripts are constrained
+                      # to assigned nodes. Works with or without mpi4py.
+
+    @classmethod
+    def get_default_ranks_per_node(cls, ngpus, num_nodes, system_config):
+        return 1
+
     def get_command_template(self, **kwargs) -> str:
         """
         Construct Python execution command.
 
-        Python command format: {executable} {in_file}
-        Users can configure a custom executable path (e.g., "python3 -u")
-        via executable_path in config.yaml, or rely on the environment.
+        Python command format: {mpi_prefix} {executable} {in_file}
 
         Args:
-            **kwargs: Contains in_file and other parameters
+            **kwargs: Contains mpi_prefix, in_file, and other parameters
 
         Returns:
             str: Python execution command
         """
+        mpi_prefix = kwargs['mpi_prefix']
+        mpi_opts_str = kwargs['mpi_opts_str']
         in_file = kwargs['in_file']
         executable = kwargs.get('executable') or 'python'
 
-        # Log the command being constructed
         logger = logging.getLogger(__name__)
-        cmd = f"{executable} {in_file}"
+        cmd = f"{mpi_prefix} {mpi_opts_str} {executable} {in_file}"
         logger.info(f"Python command: {cmd}")
 
         return cmd

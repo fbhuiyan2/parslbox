@@ -54,20 +54,22 @@ class TestMPICommandBuilder:
     # --- _calculate_ranks_per_node tests ---
 
     def test_ranks_per_node_single_node_gpu(self):
-        """Single-node GPU job: ngpus=4, num_nodes=1 → returns 4."""
+        """Single-node GPU job: ranks_per_node=4 → returns 4."""
         self.mock_job_spec.is_gpu_job.return_value = True
         self.mock_job_spec.ngpus = 4
         self.mock_job_spec.num_nodes = 1
+        self.mock_job_spec.ranks_per_node = 4
 
         builder = MPICommandBuilder(self.mpi_config, self.mock_system_config)
         result = builder._calculate_ranks_per_node(self.mock_job_spec, self.mock_assignment)
         assert result == 4
 
     def test_ranks_per_node_multinode_gpu(self):
-        """Multi-node GPU job: ngpus=1200, num_nodes=100 → returns 12 (THE BUG FIX)."""
+        """Multi-node GPU job: ranks_per_node=12 → returns 12."""
         self.mock_job_spec.is_gpu_job.return_value = True
         self.mock_job_spec.ngpus = 1200
         self.mock_job_spec.num_nodes = 100
+        self.mock_job_spec.ranks_per_node = 12
 
         builder = MPICommandBuilder(self.mpi_config, self.mock_system_config)
         result = builder._calculate_ranks_per_node(self.mock_job_spec, self.mock_assignment)
@@ -89,6 +91,7 @@ class TestMPICommandBuilder:
         self.mock_job_spec.is_gpu_job.return_value = True
         self.mock_job_spec.ngpus = 4
         self.mock_job_spec.num_nodes = 1
+        self.mock_job_spec.ranks_per_node = 4
         self.mock_job_spec.get_total_ranks.return_value = 4
 
         config = MPIConfig(backend=MPIBackend.MPICH)
@@ -103,6 +106,7 @@ class TestMPICommandBuilder:
         self.mock_job_spec.is_gpu_job.return_value = True
         self.mock_job_spec.ngpus = 1200
         self.mock_job_spec.num_nodes = 100
+        self.mock_job_spec.ranks_per_node = 12
         self.mock_job_spec.get_total_ranks.return_value = 1200
         self.mock_assignment.hostnames = [f"node{i}" for i in range(100)]
 
@@ -148,6 +152,7 @@ class TestMPICommandBuilder:
         """OpenMPI single-node GPU: assert -np N and ppr:N:node."""
         self.mock_job_spec.is_gpu_job.return_value = True
         self.mock_job_spec.ngpus = 4
+        self.mock_job_spec.ranks_per_node = 4
         self.mock_job_spec.num_nodes = 1
         self.mock_job_spec.get_total_ranks.return_value = 4
 
@@ -162,6 +167,7 @@ class TestMPICommandBuilder:
         """OpenMPI multi-node GPU: assert correct per-node ppr value."""
         self.mock_job_spec.is_gpu_job.return_value = True
         self.mock_job_spec.ngpus = 1200
+        self.mock_job_spec.ranks_per_node = 12
         self.mock_job_spec.num_nodes = 100
         self.mock_job_spec.get_total_ranks.return_value = 1200
         self.mock_assignment.hostnames = [f"node{i}" for i in range(100)]
@@ -194,6 +200,7 @@ class TestMPICommandBuilder:
         """SRUN single-node GPU: assert -n N and --ntasks-per-node N."""
         self.mock_job_spec.is_gpu_job.return_value = True
         self.mock_job_spec.ngpus = 4
+        self.mock_job_spec.ranks_per_node = 4
         self.mock_job_spec.num_nodes = 1
         self.mock_job_spec.get_total_ranks.return_value = 4
 
@@ -208,6 +215,7 @@ class TestMPICommandBuilder:
         """SRUN multi-node GPU: assert correct per-node ntasks value."""
         self.mock_job_spec.is_gpu_job.return_value = True
         self.mock_job_spec.ngpus = 1200
+        self.mock_job_spec.ranks_per_node = 12
         self.mock_job_spec.num_nodes = 100
         self.mock_job_spec.get_total_ranks.return_value = 1200
         self.mock_assignment.hostnames = [f"node{i}" for i in range(100)]
@@ -226,6 +234,7 @@ class TestMPICommandBuilder:
         """SRUN sub-node GPU: map_gpu with pbx IDs, mask_cpu, --overlap."""
         self.mock_job_spec.is_gpu_job.return_value = True
         self.mock_job_spec.ngpus = 2
+        self.mock_job_spec.ranks_per_node = 2
         self.mock_job_spec.num_nodes = 1
         self.mock_job_spec.get_total_ranks.return_value = 2
         self.mock_job_spec.detect_job_type.return_value = "subnode_gpu"
@@ -245,6 +254,7 @@ class TestMPICommandBuilder:
         """SRUN full-node GPU: --gpus-per-node and --gpu-bind=map_gpu:0,1,2,3."""
         self.mock_job_spec.is_gpu_job.return_value = True
         self.mock_job_spec.ngpus = 4
+        self.mock_job_spec.ranks_per_node = 4
         self.mock_job_spec.num_nodes = 1
         self.mock_job_spec.get_total_ranks.return_value = 4
         self.mock_job_spec.detect_job_type.return_value = "fullnode_gpu"
@@ -263,6 +273,7 @@ class TestMPICommandBuilder:
         """SRUN multi-node GPU: --gpus-per-node and --gpu-bind=map_gpu:0,1,2,3."""
         self.mock_job_spec.is_gpu_job.return_value = True
         self.mock_job_spec.ngpus = 8
+        self.mock_job_spec.ranks_per_node = 4
         self.mock_job_spec.num_nodes = 2
         self.mock_job_spec.get_total_ranks.return_value = 8
         self.mock_job_spec.detect_job_type.return_value = "multinode_gpu"
@@ -292,6 +303,7 @@ class TestMPICommandBuilder:
         """OpenMPI GPU job: no SLURM GPU flags."""
         self.mock_job_spec.is_gpu_job.return_value = True
         self.mock_job_spec.ngpus = 2
+        self.mock_job_spec.ranks_per_node = 2
         self.mock_job_spec.get_total_ranks.return_value = 2
 
         config = MPIConfig(backend=MPIBackend.OPENMPI)
@@ -422,6 +434,7 @@ class TestMPICommandBuilder:
         mock_wrapper.return_value = "/tmp/gpu_wrapper.sh"
         self.mock_job_spec.is_gpu_job.return_value = True
         self.mock_job_spec.ngpus = 4
+        self.mock_job_spec.ranks_per_node = 4
         self.mock_job_spec.num_nodes = 1
         self.mock_job_spec.get_total_ranks.return_value = 4
 
@@ -438,6 +451,7 @@ class TestMPICommandBuilder:
         mock_wrapper.return_value = "/tmp/gpu_wrapper.sh"
         self.mock_job_spec.is_gpu_job.return_value = True
         self.mock_job_spec.ngpus = 4
+        self.mock_job_spec.ranks_per_node = 4
         self.mock_job_spec.num_nodes = 1
         self.mock_job_spec.get_total_ranks.return_value = 4
 
@@ -461,6 +475,7 @@ class TestMPICommandBuilder:
         """SRUN backend skips GPU wrapper — uses native SLURM GPU binding."""
         self.mock_job_spec.is_gpu_job.return_value = True
         self.mock_job_spec.ngpus = 4
+        self.mock_job_spec.ranks_per_node = 4
         self.mock_job_spec.num_nodes = 1
         self.mock_job_spec.get_total_ranks.return_value = 4
         self.mock_job_spec.detect_job_type.return_value = "fullnode_gpu"

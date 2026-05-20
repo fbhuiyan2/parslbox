@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.3] - 2026-05-19
+
+### Added
+
+#### Configurable `ranks_per_node` for GPU Jobs
+- **Removed hardcoded 1-rank-per-GPU limitation.** `ranks_per_node` is now configurable via `--ranks-per-node` at job submission time
+- **Per-app defaults via `get_default_ranks_per_node()` classmethod:**
+  - LAMMPS/VASP/ORCA: 1 rank per GPU (preserves existing behavior)
+  - Python/Julia: 1 rank per node
+- **Validation:** `ranks_per_node` must not exceed `GPUS_PER_NODE` (GPU jobs) or `CORES_PER_NODE` (CPU jobs)
+- **Multi-GPU per rank support:** `--gpu-bind=mask_gpu` used when ranks < GPUs (e.g., 2 ranks with 2 GPUs each)
+
+#### Python and Julia Now Use MPI Launch
+- **Python and Julia apps switched to `USES_MPI=True`** — launched via `srun`/`mpirun` with proper rank placement. Works with or without `mpi4py`/`MPI.jl`. Default 1 rank per node ensures scripts are constrained to assigned nodes.
+
+### Changed
+
+#### srun Backend Rework (Verified on Perlmutter)
+- **Sub-node GPU isolation:** `--gpu-bind=map_gpu:{pbx_gpu_ids}` with explicit GPU IDs from resource manager + `--cpu-bind=mask_cpu:{hex}` for CPU isolation + `--overlap` for concurrent steps. Replaces `--gpus-per-task`/`--exact` which don't partition on Perlmutter.
+- **`-N {nodes}` added** to all srun jobs to prevent SLURM from spreading tasks to unassigned nodes
+- **`--mem-per-gpu` removed** — does not work on Perlmutter's SLURM configuration
+
+---
+
 ## [0.9.2] - 2026-05-15
 
 ### Added
@@ -20,13 +44,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added ORCA quantum chemistry application support
 
 #### Native SLURM srun Backend
-- **Replaced wrapper scripts with native SLURM GPU binding** for srun:
-  - Sub-node GPU: `--gpus-per-task=1 --mem-per-gpu={DRAM/GPUs}G`
-  - Full/multi-node GPU: `--gpus-per-node=N --gpu-bind=map_gpu:0,1,...,N-1`
-- **Removed `--mem=0`** — sub-node GPU jobs now use `--mem-per-gpu` for proportional memory allocation, fixing serialization of concurrent sub-node steps
-- **Added `-u` (unbuffered)** for all sub-node srun jobs
-- **`CUDA_VISIBLE_DEVICES` injection muted** for srun backend — SLURM handles GPU binding natively
-- **New `cpu_bind_method` options**: `cores` and `threads` for srun (maps to `--cpu-bind=cores` and `--cpu-bind=threads`). Replaces misleading `depth` terminology for SLURM systems
+- **Replaced wrapper scripts with native SLURM GPU binding** for srun
+- **Removed `--mem=0`**
+- **`CUDA_VISIBLE_DEVICES` injection muted** for srun backend
+- **New `cpu_bind_method` options**: `cores` and `threads` for srun
 
 ---
 

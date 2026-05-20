@@ -325,15 +325,19 @@ class ResourceManager:
                     node_occupancy=spec.node_occupancy
                 )
                 
-                # Assign resources per rank (1 rank per GPU for GPU jobs)
-                for rank in range(spec.ngpus):
-                    gpu_id = assigned_gpus[rank]
-                    rank_cores = cpu_assignments[rank]
-                    
+                # Assign resources per rank
+                gpus_per_rank = max(1, spec.ngpus // spec.ranks_per_node)
+                cores_per_rank = len(cpu_assignments) // spec.ranks_per_node if cpu_assignments else 0
+                for rank in range(spec.ranks_per_node):
+                    rank_gpus = assigned_gpus[rank * gpus_per_rank : (rank + 1) * gpus_per_rank]
+                    rank_cores = []
+                    for g in range(rank * gpus_per_rank, min((rank + 1) * gpus_per_rank, len(cpu_assignments))):
+                        rank_cores.extend(cpu_assignments[g])
+
                     assignment.assign_resources_to_rank(
                         rank=rank,
                         node_idx=0,
-                        gpu_ids=[gpu_id],
+                        gpu_ids=rank_gpus,
                         cpu_ids=rank_cores
                     )
                 
@@ -472,41 +476,34 @@ class ResourceManager:
             node_occupancy=spec.node_occupancy
         )
         
-        # Assign resources per rank (1 rank per GPU for GPU jobs)
+        # Assign resources per rank
         current_rank = 0
         for node_idx, node in enumerate(assigned_nodes):
             if spec.is_multinode_job():
                 gpus_on_node = self.system_config.GPUS_PER_NODE
             else:
                 gpus_on_node = spec.ngpus
-            
-            # Get the GPU and CPU assignments from the node
+
             assigned_gpus = node.job_gpu_assignments[spec.job_id]
             assigned_cores = node.job_cpu_assignments[spec.job_id]
-            
-            # Validate that we have the expected number of GPUs
+
             if len(assigned_gpus) != gpus_on_node:
                 raise RuntimeError(f"GPU assignment mismatch: expected {gpus_on_node}, got {len(assigned_gpus)}")
-            
-            # Distribute cores among GPUs (assuming equal distribution)
-            cores_per_gpu_actual = len(assigned_cores) // len(assigned_gpus)
-            
-            for local_rank in range(gpus_on_node):                 
-                gpu_id = assigned_gpus[local_rank]
-                
-                # Assign cores for this GPU rank
-                # assigned_cores is a flat list. but the method below still maintains affinity because 
-                # each gpu gets the same number of cores (equal distribution assumption) and are being looped through linearly
-                # in the same order as in assign_gpu_job()
-                start_core_idx = local_rank * cores_per_gpu_actual
-                end_core_idx = min(start_core_idx + cores_per_gpu_actual, len(assigned_cores))
+
+            gpus_per_rank = max(1, gpus_on_node // spec.ranks_per_node)
+            cores_per_gpu_actual = len(assigned_cores) // len(assigned_gpus) if assigned_gpus else 0
+
+            for local_rank in range(spec.ranks_per_node):
+                rank_gpus = assigned_gpus[local_rank * gpus_per_rank : (local_rank + 1) * gpus_per_rank]
+
+                start_core_idx = local_rank * gpus_per_rank * cores_per_gpu_actual
+                end_core_idx = min(start_core_idx + gpus_per_rank * cores_per_gpu_actual, len(assigned_cores))
                 rank_cores = assigned_cores[start_core_idx:end_core_idx]
-                
-                
+
                 assignment.assign_resources_to_rank(
                     rank=current_rank,
                     node_idx=node_idx,
-                    gpu_ids=[gpu_id],
+                    gpu_ids=rank_gpus,
                     cpu_ids=rank_cores
                 )
                 current_rank += 1

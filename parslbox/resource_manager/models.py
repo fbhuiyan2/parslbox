@@ -20,12 +20,9 @@ logger = logging.getLogger(__name__)
 def create_job_resource_spec(job_data: dict) -> 'JobResourceSpec':
     """
     Create JobResourceSpec directly from job database data.
-    
-    Args:
-        job_data: Dictionary containing job data from database
-        
-    Returns:
-        JobResourceSpec object
+
+    ranks_per_node must be correctly set in the database by the validator
+    at job creation time (e.g., ngpus for GPU jobs, 1 for Python).
     """
     return JobResourceSpec(
         job_id=job_data['job_id'],
@@ -376,12 +373,7 @@ class JobResourceSpec:
     
     def get_total_ranks(self) -> int:
         """Calculate total number of MPI ranks for this job."""
-        if self.is_gpu_job():
-            # GPU jobs: 1 rank per GPU
-            return self.ngpus
-        else:
-            # CPU jobs: use ranks_per_node
-            return self.num_nodes * self.ranks_per_node
+        return self.num_nodes * self.ranks_per_node
     
     def detect_job_type(self, system_config) -> str:
         """

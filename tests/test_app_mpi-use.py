@@ -257,10 +257,10 @@ class TestUsesMPIAttribute:
         from parslbox.apps.appbase import AppBase
         assert AppBase.USES_MPI is True
 
-    def test_python_app_false(self):
-        """PythonApp.USES_MPI is False."""
+    def test_python_app_true(self):
+        """PythonApp.USES_MPI is True."""
         from parslbox.apps.python import PythonApp
-        assert PythonApp.USES_MPI is False
+        assert PythonApp.USES_MPI is True
 
     def test_vasp_app_true(self):
         """VaspApp.USES_MPI is True (inherited)."""

@@ -18,29 +18,32 @@ class JuliaApp(AppBase):
     # App configuration
     INPUT_REQUIRED = True
     DFLT_INPUT = None
-    USES_MPI = False  # Julia scripts don't use MPI directly.
-                      # PBX wraps the command with a resource launcher to
-                      # constrain execution to assigned resources.
+    USES_MPI = True   # Launches via srun/mpirun so scripts are constrained
+                      # to assigned nodes. Works with or without MPI.jl.
+
+    @classmethod
+    def get_default_ranks_per_node(cls, ngpus, num_nodes, system_config):
+        return 1
 
     def get_command_template(self, **kwargs) -> str:
         """
         Construct Julia execution command.
 
-        Julia command format: julia {in_file}
-        Users can configure a custom executable path (e.g., with --project flag)
-        via executable_path in config.yaml, or set JULIA_PROJECT in env_file.
+        Julia command format: {mpi_prefix} {executable} {in_file}
 
         Args:
-            **kwargs: Contains in_file and other parameters
+            **kwargs: Contains mpi_prefix, in_file, and other parameters
 
         Returns:
             str: Julia execution command
         """
+        mpi_prefix = kwargs['mpi_prefix']
+        mpi_opts_str = kwargs['mpi_opts_str']
         in_file = kwargs['in_file']
         executable = kwargs.get('executable') or 'julia'
 
         logger = logging.getLogger(__name__)
-        cmd = f"{executable} {in_file}"
+        cmd = f"{mpi_prefix} {mpi_opts_str} {executable} {in_file}"
         logger.info(f"Julia command: {cmd}")
 
         return cmd

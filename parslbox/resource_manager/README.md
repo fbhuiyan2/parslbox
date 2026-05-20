@@ -86,11 +86,12 @@ MPI flags are built modularly and then optionally filtered/extended by overrides
 
 ### srun (SLURM)
 - Basic layout:
-  - `-n <total_ranks> --ntasks-per-node <ranks_per_node>`
-- CPU binding: `--cpus-per-task <cores_per_rank> --cpu-bind=cores` (or `--cpu-bind=threads`)
-- GPU jobs (full/multi-node): `--gpus-per-node=<N> --gpu-bind=map_gpu:0,1,...,N-1`
-- GPU jobs (sub-node): `--gpus-per-task=1 --mem-per-gpu=<DRAM/GPUs>G`
-- Sub-node jobs: `--exact -u` for resource isolation and unbuffered output
+  - `-N <nodes> -n <total_ranks> --ntasks-per-node <ranks_per_node>`
+- CPU binding (full/multi-node): `--cpus-per-task <cores_per_rank> --cpu-bind=cores` (or `threads`)
+- CPU binding (sub-node): `--cpu-bind=mask_cpu:<hex_bitmask>` from pbx-assigned core IDs
+- GPU binding (full/multi-node): `--gpus-per-node=<N> --gpu-bind=map_gpu:0,1,...,N-1` (1 GPU/rank) or `--gpu-bind=mask_gpu:<hex>` (multi-GPU/rank)
+- GPU binding (sub-node): `--gpu-bind=map_gpu:<pbx_assigned_gpu_ids>` with explicit IDs from resource manager
+- Sub-node jobs: `--overlap` for concurrent step execution
 - No GPU wrapper scripts — SLURM handles GPU binding natively
 
 ## Overrides (Minimal and Intuitive)

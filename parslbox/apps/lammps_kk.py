@@ -37,19 +37,24 @@ class LammpsKokkosApp(AppBase):
         total_gpus = kwargs['total_gpus']
         app_config = kwargs['app_config']
         
-        # Check if each rank sees only 1 GPU:
-        # - wrapper script: sets CUDA_VISIBLE_DEVICES per rank
-        # - map_gpu: srun --gpu-bind=map_gpu binds 1 GPU per rank
+        # Determine how many GPUs each rank sees for KOKKOS -k on g N:
+        # - map_gpu: 1 GPU per rank (srun binds each rank to 1 GPU)
+        # - mask_gpu: multi-GPU per rank (e.g., mask_gpu:0x3,0xc → 2 GPUs/rank)
+        # - wrapper script: 1 GPU per rank via CUDA_VISIBLE_DEVICES
+        # - none/absent: all GPUs visible to each rank
+        from parslbox.system_configs.loader import get_system_config
+        config_name = kwargs['config_name']
+        gpus_per_node = get_system_config(config_name).GPUS_PER_NODE
         if total_gpus > 0 and ('map_gpu' in mpi_prefix or ('.sh' in mpi_prefix and 'wrapper' in mpi_prefix)):
-            # Wrapper script is being used - each rank sees 1 GPU
             lammps_gpu_count = 1
+        elif total_gpus > 0 and 'mask_gpu' in mpi_prefix:
+            mpi_commands = kwargs.get('mpi_commands', {})
+            ranks_per_node = mpi_commands.get('PBX_RANKS_PER_NODE')
+            if ranks_per_node:
+                lammps_gpu_count = min(total_gpus, gpus_per_node) // int(ranks_per_node)
+            else:
+                lammps_gpu_count = min(total_gpus, gpus_per_node)
         else:
-            # No wrapper script - use per-node GPU count for Kokkos
-            # In multi-node jobs, total_gpus > gpus_per_node, but LAMMPS Kokkos
-            # -k on g N expects the per-node GPU count, not the total.
-            from parslbox.system_configs.loader import get_system_config
-            config_name = kwargs['config_name']
-            gpus_per_node = get_system_config(config_name).GPUS_PER_NODE
             lammps_gpu_count = min(total_gpus, gpus_per_node)
         
         # LAMMPS-specific: GPU vs CPU arguments

@@ -441,18 +441,16 @@ def _create_synthetic_assignment(job_spec, gpus_per_node, effective_cores):
     node_ids = [f"node-{i}" for i in range(num_nodes)]
     hostnames = [f"host-{i}" for i in range(num_nodes)]
 
-    # Calculate ranks per node
-    if job_spec.is_gpu_job():
-        if num_nodes > 1:
-            ranks_per_node = job_spec.ngpus // num_nodes
-        else:
-            ranks_per_node = job_spec.ngpus
-    else:
-        ranks_per_node = job_spec.ranks_per_node
-
+    ranks_per_node = job_spec.ranks_per_node
     cores_per_rank = effective_cores // ranks_per_node if ranks_per_node > 0 else effective_cores
 
-    # Build per-node GPU and CPU assignments
+    # Calculate GPUs per rank for assignment display
+    if job_spec.is_gpu_job():
+        gpus_on_node = system_config.GPUS_PER_NODE if num_nodes > 1 else job_spec.ngpus
+        gpus_per_rank = max(1, gpus_on_node // ranks_per_node)
+    else:
+        gpus_per_rank = 0
+
     gpu_assignments = []
     cpu_assignments = []
     for node_idx in range(num_nodes):
@@ -460,7 +458,7 @@ def _create_synthetic_assignment(job_spec, gpus_per_node, effective_cores):
         node_cpus = {}
         for rank in range(ranks_per_node):
             if job_spec.is_gpu_job():
-                node_gpus[rank] = [rank]  # GPU ID = rank index within node
+                node_gpus[rank] = list(range(rank * gpus_per_rank, (rank + 1) * gpus_per_rank))
             start_core = rank * cores_per_rank
             node_cpus[rank] = list(range(start_core, start_core + cores_per_rank))
         gpu_assignments.append(node_gpus)

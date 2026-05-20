@@ -110,7 +110,7 @@ class TestJobClassification:
     
     def test_subnode_gpu_job_classification(self, resource_manager):
         """Test sub-node GPU job classification."""
-        job = {'job_id': 2, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0}
+        job = {'job_id': 2, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0, 'ranks_per_node': 2}
         spec = create_job_resource_spec(job)
         
         assert resource_manager._is_subnode_job(spec) == True
@@ -128,7 +128,7 @@ class TestJobClassification:
     
     def test_fullnode_gpu_job_classification(self, resource_manager):
         """Test full-node GPU job classification."""
-        job = {'job_id': 4, 'num_nodes': 1, 'ngpus': 4, 'node_occupancy': 1.0}
+        job = {'job_id': 4, 'num_nodes': 1, 'ngpus': 4, 'node_occupancy': 1.0, 'ranks_per_node': 4}
         spec = create_job_resource_spec(job)
         
         assert resource_manager._is_subnode_job(spec) == False
@@ -146,7 +146,7 @@ class TestJobClassification:
     
     def test_multinode_gpu_job_classification(self, resource_manager):
         """Test multi-node GPU job classification."""
-        job = {'job_id': 6, 'num_nodes': 2, 'ngpus': 8, 'node_occupancy': 1.0}
+        job = {'job_id': 6, 'num_nodes': 2, 'ngpus': 8, 'node_occupancy': 1.0, 'ranks_per_node': 4}
         spec = create_job_resource_spec(job)
         
         assert resource_manager._is_subnode_job(spec) == False
@@ -192,7 +192,7 @@ class TestSubnodeJobs:
     
     def test_subnode_gpu_job_allocation(self, resource_manager):
         """Test sub-node GPU job resource allocation."""
-        job = {'job_id': 2, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0}
+        job = {'job_id': 2, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0, 'ranks_per_node': 2}
         
         assignment = resource_manager.assign_resources(job)
         
@@ -294,7 +294,7 @@ class TestFullnodeJobs:
     
     def test_fullnode_gpu_job_allocation(self, resource_manager):
         """Test full-node GPU job resource allocation."""
-        job = {'job_id': 4, 'num_nodes': 1, 'ngpus': 4, 'node_occupancy': 1.0}
+        job = {'job_id': 4, 'num_nodes': 1, 'ngpus': 4, 'node_occupancy': 1.0, 'ranks_per_node': 4}
         
         assignment = resource_manager.assign_resources(job)
         
@@ -364,7 +364,7 @@ class TestFullnodeJobs:
     
     def test_multinode_gpu_job_allocation(self, resource_manager):
         """Test multi-node GPU job resource allocation."""
-        job = {'job_id': 6, 'num_nodes': 2, 'ngpus': 8, 'node_occupancy': 1.0}
+        job = {'job_id': 6, 'num_nodes': 2, 'ngpus': 8, 'node_occupancy': 1.0, 'ranks_per_node': 4}
         
         assignment = resource_manager.assign_resources(job)
         
@@ -403,7 +403,7 @@ class TestAffinityScenarios:
     
     def test_gpu_job_with_full_affinity(self, resource_manager_with_affinity):
         """Test GPU job allocation with full affinity available."""
-        job = {'job_id': 1, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0}
+        job = {'job_id': 1, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0, 'ranks_per_node': 2}
         
         assignment = resource_manager_with_affinity.assign_resources(job)
         
@@ -427,7 +427,7 @@ class TestAffinityScenarios:
     
     def test_gpu_job_with_partial_affinity(self, resource_manager_partial_affinity):
         """Test GPU job allocation with partial affinity (fallback to non-affinity cores)."""
-        job = {'job_id': 1, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0}
+        job = {'job_id': 1, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0, 'ranks_per_node': 2}
         
         assignment = resource_manager_partial_affinity.assign_resources(job)
         
@@ -441,7 +441,7 @@ class TestAffinityScenarios:
     
     def test_gpu_job_without_affinity(self, resource_manager):
         """Test GPU job allocation without affinity configuration."""
-        job = {'job_id': 1, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0}
+        job = {'job_id': 1, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0, 'ranks_per_node': 2}
         
         assignment = resource_manager.assign_resources(job)
         
@@ -481,7 +481,7 @@ class TestResourceCleanup:
     def test_gpu_job_cleanup(self, resource_manager):
         """Test cleanup of GPU job resources."""
         # Allocate resources
-        job = {'job_id': 2, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0}
+        job = {'job_id': 2, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0, 'ranks_per_node': 2}
         assignment = resource_manager.assign_resources(job)
         
         # Verify initial state
@@ -502,7 +502,7 @@ class TestResourceCleanup:
     def test_fullnode_job_cleanup(self, resource_manager):
         """Test cleanup of full-node job resources."""
         # Allocate resources
-        job = {'job_id': 3, 'num_nodes': 1, 'ngpus': 4, 'node_occupancy': 1.0}
+        job = {'job_id': 3, 'num_nodes': 1, 'ngpus': 4, 'node_occupancy': 1.0, 'ranks_per_node': 4}
         assignment = resource_manager.assign_resources(job)
         
         # Verify initial state
@@ -569,7 +569,7 @@ class TestMPICommandGeneration:
     
     def test_subnode_gpu_mpirun_command(self, resource_manager):
         """Test mpirun command generation for sub-node GPU job."""
-        job = {'job_id': 2, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0}
+        job = {'job_id': 2, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0, 'ranks_per_node': 2}
         assignment = resource_manager.assign_resources(job)
         spec = create_job_resource_spec(job)
         
@@ -607,7 +607,7 @@ class TestMPICommandGeneration:
     
     def test_fullnode_gpu_mpirun_command(self, resource_manager):
         """Test mpirun command generation for full-node GPU job."""
-        job = {'job_id': 4, 'num_nodes': 1, 'ngpus': 4, 'node_occupancy': 1.0}
+        job = {'job_id': 4, 'num_nodes': 1, 'ngpus': 4, 'node_occupancy': 1.0, 'ranks_per_node': 4}
         assignment = resource_manager.assign_resources(job)
         spec = create_job_resource_spec(job)
         
@@ -646,7 +646,7 @@ class TestMPICommandGeneration:
     
     def test_multinode_gpu_mpirun_command(self, resource_manager):
         """Test mpirun command generation for multi-node GPU job."""
-        job = {'job_id': 6, 'num_nodes': 2, 'ngpus': 8, 'node_occupancy': 1.0}
+        job = {'job_id': 6, 'num_nodes': 2, 'ngpus': 8, 'node_occupancy': 1.0, 'ranks_per_node': 4}
         assignment = resource_manager.assign_resources(job)
         spec = create_job_resource_spec(job)
         
@@ -717,7 +717,7 @@ class TestRankfileGeneration:
     
     def test_mpich_rankfile_generation(self, resource_manager):
         """Test MPICH rankfile generation."""
-        job = {'job_id': 2, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0}
+        job = {'job_id': 2, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0, 'ranks_per_node': 2}
         assignment = resource_manager.assign_resources(job)
         spec = create_job_resource_spec(job)
 
@@ -764,11 +764,11 @@ class TestErrorHandling:
     def test_insufficient_resources_gpu(self, resource_manager):
         """Test insufficient GPU resources error."""
         # Use all GPUs on first node
-        job1 = {'job_id': 1, 'num_nodes': 1, 'ngpus': 4, 'node_occupancy': 1.0}
+        job1 = {'job_id': 1, 'num_nodes': 1, 'ngpus': 4, 'node_occupancy': 1.0, 'ranks_per_node': 4}
         resource_manager.assign_resources(job1)
         
         # Use all GPUs on second node
-        job2 = {'job_id': 2, 'num_nodes': 1, 'ngpus': 4, 'node_occupancy': 1.0}
+        job2 = {'job_id': 2, 'num_nodes': 1, 'ngpus': 4, 'node_occupancy': 1.0, 'ranks_per_node': 4}
         resource_manager.assign_resources(job2)
         
         # Try to allocate another GPU job (should fail)
@@ -788,7 +788,7 @@ class TestErrorHandling:
     def test_invalid_resource_spec(self, resource_manager):
         """Test invalid resource specifications."""
         # Too many GPUs per node
-        job1 = {'job_id': 1, 'num_nodes': 1, 'ngpus': 8, 'node_occupancy': 1.0}
+        job1 = {'job_id': 1, 'num_nodes': 1, 'ngpus': 8, 'node_occupancy': 1.0, 'ranks_per_node': 8}
         
         with pytest.raises(InvalidResourceSpec):
             resource_manager.assign_resources(job1)
@@ -861,7 +861,7 @@ class TestExcludeCores:
         rm = ResourceManager(config, job_tracker=None)
         
         # Allocate a GPU job
-        job = {'job_id': 1, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0}
+        job = {'job_id': 1, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0, 'ranks_per_node': 2}
         assignment = rm.assign_resources(job)
         
         # Should get 7 cores per GPU (28 available / 4 GPUs = 7 cores per GPU)
@@ -994,7 +994,7 @@ class TestResourceStatus:
     def test_resource_status_with_jobs(self, resource_manager):
         """Test resource status with active jobs."""
         # Allocate some resources
-        job1 = {'job_id': 1, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0}  # Sub-node GPU job
+        job1 = {'job_id': 1, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0, 'ranks_per_node': 2}  # Sub-node GPU job
         resource_manager.assign_resources(job1)
         
         job2 = {'job_id': 2, 'num_nodes': 1, 'ngpus': 0, 'node_occupancy': 0.5, 'ranks_per_node': 2}  # Sub-node CPU job (shares node)
@@ -1021,7 +1021,7 @@ def test_comprehensive_workflow():
     assert assignment1.node_occupancy == 0.25
     
     # 2. Sub-node GPU job (shares node with job1)
-    job2 = {'job_id': 2, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0}
+    job2 = {'job_id': 2, 'num_nodes': 1, 'ngpus': 2, 'node_occupancy': 1.0, 'ranks_per_node': 2}
     assignment2 = rm.assign_resources(job2)
     assert assignment2.hostnames[0] == assignment1.hostnames[0]  # Same node
     
@@ -1031,7 +1031,7 @@ def test_comprehensive_workflow():
     assert assignment3.hostnames[0] != assignment1.hostnames[0]  # Different node
     
     # 4. Multi-node GPU job
-    job4 = {'job_id': 4, 'num_nodes': 2, 'ngpus': 8, 'node_occupancy': 1.0}
+    job4 = {'job_id': 4, 'num_nodes': 2, 'ngpus': 8, 'node_occupancy': 1.0, 'ranks_per_node': 4}
     
     # Should fail - not enough free nodes
     with pytest.raises(InsufficientResources):

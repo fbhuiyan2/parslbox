@@ -121,8 +121,8 @@ class TestAddCommand:
             
             assert result.exit_code == 0
             assert "✅ Added 1 job(s) with IDs:" in result.stdout
-            assert "Resource specification: n:1-r:32-g:0-nocc:0.5" in result.stdout
-            
+            assert "Resource specification: n:1-r:1-g:0-nocc:0.5" in result.stdout
+
             # Verify database entry
             jobs = database.get_jobs(temp_db)
             assert len(jobs) == 1
@@ -205,8 +205,8 @@ class TestAddCommand:
                 assert result.exit_code == 0
                 assert "⚠️  Warning: Both --ngpus and --nocc specified" in result.stdout
                 assert "Setting ngpus=0 for CPU-only job" in result.stdout
-                assert "Resource specification: n:1-r:32-g:0-nocc:0.5" in result.stdout
-            
+                assert "Resource specification: n:1-r:1-g:0-nocc:0.5" in result.stdout
+
             # Cleanup
             if temp_db.exists():
                 temp_db.unlink()

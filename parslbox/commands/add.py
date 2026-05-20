@@ -5,7 +5,7 @@ from typing import List, Optional
 from typing_extensions import Annotated
 from parslbox.database import database
 from parslbox.utils import path_utils
-from parslbox.apps.app_registry import get_app_config, is_app_registered, get_registered_apps
+from parslbox.apps.app_registry import get_app_class, get_app_config, is_app_registered, get_registered_apps
 from parslbox.system_configs.loader import get_system_config
 from parslbox.commands.helpers.job_info_validator import (
     ValidationError,
@@ -91,8 +91,9 @@ def add_jobs(
     warning_messages.extend(input_warnings)
     
     # Get system configuration and validate resource parameters
+    app_class = get_app_class(app)
     system_config = validate_system_configuration(config_name)
-    resource_params, resource_info, resource_warnings = validate_resource_parameters(ngpus, nnodes, node_occupancy, ranks_per_node, system_config)
+    resource_params, resource_info, resource_warnings = validate_resource_parameters(ngpus, nnodes, node_occupancy, ranks_per_node, system_config, app_class=app_class)
     info_messages.extend(resource_info)
     warning_messages.extend(resource_warnings)
     
@@ -321,7 +322,7 @@ def add(
                 system_config = get_system_config(config_name)
                 
                 # Calculate display parameters using helper function
-                resource_params, _, _ = validate_resource_parameters(ngpus, nnodes, node_occupancy, ranks_per_node, system_config)
+                resource_params, _, _ = validate_resource_parameters(ngpus, nnodes, node_occupancy, ranks_per_node, system_config, app_class=get_app_class(app))
                 display_info = calculate_resource_display_info(resource_params, system_config)
                 
                 # Display resource specification

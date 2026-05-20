@@ -44,8 +44,8 @@ class AddJobSchema(BaseModel):
         default=None,
         ge=1,
         description=(
-            "Number of MPI ranks per node. For CPU jobs only; ignored for GPU jobs. "
-            "If not specified, defaults to cores_per_node * node_occupancy. Must be a positive integer."
+            "Number of MPI ranks per node. If not specified, uses the app's default "
+            "(e.g., 1 rank per GPU for LAMMPS, 1 rank per node for Python). Must be a positive integer."
         ),
     )
     mpi_opts: Optional[str] = Field(

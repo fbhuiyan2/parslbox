@@ -26,7 +26,21 @@ class AppBase(ABC):
                            # Set to False for non-MPI apps (e.g., Python scripts).
                            # Non-MPI apps get a resource launcher prepended to
                            # constrain execution to the assigned node/resources.
-    
+
+    @classmethod
+    def get_default_ranks_per_node(cls, ngpus, num_nodes, system_config):
+        """Return default ranks_per_node when user doesn't specify --ranks-per-node.
+
+        Default: 1 rank per GPU for GPU jobs, 1 rank per available core for CPU jobs.
+        Override in subclasses for different behavior (e.g., Python → 1 rank per node).
+        """
+        if ngpus > 0:
+            if num_nodes > 1:
+                return system_config.GPUS_PER_NODE
+            return ngpus
+        excluded = getattr(system_config, 'EXCLUDE_CORES', None) or []
+        return system_config.CORES_PER_NODE - len(excluded)
+
     @abstractmethod
     def get_command_template(self, **kwargs) -> str:
         """

@@ -80,6 +80,14 @@ def cores_to_hex_mask(core_ids: list) -> str:
     return hex(mask)
 
 
+def gpus_to_hex_mask(gpu_ids: list) -> str:
+    """Convert a list of GPU IDs to a hex bitmask string for --gpu-bind=mask_gpu."""
+    mask = 0
+    for gpu in gpu_ids:
+        mask |= (1 << gpu)
+    return hex(mask)
+
+
 class MPICommandBuilder:
     """
     Simplified MPI command builder that starts with minimal commands
@@ -155,13 +163,7 @@ class MPICommandBuilder:
         assignment: 'ResourceAssignment'
     ) -> int:
         """Calculate ranks per node."""
-        if job_spec.is_gpu_job():
-            # For GPU jobs, 1 rank per GPU
-            if job_spec.num_nodes > 1:
-                return job_spec.ngpus // job_spec.num_nodes
-            return job_spec.ngpus
-        else:
-            return job_spec.ranks_per_node
+        return job_spec.ranks_per_node
     
     def _get_hostlist(self, assignment: 'ResourceAssignment', ranks_per_node: int = 0) -> str:
         """
@@ -337,21 +339,31 @@ class MPICommandBuilder:
             gpus_per_node = getattr(self.system_config, "GPUS_PER_NODE", 0)
 
             if job_type == "subnode_gpu":
-                # Collect pbx-assigned GPU IDs for this step
-                gpu_ids = []
-                for node_idx in range(len(assignment.node_ids)):
-                    for rank in assignment.get_ranks_for_node(node_idx):
-                        gpu_ids.extend(assignment.get_gpu_assignments_for_rank(rank))
-                if gpu_ids:
-                    gpu_map = ",".join(str(g) for g in gpu_ids)
-                    extra.append(f"--gpu-bind=map_gpu:{gpu_map}")
+                extra.extend(self._build_srun_gpu_bind(assignment))
             else:
+                # Full/multi-node: all GPUs on each node are used
                 if gpus_per_node > 0:
-                    gpu_map = ",".join(str(i) for i in range(gpus_per_node))
-                    extra.extend([
-                        f"--gpus-per-node={gpus_per_node}",
-                        f"--gpu-bind=map_gpu:{gpu_map}",
-                    ])
+                    ranks_per_node = job_spec.ranks_per_node
+                    if ranks_per_node >= gpus_per_node:
+                        # 1 GPU per rank or fewer: use map_gpu
+                        gpu_map = ",".join(str(i) for i in range(gpus_per_node))
+                        extra.extend([
+                            f"--gpus-per-node={gpus_per_node}",
+                            f"--gpu-bind=map_gpu:{gpu_map}",
+                        ])
+                    else:
+                        # Multi-GPU per rank: use mask_gpu
+                        gpus_per_rank = gpus_per_node // ranks_per_node
+                        masks = []
+                        for r in range(ranks_per_node):
+                            mask = 0
+                            for g in range(r * gpus_per_rank, (r + 1) * gpus_per_rank):
+                                mask |= (1 << g)
+                            masks.append(hex(mask))
+                        extra.extend([
+                            f"--gpus-per-node={gpus_per_node}",
+                            f"--gpu-bind=mask_gpu:{','.join(masks)}",
+                        ])
 
         # CPU binding: sub-node srun uses mask_cpu for isolation between
         # concurrent steps; full/multi-node uses the configured method.
@@ -532,6 +544,26 @@ class MPICommandBuilder:
         if masks:
             return [f"--cpu-bind=mask_cpu:{','.join(masks)}"]
         return []
+
+    def _build_srun_gpu_bind(self, assignment: 'ResourceAssignment') -> list:
+        """Build --gpu-bind flags for srun. Uses map_gpu for 1 GPU per rank,
+        mask_gpu for multi-GPU per rank."""
+        per_rank_gpus = []
+        for node_idx in range(len(assignment.node_ids)):
+            for rank in assignment.get_ranks_for_node(node_idx):
+                gpus = assignment.get_gpu_assignments_for_rank(rank)
+                if gpus:
+                    per_rank_gpus.append(gpus)
+
+        if not per_rank_gpus:
+            return []
+
+        if all(len(g) == 1 for g in per_rank_gpus):
+            gpu_map = ",".join(str(g[0]) for g in per_rank_gpus)
+            return [f"--gpu-bind=map_gpu:{gpu_map}"]
+        else:
+            masks = [gpus_to_hex_mask(g) for g in per_rank_gpus]
+            return [f"--gpu-bind=mask_gpu:{','.join(masks)}"]
 
     def _apply_disable(self, flags: list) -> list:
         """Apply disable rules to remove flags."""

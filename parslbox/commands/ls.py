@@ -76,24 +76,12 @@ def ls(
             node_occupancy = job.get('node_occupancy', 1.0)
             ranks_per_node = job.get('ranks_per_node', 1)
             
+            total_ranks = num_nodes * ranks_per_node
             if num_nodes > 1:
-                # Multi-node job
-                if ngpus > 0:
-                    # Multi-node GPU job: ngpus contains total GPUs across all nodes
-                    total_gpus = ngpus
-                    total_ranks = total_gpus  # 1 rank per GPU
-                    resources_display = f"n:{num_nodes}-r:{total_ranks}-g:{total_gpus}-nocc:NA"
-                else:
-                    # Multi-node CPU job
-                    total_ranks = num_nodes * ranks_per_node
-                    resources_display = f"n:{num_nodes}-r:{total_ranks}-g:0-nocc:NA"
+                resources_display = f"n:{num_nodes}-r:{total_ranks}-g:{ngpus}-nocc:NA"
             elif ngpus > 0:
-                # Single-node GPU job
-                total_ranks = ngpus  # 1 rank per GPU
                 resources_display = f"n:1-r:{total_ranks}-g:{ngpus}-nocc:NA"
             else:
-                # Single-node CPU job
-                total_ranks = ranks_per_node
                 resources_display = f"n:1-r:{total_ranks}-g:0-nocc:{node_occupancy}"
             
             # Format job ID with parent dependencies

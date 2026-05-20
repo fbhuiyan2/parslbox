@@ -122,6 +122,7 @@ def create_parsl_future(job, app_instance, app_config, mpi_config, config_name, 
             hostnames = [h.split('.')[0] for h in hostnames]
         mpi_commands['PBX_HOSTNAMES'] = ','.join(hostnames)
         mpi_commands['PBX_CORES_PER_NODE'] = str(system_config.CORES_PER_NODE)
+        mpi_commands['PBX_RANKS_PER_NODE'] = str(job_spec.ranks_per_node)
 
         logger.info(f"Job {job_id}: Generated MPI command - {mpi_commands.get('PBX_MPI_PREFIX', 'None')}")
 

@@ -116,25 +116,27 @@ def validate_resource_parameters(
     nnodes: int = 1,
     node_occupancy: Optional[float] = None,
     ranks_per_node: Optional[int] = None,
-    system_config = None
+    system_config = None,
+    app_class = None
 ) -> Tuple[Dict[str, Any], List[str], List[str]]:
     """
     Validates resource parameters and calculates final values.
-    
+
     Args:
         ngpus: Number of GPUs requested
         nnodes: Number of nodes requested
         node_occupancy: Node occupancy fraction for CPU jobs
-        ranks_per_node: Number of MPI ranks per node
+        ranks_per_node: Number of MPI ranks per node (None = auto from app default)
         system_config: System configuration instance
-        
+        app_class: Application class for per-app ranks_per_node default
+
     Returns:
         Tuple of (resource_params_dict, info_messages, warning_messages) where resource_params_dict contains:
             - final_num_nodes: int
             - final_ngpus: int
             - final_node_occupancy: float
             - final_ranks_per_node: int
-            
+
     Raises:
         ValidationError: If resource parameters are invalid
         ResourceConflictError: If GPU and CPU parameters conflict
@@ -191,29 +193,39 @@ def validate_resource_parameters(
             final_ngpus = 0
             final_node_occupancy = node_occupancy if node_occupancy is not None else 1.0
     
-    # Calculate smart default for ranks_per_node if not specified
+    # Determine ranks_per_node: app default or user override
     if ranks_per_node is None:
-        if final_ngpus > 0:
-            # GPU jobs: 1 rank per GPU
-            final_ranks_per_node = 1
+        # Auto: use per-app default
+        if app_class is not None:
+            final_ranks_per_node = app_class.get_default_ranks_per_node(
+                final_ngpus, final_num_nodes, system_config
+            )
+        elif final_ngpus > 0:
+            # Fallback when no app class: 1 rank per GPU
+            if final_num_nodes > 1:
+                final_ranks_per_node = system_config.GPUS_PER_NODE
+            else:
+                final_ranks_per_node = final_ngpus
         else:
-            # CPU jobs: calculate based on effective cores per node * node_occupancy
-            # Account for excluded cores when calculating ranks
             excluded_cores = getattr(system_config, 'EXCLUDE_CORES', None) or []
             effective_cores_per_node = system_config.CORES_PER_NODE - len(excluded_cores)
             calculated_ranks = int(effective_cores_per_node * final_node_occupancy)
-            final_ranks_per_node = max(1, calculated_ranks)  # Ensure at least 1
-            info_messages.append(f"Using smart default: ranks_per_node = {final_ranks_per_node} (effective_cores_per_node={effective_cores_per_node} * node_occupancy={final_node_occupancy})")
+            final_ranks_per_node = max(1, calculated_ranks)
     else:
-        # User specified ranks_per_node
+        # User specified --ranks-per-node
+        final_ranks_per_node = ranks_per_node
+        # Validate upper bound
         if final_ngpus > 0:
-            # GPU jobs: force to 1 regardless of user input
-            final_ranks_per_node = 1
-            if ranks_per_node != 1:
-                warning_messages.append("ranks-per-node is ignored for GPU jobs (1 rank per GPU)")
+            max_ranks = system_config.GPUS_PER_NODE
+            if final_ranks_per_node > max_ranks:
+                raise ValidationError(
+                    f"--ranks-per-node ({final_ranks_per_node}) exceeds GPUs per node ({max_ranks})")
         else:
-            # CPU jobs: use user-specified value
-            final_ranks_per_node = ranks_per_node
+            excluded_cores = getattr(system_config, 'EXCLUDE_CORES', None) or []
+            max_ranks = system_config.CORES_PER_NODE - len(excluded_cores)
+            if final_ranks_per_node > max_ranks:
+                raise ValidationError(
+                    f"--ranks-per-node ({final_ranks_per_node}) exceeds cores per node ({max_ranks})")
     
     resource_params = {
         'final_num_nodes': final_num_nodes,
