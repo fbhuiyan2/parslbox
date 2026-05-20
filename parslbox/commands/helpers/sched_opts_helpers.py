@@ -41,8 +41,8 @@ def extract_directive_key(line: str) -> Optional[str]:
             # Single-letter flag: #PBS -N, #PBS -q, etc.
             return flag
 
-    # SLURM directives
-    sbatch_match = re.match(r'#SBATCH\s+(--[\w-]+)', stripped)
+    # SLURM directives (long flags like --constraint, short flags like -C)
+    sbatch_match = re.match(r'#SBATCH\s+(--[\w-]+|-\w)', stripped)
     if sbatch_match:
         return sbatch_match.group(1)
 

@@ -339,6 +339,8 @@ class MPICommandBuilder:
             gpus_per_node = getattr(self.system_config, "GPUS_PER_NODE", 0)
 
             if job_type == "subnode_gpu":
+                if gpus_per_node > 0:
+                    extra.append(f"--gpus-per-node={gpus_per_node}")
                 extra.extend(self._build_srun_gpu_bind(assignment))
             else:
                 # Full/multi-node: all GPUs on each node are used

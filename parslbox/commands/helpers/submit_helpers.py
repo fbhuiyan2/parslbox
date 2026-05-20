@@ -163,22 +163,18 @@ def submit_job(
     # Get config-level sched_opts
     config_sched_opts = system_config.get('sched_opts', None)
 
-    # Get system-class default sched_opts (lowest priority)
-    try:
-        from parslbox.system_configs.loader import get_system_config
-        sys_config_obj = get_system_config(config_name)
-        system_default_sched_opts = sys_config_obj.get_default_sched_opts()
-    except (ValueError, Exception):
-        system_default_sched_opts = None
-
-    # Combine: system defaults (lowest) + config.yaml (higher)
-    # Within a single override layer, later lines with same key replace earlier
-    if system_default_sched_opts and config_sched_opts:
-        combined_config_opts = system_default_sched_opts + "\n" + config_sched_opts
-    elif system_default_sched_opts:
-        combined_config_opts = system_default_sched_opts
-    else:
+    # System defaults from get_default_sched_opts() are already written
+    # into config.yaml by `pbx config`. Only inject them if config.yaml
+    # has no sched_opts (e.g., hand-edited config without system defaults).
+    if config_sched_opts:
         combined_config_opts = config_sched_opts
+    else:
+        try:
+            from parslbox.system_configs.loader import get_system_config
+            sys_config_obj = get_system_config(config_name)
+            combined_config_opts = sys_config_obj.get_default_sched_opts()
+        except (ValueError, Exception):
+            combined_config_opts = None
 
     # Merge directives: template → system+config → CLI
     submit_script = merge_sched_opts(rendered, combined_config_opts, sched_opts)

@@ -118,7 +118,7 @@ class ConfigGenerator:
                 output += "    # module load conda\n"
                 output += "    # conda activate your_env\n"
 
-                # sched_opts — from system defaults or example
+                # sched_opts — from system defaults
                 default_sched_opts = sys_config.get_default_sched_opts()
                 if default_sched_opts:
                     output += "  sched_opts: |\n"
