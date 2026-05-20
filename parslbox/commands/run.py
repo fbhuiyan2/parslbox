@@ -268,6 +268,8 @@ def run(
     else:
         logger.info(f"Using default config path: {path_utils.PBX_CONFIG_FILE}")
 
+    logger.info(f"Job submission delay: {os.getenv('PBX_RUN_DELAY', '0.2')}s (PBX_RUN_DELAY)")
+
     # Job Fetching and Filtering 
     # The job count will be passed to the config for dynamic worker allocation
     app_filter = set(apps.split(',')) if apps else None
@@ -434,8 +436,10 @@ def run(
             # Future created successfully - no additional tracking needed
             # Dependencies are now checked via database
             
-            # Add throttling to prevent database write storms
-            time.sleep(0.1)
+            # Throttle job submissions. Tunable via PBX_RUN_DELAY env var
+            # (e.g., bump up on systems like Perlmutter where rapid srun calls
+            # can overload slurmctld).
+            time.sleep(float(os.getenv("PBX_RUN_DELAY", "0.2")))
             
         except InsufficientResources as e:
             # This is NOT an error - just temporary resource unavailability

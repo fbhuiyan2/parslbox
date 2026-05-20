@@ -133,6 +133,8 @@ def submit_job(
         pbx_env_vars += f'export PBX_DB_PATH="{os.getenv("PBX_DB_PATH")}"\n'
     if os.getenv("PBX_CONFIG_PATH"):
         pbx_env_vars += f'export PBX_CONFIG_PATH="{os.getenv("PBX_CONFIG_PATH")}"\n'
+    if os.getenv("PBX_RUN_DELAY"):
+        pbx_env_vars += f'export PBX_RUN_DELAY="{os.getenv("PBX_RUN_DELAY")}"\n'
 
     # Prepare template variables (no filesystems, sched_opts as placeholder)
     template_vars = {
