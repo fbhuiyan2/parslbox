@@ -124,13 +124,15 @@ MPI_CONFIG_NOTES = '''# --------------------------------------------------------
 #   map is available for the system.
 #
 # srun Backend (SLURM):
-#   When backend is set to "srun", CPU binding is handled automatically by
-#   pbx based on the job type. The cpu_bind_method option is not used.
-#   Instead, pbx generates the appropriate srun flags:
-#     --cpus-per-task=D --cpu-bind=cores   (all job types)
-#     --exact                              (subnode jobs only)
-#   For GPU jobs, the same GPU wrapper scripts are used (use_gpu_wrapper).
-#   The wrappers detect SLURM rank via SLURM_PROCID/SLURM_LOCALID env vars.
+#   pbx generates native SLURM flags based on job type:
+#   Full/multi-node:
+#     --cpus-per-task=D --cpu-bind=cores   (cpu_bind_method: cores)
+#     --gpus-per-node=N --gpu-bind=map_gpu:0,1,...,N-1  (GPU jobs)
+#   Sub-node:
+#     --cpu-bind=mask_cpu:<hex>            (per-rank CPU isolation)
+#     --gpu-bind=map_gpu:<pbx_gpu_ids>    (per-rank GPU isolation)
+#     --overlap                           (concurrent step execution)
+#   No GPU wrapper scripts needed — SLURM handles GPU binding natively.
 #
 # Template Variables (for use in 'add'):
 #   {total_ranks}    - Total number of MPI ranks

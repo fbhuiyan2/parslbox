@@ -194,7 +194,7 @@ def add(
     ] = None,
     ranks_per_node: Annotated[
         Optional[int],
-        typer.Option("--ranks-per-node", "-rpn", help="Number of MPI ranks per node. For CPU jobs only; ignored for GPU jobs. If not specified, defaults to cores_per_node * node_occupancy."),
+        typer.Option("--ranks-per-node", "-rpn", help="Number of MPI ranks per node. If not specified, uses the app's default (e.g., 1 rank per GPU for LAMMPS, 1 rank per node for Python)."),
     ] = None,
     mpi_opts: Annotated[
         Optional[str],

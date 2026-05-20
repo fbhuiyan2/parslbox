@@ -333,7 +333,7 @@ def update(
     ] = None,
     ranks_per_node: Annotated[
         Optional[int],
-        typer.Option("--ranks-per-node", "-rpn", help="Update the number of MPI ranks per node. For CPU jobs only; ignored for GPU jobs.")
+        typer.Option("--ranks-per-node", "-rpn", help="Update the number of MPI ranks per node.")
     ] = None,
     add_deps: Annotated[
         Optional[str],
