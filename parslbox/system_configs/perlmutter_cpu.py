@@ -21,7 +21,7 @@ class PerlmutterCpuConfig(SystemConfig):
     """
 
     SYSTEM_NAME = 'perlmutter-cpu'
-    CORES_PER_NODE = 256         # 128 physical cores, 256 logical with SMT
+    CORES_PER_NODE = 128         # 128 physical cores (SMT disabled for MPI compatibility)
     GPUS_PER_NODE = 0
     SCHEDULER = "SLURM"
     MPI_CMD_TO_USE = "srun"
