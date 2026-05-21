@@ -461,7 +461,8 @@ class ResourceAssignment:
         """Check if this is a single-node assignment."""
         return len(self.node_ids) == 1
     
-    def get_env_vars(self, mpi_backend: Optional[str] = None) -> Dict[str, str]:
+    def get_env_vars(self, mpi_backend: Optional[str] = None,
+                     tile_mode: bool = False) -> Dict[str, str]:
         """
         Generate environment variables for this assignment.
 
@@ -469,6 +470,9 @@ class ResourceAssignment:
             mpi_backend: MPI backend name (e.g., "srun"). When "srun",
                 GPU env vars are skipped because SLURM handles GPU
                 binding natively via --gpus-per-node/--gpus-per-task.
+            tile_mode: True for Intel tile-mode systems (e.g., Aurora tile).
+                When True, ZE_AFFINITY_MASK uses "physical.tile" format
+                instead of raw GPU IDs.
 
         Returns:
             Dictionary of environment variable name -> value
@@ -486,9 +490,14 @@ class ResourceAssignment:
                 all_gpu_ids.extend(gpu_list)
 
             if all_gpu_ids:
-                gpu_ids_str = ",".join(map(str, sorted(set(all_gpu_ids))))
-                env_vars["CUDA_VISIBLE_DEVICES"] = gpu_ids_str
-                env_vars["ZE_AFFINITY_MASK"] = gpu_ids_str
+                sorted_ids = sorted(set(all_gpu_ids))
+                env_vars["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, sorted_ids))
+                if tile_mode:
+                    env_vars["ZE_AFFINITY_MASK"] = ",".join(
+                        f"{g // 2}.{g % 2}" for g in sorted_ids
+                    )
+                else:
+                    env_vars["ZE_AFFINITY_MASK"] = ",".join(map(str, sorted_ids))
 
         return env_vars
     

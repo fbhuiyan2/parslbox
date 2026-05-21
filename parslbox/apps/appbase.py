@@ -128,7 +128,8 @@ class AppBase(ABC):
         try:
             # Extract serializable data from assignment object
             mpi_backend = mpi_commands.get('PBX_MPI_BACKEND')
-            env_vars = assignment.get_env_vars(mpi_backend=mpi_backend)
+            tile_mode = mpi_commands.get('PBX_GPU_TILE_MODE', False)
+            env_vars = assignment.get_env_vars(mpi_backend=mpi_backend, tile_mode=tile_mode)
             total_gpus = assignment.get_total_gpus()
             assignment_summary = assignment.get_summary()
             

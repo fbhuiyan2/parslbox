@@ -210,21 +210,18 @@ GLOBAL_RANK={global_rank_chain}
         for local_rank_idx, global_rank in enumerate(node_ranks):
             gpu_ids = assignment.get_gpu_assignments_for_rank(global_rank)
             if gpu_ids:
-                gpu_id = gpu_ids[0]  # Single GPU per rank
-                
+                gpu_list = ",".join(str(g) for g in gpu_ids)
+
                 wrapper_content += f"""if [ "$GLOBAL_RANK" -eq {global_rank} ]; then
-    export CUDA_VISIBLE_DEVICES={gpu_id}
-    # Set Intel GPU variables for potential compatibility
-    export ZE_ENABLE_PCI_ID_DEVICE_ORDER=1
-    export ZE_AFFINITY_MASK="{gpu_id}.0"
+    export CUDA_VISIBLE_DEVICES={gpu_list}
 fi
 """
-    
+
     wrapper_content += """
 # Execute the application (CPU binding handled by mpiexec --cpu-bind)
 exec "$@"
 """
-    
+
     return write_gpu_wrapper(wrapper_content, assignment, "mpich", job_path)
 
 
@@ -271,40 +268,30 @@ GLOBAL_RANK={global_rank_chain}
         for local_rank_idx, global_rank in enumerate(node_ranks):
             gpu_ids = assignment.get_gpu_assignments_for_rank(global_rank)
             if gpu_ids:
-                gpu_id = gpu_ids[0]  # Single GPU per rank
-                
+                # Tile mode: each logical GPU ID maps to a physical_gpu.tile_id pair.
+                # Full GPU mode: use raw GPU ID. Both support multiple GPUs per rank
+                # via comma-separated list.
+                if is_tile_mode:
+                    ze_mask = ",".join(f"{g // 2}.{g % 2}" for g in gpu_ids)
+                else:
+                    ze_mask = ",".join(str(g) for g in gpu_ids)
+
                 wrapper_content += f"""if [ "$GLOBAL_RANK" -eq {global_rank} ]; then
     export ZE_ENABLE_PCI_ID_DEVICE_ORDER=1
+    export ZE_AFFINITY_MASK="{ze_mask}"
 """
-                
-                # Set ZE_AFFINITY_MASK based on tile vs full GPU mode
-                if is_tile_mode:
-                    # Tile mode: Aurora's official script uses gpu_id.tile_id format
-                    # For tile mode, each logical GPU ID from resource manager represents a tile
-                    # Aurora has 6 physical GPUs with 2 tiles each = 12 tiles total
-                    # Our resource manager assigns tile IDs 0-11, which map to:
-                    # GPU 0: tiles 0,1 -> 0.0, 0.1
-                    # GPU 1: tiles 2,3 -> 1.0, 1.1  
-                    # GPU 2: tiles 4,5 -> 2.0, 2.1
-                    # etc.
-                    physical_gpu = gpu_id // 2  # Which physical GPU (0-5)
-                    tile_id = gpu_id % 2        # Which tile on that GPU (0 or 1)
-                    wrapper_content += f'    export ZE_AFFINITY_MASK="{physical_gpu}.{tile_id}"\n'
-                else:
-                    # Full GPU mode: use gpu_id format (no tile specification)
-                    wrapper_content += f'    export ZE_AFFINITY_MASK="{gpu_id}"\n'
-                
+
                 # Aurora-specific optimizations
                 if 'aurora' in system_name:
                     wrapper_content += f'    ulimit -c 0  # Aurora filesystem workaround\n'
-                
+
                 wrapper_content += "fi\n"
-    
+
     wrapper_content += """
 # Execute the application (CPU binding handled by mpiexec --cpu-bind)
 exec "$@"
 """
-    
+
     return write_gpu_wrapper(wrapper_content, assignment, "mpich", job_path)
 
 
@@ -338,21 +325,18 @@ GLOBAL_RANK={global_rank_chain}
         for local_rank_idx, global_rank in enumerate(node_ranks):
             gpu_ids = assignment.get_gpu_assignments_for_rank(global_rank)
             if gpu_ids:
-                gpu_id = gpu_ids[0]  # Single GPU per rank
-                
+                gpu_list = ",".join(str(g) for g in gpu_ids)
+
                 wrapper_content += f"""if [ "$GLOBAL_RANK" -eq {global_rank} ]; then
-    export CUDA_VISIBLE_DEVICES={gpu_id}
-    # Set Intel GPU variables for potential compatibility
-    export ZE_ENABLE_PCI_ID_DEVICE_ORDER=1
-    export ZE_AFFINITY_MASK="{gpu_id}.0"
+    export CUDA_VISIBLE_DEVICES={gpu_list}
 fi
 """
-    
+
     wrapper_content += """
 # Execute the application (CPU binding handled by OpenMPI rankfile)
 exec "$@"
 """
-    
+
     return write_gpu_wrapper(wrapper_content, assignment, "openmpi", job_path)
 
 
@@ -399,33 +383,30 @@ GLOBAL_RANK={global_rank_chain}
         for local_rank_idx, global_rank in enumerate(node_ranks):
             gpu_ids = assignment.get_gpu_assignments_for_rank(global_rank)
             if gpu_ids:
-                gpu_id = gpu_ids[0]  # Single GPU per rank
-                
+                # Tile mode: each logical GPU ID maps to a physical_gpu.tile_id pair.
+                # Full GPU mode: use raw GPU ID. Both support multiple GPUs per rank
+                # via comma-separated list.
+                if is_tile_mode:
+                    ze_mask = ",".join(f"{g // 2}.{g % 2}" for g in gpu_ids)
+                else:
+                    ze_mask = ",".join(str(g) for g in gpu_ids)
+
                 wrapper_content += f"""if [ "$GLOBAL_RANK" -eq {global_rank} ]; then
     export ZE_ENABLE_PCI_ID_DEVICE_ORDER=1
+    export ZE_AFFINITY_MASK="{ze_mask}"
 """
-                
-                # Set ZE_AFFINITY_MASK based on tile vs full GPU mode
-                if is_tile_mode:
-                    # Tile mode: Aurora's official script uses gpu_id.tile_id format
-                    physical_gpu = gpu_id // 2  # Which physical GPU (0-5)
-                    tile_id = gpu_id % 2        # Which tile on that GPU (0 or 1)
-                    wrapper_content += f'    export ZE_AFFINITY_MASK="{physical_gpu}.{tile_id}"\n'
-                else:
-                    # Full GPU mode: use gpu_id format (no tile specification)
-                    wrapper_content += f'    export ZE_AFFINITY_MASK="{gpu_id}"\n'
-                
+
                 # Aurora-specific optimizations
                 if 'aurora' in system_name:
                     wrapper_content += f'    ulimit -c 0  # Aurora filesystem workaround\n'
-                
+
                 wrapper_content += "fi\n"
-    
+
     wrapper_content += """
 # Execute the application (CPU binding handled by OpenMPI rankfile)
 exec "$@"
 """
-    
+
     return write_gpu_wrapper(wrapper_content, assignment, "openmpi", job_path)
 
 

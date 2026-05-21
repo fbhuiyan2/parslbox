@@ -167,23 +167,77 @@ class TestCUDAWrapperGeneration:
         return assignment
     
     def test_mpich_cuda_wrapper_subnode(self):
-        """Test CUDA wrapper generation for subnode job."""
+        """Test CUDA wrapper generation for subnode job (1 GPU per rank)."""
         assignment = self.create_gpu_assignment(num_nodes=1, gpus_per_node=2)
         job_spec = JobResourceSpec(job_id=54321, ngpus=2, num_nodes=1)
-        
+
         wrapper_path = mpich_cuda_gpu_wrapper(assignment, self.polaris_config, job_spec)
-        
+
         with open(wrapper_path, 'r') as f:
             content = f.read()
-        
+
         # Check CUDA-specific features
         assert "CUDA GPU assignment wrapper" in content
         assert "CUDA_VISIBLE_DEVICES=0" in content
         assert "CUDA_VISIBLE_DEVICES=1" in content
         assert "PMI_LOCAL_RANK" in content  # CUDA rank detection
-        assert "ZE_ENABLE_PCI_ID_DEVICE_ORDER=1" in content  # Intel compatibility
         assert "polaris" in content.lower()  # System name
-        
+        # CUDA wrapper must NOT set Intel-only env vars
+        assert "ZE_ENABLE_PCI_ID_DEVICE_ORDER" not in content
+        assert "ZE_AFFINITY_MASK" not in content
+
+        os.unlink(wrapper_path)
+
+    def test_mpich_cuda_wrapper_multi_gpu_per_rank(self):
+        """A single rank with multiple GPUs must see ALL of them via
+        comma-separated CUDA_VISIBLE_DEVICES. Regression for the
+        gpu_ids[0] bug that surfaced when Python's USES_MPI=True with
+        ranks_per_node=1 caused one rank to own multiple GPUs."""
+        assignment = ResourceAssignment(
+            job_id=99001,
+            node_ids=["node-0"],
+            hostnames=["polaris-node-00"],
+            node_occupancy=1.0,
+        )
+        # One rank with 4 GPUs (e.g., Python rank with full-node Polaris GPU)
+        assignment.assign_resources_to_rank(
+            rank=0, node_idx=0,
+            gpu_ids=[0, 1, 2, 3],
+            cpu_ids=list(range(32)),
+        )
+        job_spec = JobResourceSpec(job_id=99001, ngpus=4, num_nodes=1, ranks_per_node=1)
+
+        wrapper_path = mpich_cuda_gpu_wrapper(assignment, self.polaris_config, job_spec)
+        with open(wrapper_path, 'r') as f:
+            content = f.read()
+
+        # The rank must see all 4 GPUs, comma-separated
+        assert "CUDA_VISIBLE_DEVICES=0,1,2,3" in content
+        # No leftover single-GPU lines
+        assert "CUDA_VISIBLE_DEVICES=0\n" not in content
+        os.unlink(wrapper_path)
+
+    def test_openmpi_cuda_wrapper_multi_gpu_per_rank(self):
+        """Same regression test for the OpenMPI CUDA wrapper."""
+        assignment = ResourceAssignment(
+            job_id=99002,
+            node_ids=["node-0"],
+            hostnames=["polaris-node-00"],
+            node_occupancy=1.0,
+        )
+        assignment.assign_resources_to_rank(
+            rank=0, node_idx=0,
+            gpu_ids=[0, 1],
+            cpu_ids=list(range(16)),
+        )
+        job_spec = JobResourceSpec(job_id=99002, ngpus=2, num_nodes=1, ranks_per_node=1)
+
+        wrapper_path = openmpi_cuda_gpu_wrapper(assignment, self.polaris_config, job_spec)
+        with open(wrapper_path, 'r') as f:
+            content = f.read()
+
+        assert "CUDA_VISIBLE_DEVICES=0,1" in content
+        assert "ZE_AFFINITY_MASK" not in content
         os.unlink(wrapper_path)
     
     def test_openmpi_cuda_wrapper_multinode(self):
@@ -297,6 +351,53 @@ class TestIntelGPUWrapperGeneration:
         
         os.unlink(wrapper_path)
     
+    def test_intel_wrapper_multi_gpu_per_rank_full_mode(self):
+        """One rank owning multiple full Intel GPUs must see all of them
+        via comma-separated ZE_AFFINITY_MASK (no tile suffix in full mode)."""
+        assignment = ResourceAssignment(
+            job_id=88001,
+            node_ids=["node-0"],
+            hostnames=["aurora-node-00"],
+            node_occupancy=1.0,
+        )
+        assignment.assign_resources_to_rank(
+            rank=0, node_idx=0,
+            gpu_ids=[0, 1, 2, 3, 4, 5],
+            cpu_ids=list(range(48)),
+        )
+        job_spec = JobResourceSpec(job_id=88001, ngpus=6, num_nodes=1, ranks_per_node=1)
+
+        wrapper_path = openmpi_intel_gpu_wrapper(assignment, self.aurora_gpu_config, job_spec)
+        with open(wrapper_path, 'r') as f:
+            content = f.read()
+
+        assert 'ZE_AFFINITY_MASK="0,1,2,3,4,5"' in content
+        os.unlink(wrapper_path)
+
+    def test_intel_wrapper_multi_gpu_per_rank_tile_mode(self):
+        """One rank owning multiple Intel tiles must see all of them as a
+        comma-separated phys.tile list."""
+        assignment = ResourceAssignment(
+            job_id=88002,
+            node_ids=["node-0"],
+            hostnames=["aurora-node-00"],
+            node_occupancy=1.0,
+        )
+        # Tile IDs 0,1,2,3 map to "0.0,0.1,1.0,1.1"
+        assignment.assign_resources_to_rank(
+            rank=0, node_idx=0,
+            gpu_ids=[0, 1, 2, 3],
+            cpu_ids=list(range(32)),
+        )
+        job_spec = JobResourceSpec(job_id=88002, ngpus=4, num_nodes=1, ranks_per_node=1)
+
+        wrapper_path = mpich_intel_gpu_wrapper(assignment, self.aurora_tile_config, job_spec)
+        with open(wrapper_path, 'r') as f:
+            content = f.read()
+
+        assert 'ZE_AFFINITY_MASK="0.0,0.1,1.0,1.1"' in content
+        os.unlink(wrapper_path)
+
     def test_mpich_intel_wrapper_multinode_aurora(self):
         """Test Intel GPU wrapper for multinode Aurora job."""
         assignment = self.create_aurora_assignment("tile", num_nodes=2)
