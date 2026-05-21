@@ -125,6 +125,10 @@ def submit_job(
     if not dynamic:  # Only add when disabling (default is dynamic)
         run_options.append("--static")
 
+    # Always pass walltime to `pbx run` so it can trigger graceful shutdown
+    # 30s before the batch job's walltime expires.
+    run_options.append(f"--walltime-seconds {int(walltime * 60)}")
+
     run_options_str = " ".join(run_options)
 
     # Capture environment variables for parslbox paths

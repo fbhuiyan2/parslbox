@@ -256,6 +256,25 @@ class SBatchSchema(BaseModel):
     )
 
 
+class CancelJobSchema(BaseModel):
+    """Schema for gracefully cancelling a running ParslBox batch job."""
+
+    jobid: str = Field(
+        description="Scheduler job ID (PBS or SLURM) to cancel.",
+    )
+
+    grace: int = Field(
+        default=30,
+        ge=0,
+        description=(
+            "Seconds between SIGTERM (sent via qsig / scancel --signal=TERM) "
+            "and the hard kill. The grace period lets the running `pbx run` "
+            "orchestrator mark in-flight jobs as Killed in the database before "
+            "SIGKILL. Default: 30."
+        ),
+    )
+
+
 class RemoveJobsSchema(BaseModel):
     """Schema for removing existing job in the database"""
 

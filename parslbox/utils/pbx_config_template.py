@@ -31,7 +31,9 @@ PBS_TEMPLATE = '''  pbs:
       # Set ParslBox environment variables if provided
       {pbx_env_vars}
 
-      pbx run --config {config} --run-dir {run_dir} {run_options}
+      # exec replaces the bash wrapper so qsig/scancel signals reach Python
+      # directly (session-leader semantics) — required for `pbx qdel` to work.
+      exec pbx run --config {config} --run-dir {run_dir} {run_options}
 '''
 
 SLURM_TEMPLATE = '''  slurm:
@@ -57,7 +59,9 @@ SLURM_TEMPLATE = '''  slurm:
       # Set ParslBox environment variables if provided
       {pbx_env_vars}
 
-      pbx run --config {config} --run-dir {run_dir} {run_options}
+      # exec replaces the bash wrapper so qsig/scancel signals reach Python
+      # directly (session-leader semantics) — required for `pbx scancel` to work.
+      exec pbx run --config {config} --run-dir {run_dir} {run_options}
 '''
 
 # Documentation blocks (used by ConfigGenerator to include in generated configs)

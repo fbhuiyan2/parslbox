@@ -83,92 +83,115 @@ def create_shutdown_handler(status_buffer, logger, parsl_loaded_flag, job_tracke
         Signal handler function
     """
     def handler(signum, frame):
-        import time
-        
         signal_name = signal.Signals(signum).name
-        start_time = time.time()
-        
-        logger.warning(f"=" * 80)
-        logger.warning(f"Received {signal_name} signal - initiating emergency shutdown")
-        logger.warning(f"Handler START at timestamp {start_time}")
-        logger.warning(f"=" * 80)
-        
-        # Set 10-second alarm to force exit if cleanup hangs
-        # This prevents the process from being killed by SIGKILL before status updates are written
-        logger.info("Setting 10-second alarm for forced exit protection")
-        signal.alarm(10)
-        
-        # STEP 0: Get active job IDs from in-memory JobTracker.
-        # Only tracks THIS instance's jobs, so other PBX batch jobs
-        # sharing the same database are unaffected.
-        active_ids = []
-        if job_tracker:
-            try:
-                active_jobs = (
-                    job_tracker.get_jobs_by_status("Running")
-                    + job_tracker.get_jobs_by_status("Submitted")
-                )
-                active_ids = [j['job_id'] for j in active_jobs]
-                logger.info(f"Emergency shutdown: Step 0 - Found {len(active_ids)} active jobs")
-            except Exception as e:
-                logger.error(f"Emergency shutdown: Step 0 - Failed to get active jobs: {e}")
+        # Signal path: minimal budget (PBS Pro default kill_delay ~2s on many
+        # sites). Skip Parsl cleanup — the scheduler will reap the cgroup.
+        # Users who want a clean shutdown should use `pbx qdel` / `pbx scancel`,
+        # which control the grace period themselves.
+        perform_shutdown(
+            status_buffer=status_buffer,
+            job_tracker=job_tracker,
+            parsl_loaded_flag=parsl_loaded_flag,
+            logger=logger,
+            reason=f"signal {signal_name}",
+            cleanup_parsl=False,
+        )
+        sys.exit(130)
 
-        try:
-            # STEP 1: Flush status buffer (clears any stale buffered entries to DB)
-            logger.info(f"Emergency shutdown: Step 1/3 - Flushing status buffer...")
-            flush_start = time.time()
-
-            count = status_buffer.flush_all()
-
-            flush_duration = time.time() - flush_start
-            if count > 0:
-                logger.info(f"Emergency shutdown: Step 1/3 - Successfully flushed {count} job(s) in {flush_duration:.3f}s")
-            else:
-                logger.info(f"Emergency shutdown: Step 1/3 - No pending updates to flush ({flush_duration:.3f}s)")
-
-        except Exception as e:
-            logger.error(f"Emergency shutdown: Step 1/3 - Status buffer flush FAILED: {e}")
-            logger.error(f"Emergency shutdown: Failed at timestamp {time.time()}")
-
-        # STEP 2: Mark active jobs as Killed (direct DB write, AFTER flush
-        # so nothing can overwrite it)
-        if active_ids:
-            try:
-                database.update_jobs(status_buffer.db_path, job_ids=active_ids, status='Killed')
-                logger.info(f"Emergency shutdown: Step 2/3 - Marked {len(active_ids)} active jobs as Killed")
-            except Exception as e:
-                logger.error(f"Emergency shutdown: Step 2/3 - Failed to mark active jobs: {e}")
-
-        try:
-            # STEP 3: Clean up Parsl resources
-            if parsl_loaded_flag.get('loaded', False):
-                logger.info(f"Emergency shutdown: Step 3/3 - Cleaning up Parsl resources...")
-                cleanup_start = time.time()
-                
-                parsl.dfk().cleanup()
-                
-                cleanup_duration = time.time() - cleanup_start
-                logger.info(f"Emergency shutdown: Step 3/3 - Parsl cleanup complete in {cleanup_duration:.3f}s")
-            else:
-                logger.info("Emergency shutdown: Step 3/3 - Parsl not loaded, skipping cleanup")
-                
-        except Exception as e:
-            logger.error(f"Emergency shutdown: Step 3/3 - Parsl cleanup FAILED: {e}")
-            logger.error(f"Emergency shutdown: Failed at timestamp {time.time()}")
-            # Don't re-raise - we want to exit cleanly even if Parsl cleanup fails
-        
-        finally:
-            # Cancel the alarm since we completed successfully
-            signal.alarm(0)
-            
-            total_duration = time.time() - start_time
-            logger.warning(f"=" * 80)
-            logger.warning(f"Emergency shutdown complete in {total_duration:.3f}s - exiting with code 130")
-            logger.warning(f"Exit timestamp: {time.time()}")
-            logger.warning(f"=" * 80)
-            sys.exit(130)
-    
     return handler
+
+
+def perform_shutdown(status_buffer, job_tracker, parsl_loaded_flag, logger,
+                     reason: str, cleanup_parsl: bool):
+    """
+    Shared shutdown sequence used by both the signal handler and the
+    walltime-triggered check in the main loop.
+
+    Ordering:
+      STEP 0: snapshot active job IDs from in-memory JobTracker.
+      STEP 1: flush the status buffer (writes any pending Done/Failed).
+      STEP 2: mark active jobs as Killed (after the flush so it isn't
+              overwritten by a buffered earlier-status update).
+      STEP 3: Parsl cleanup — only when cleanup_parsl=True (walltime path).
+              Skipped for the signal path because the scheduler will tear
+              down the cgroup anyway and HTE shutdown can be slow.
+
+    Args:
+        status_buffer: StatusBuffer instance.
+        job_tracker: JobTracker instance (source of active job IDs).
+        parsl_loaded_flag: Dict with 'loaded' key.
+        logger: Logger instance.
+        reason: Human-readable trigger (e.g. "signal SIGTERM", "walltime").
+        cleanup_parsl: If True, call parsl.dfk().cleanup().
+    """
+    import time
+
+    start_time = time.time()
+    logger.warning(f"=" * 80)
+    logger.warning(f"Shutdown ({reason}) - initiating sequence at {start_time}")
+    logger.warning(f"=" * 80)
+
+    # 10s alarm guards against any single step hanging the whole sequence.
+    signal.alarm(10)
+
+    # STEP 0: snapshot active job IDs.
+    active_ids = []
+    if job_tracker:
+        try:
+            active_jobs = (
+                job_tracker.get_jobs_by_status("Running")
+                + job_tracker.get_jobs_by_status("Submitted")
+            )
+            active_ids = [j['job_id'] for j in active_jobs]
+            logger.info(f"Shutdown: Step 0 - Found {len(active_ids)} active jobs")
+        except Exception as e:
+            logger.error(f"Shutdown: Step 0 - Failed to get active jobs: {e}")
+
+    # STEP 1: flush status buffer (preserves any pending Done/Failed).
+    try:
+        flush_start = time.time()
+        count = status_buffer.flush_all()
+        flush_duration = time.time() - flush_start
+        if count > 0:
+            logger.info(f"Shutdown: Step 1 - Flushed {count} buffered update(s) "
+                        f"in {flush_duration:.3f}s")
+        else:
+            logger.info(f"Shutdown: Step 1 - No pending updates to flush "
+                        f"({flush_duration:.3f}s)")
+    except Exception as e:
+        logger.error(f"Shutdown: Step 1 - Status buffer flush FAILED: {e}")
+
+    # STEP 2: mark active jobs as Killed (after flush so nothing overwrites).
+    if active_ids:
+        try:
+            database.update_jobs(status_buffer.db_path,
+                                 job_ids=active_ids, status='Killed')
+            logger.info(f"Shutdown: Step 2 - Marked {len(active_ids)} "
+                        f"active jobs as Killed")
+        except Exception as e:
+            logger.error(f"Shutdown: Step 2 - Failed to mark active jobs: {e}")
+
+    # STEP 3: Parsl cleanup (only when we have runway).
+    if cleanup_parsl:
+        try:
+            if parsl_loaded_flag.get('loaded', False):
+                cleanup_start = time.time()
+                parsl.dfk().cleanup()
+                logger.info(f"Shutdown: Step 3 - Parsl cleanup complete in "
+                            f"{time.time() - cleanup_start:.3f}s")
+            else:
+                logger.info("Shutdown: Step 3 - Parsl not loaded, skipping cleanup")
+        except Exception as e:
+            logger.error(f"Shutdown: Step 3 - Parsl cleanup FAILED: {e}")
+    else:
+        logger.info("Shutdown: Step 3 - skipping Parsl cleanup (signal path)")
+
+    signal.alarm(0)
+
+    total_duration = time.time() - start_time
+    logger.warning(f"=" * 80)
+    logger.warning(f"Shutdown complete in {total_duration:.3f}s")
+    logger.warning(f"=" * 80)
 
 
 def create_alarm_handler(logger):

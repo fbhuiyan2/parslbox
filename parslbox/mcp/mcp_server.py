@@ -3,6 +3,7 @@ from mcp.server.fastmcp import FastMCP
 from parslbox.api import ParslBox
 from parslbox.mcp.schemas import (
     AddJobSchema,
+    CancelJobSchema,
     FilterJobsSchema,
     GetJobSchema,
     GetJobsByIdsSchema,
@@ -24,6 +25,8 @@ mcp = FastMCP(
         "- add_jobs: create new jobs and add them to the ParslBox database.\n"
         "- submit_pbs_job: submit PBS jobs to the queue using a qsub-style configuration.\n"
         "- submit_slurm_job: submit SLURM jobs to the queue using an sbatch-style configuration.\n"
+        "- cancel_pbs_job: gracefully cancel a running PBS batch job (preferred over raw qdel — keeps DB accurate).\n"
+        "- cancel_slurm_job: gracefully cancel a running SLURM batch job (preferred over raw scancel — keeps DB accurate).\n"
         "- remove_jobs: remove one or more jobs from the database.\n"
         "- update_job: modify fields of an existing job (status, tag, input file, resources, dependencies, etc.). Note: app cannot be changed after job creation.\n"
         "- filter_jobs: filter jobs by status, app, tag, path, or input file and return their IDs.\n"
@@ -140,6 +143,56 @@ def submit_slurm_job(params: SBatchSchema) -> str:
             f"Error: {error_msg}\n"
             f"Run directory (if created): {run_dir}"
         )
+
+
+@mcp.tool(
+    name="cancel_pbs_job",
+    description=(
+        "Gracefully cancel a running ParslBox PBS batch job.\n\n"
+        "Sends SIGTERM via qsig, waits `grace` seconds (default 30) so the orchestrator "
+        "can mark in-flight jobs as Killed in the database, then runs qdel to terminate. "
+        "Always prefer this over a raw qdel for ParslBox jobs — raw qdel only gives the "
+        "orchestrator the cluster's default kill grace (often ~2s), which may leave jobs "
+        "stuck in 'Running' state in the database."
+    ),
+)
+def cancel_pbs_job(params: CancelJobSchema) -> str:
+    input_dict = params.model_dump()
+    try:
+        result = pbx.qdel(**input_dict)
+    except Exception as e:
+        return f"Exception occurred when cancelling PBS job. Exception: {e}"
+
+    if result.get("success"):
+        return (f"PBS job {result['jobid']} cancelled cleanly "
+                f"(grace: {result.get('grace', '?')}s).")
+    return (f"Failed to cancel PBS job {result.get('jobid', '?')} "
+            f"at stage '{result.get('stage', '?')}': {result.get('error', 'unknown')}")
+
+
+@mcp.tool(
+    name="cancel_slurm_job",
+    description=(
+        "Gracefully cancel a running ParslBox SLURM batch job.\n\n"
+        "Sends SIGTERM to the batch script via `scancel --signal=TERM --batch`, waits "
+        "`grace` seconds (default 30) so the orchestrator can mark in-flight jobs as Killed "
+        "in the database, then runs scancel to terminate. Always prefer this over a raw "
+        "scancel for ParslBox jobs — raw scancel only gives the orchestrator the cluster's "
+        "default kill grace, which may leave jobs stuck in 'Running' state in the database."
+    ),
+)
+def cancel_slurm_job(params: CancelJobSchema) -> str:
+    input_dict = params.model_dump()
+    try:
+        result = pbx.scancel(**input_dict)
+    except Exception as e:
+        return f"Exception occurred when cancelling SLURM job. Exception: {e}"
+
+    if result.get("success"):
+        return (f"SLURM job {result['jobid']} cancelled cleanly "
+                f"(grace: {result.get('grace', '?')}s).")
+    return (f"Failed to cancel SLURM job {result.get('jobid', '?')} "
+            f"at stage '{result.get('stage', '?')}': {result.get('error', 'unknown')}")
 
 
 @mcp.tool(

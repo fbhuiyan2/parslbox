@@ -34,6 +34,7 @@ from parslbox.commands.update import update_jobs
 from parslbox.commands.qsub import submit_to_scheduler
 from parslbox.commands.sbatch import submit_to_slurm
 from parslbox.commands.helpers.qsub_cmd_helpers import parse_walltime
+from parslbox.commands.helpers.cancel_helpers import cancel_pbs_job, cancel_slurm_job
 import parsl
 
 
@@ -550,3 +551,38 @@ class ParslBox:
                 raise ValidationError(str(e))
             else:
                 raise
+
+    def qdel(self, jobid: str, grace: int = 30) -> Dict[str, Any]:
+        """
+        Gracefully cancel a ParslBox PBS job.
+
+        Sends SIGTERM via `qsig`, waits `grace` seconds for the orchestrator
+        to mark in-flight jobs as Killed in the database, then runs `qdel`.
+
+        Args:
+            jobid: PBS job ID.
+            grace: Seconds between SIGTERM and hard kill (default 30).
+
+        Returns:
+            Dict with keys: success (bool), jobid (str), grace (int) on success;
+            success (False), jobid, stage, error on failure.
+        """
+        return cancel_pbs_job(jobid, grace=grace)
+
+    def scancel(self, jobid: str, grace: int = 30) -> Dict[str, Any]:
+        """
+        Gracefully cancel a ParslBox SLURM job.
+
+        Sends SIGTERM to the batch script via `scancel --signal=TERM --batch`,
+        waits `grace` seconds for the orchestrator to mark in-flight jobs as
+        Killed in the database, then runs `scancel` to terminate.
+
+        Args:
+            jobid: SLURM job ID.
+            grace: Seconds between SIGTERM and hard cancel (default 30).
+
+        Returns:
+            Dict with keys: success (bool), jobid (str), grace (int) on success;
+            success (False), jobid, stage, error on failure.
+        """
+        return cancel_slurm_job(jobid, grace=grace)

@@ -32,7 +32,8 @@ from parslbox.commands.helpers.run_cmd_helpers import (
     get_default_run_dir,
     create_shutdown_handler,
     create_alarm_handler,
-    create_atexit_handler
+    create_atexit_handler,
+    perform_shutdown,
 )
 from parslbox.database.status_buffer import StatusBuffer
 
@@ -229,6 +230,17 @@ def run(
         bool,
         typer.Option("--dynamic/--static", help="Dynamically discover new jobs during run (default: dynamic).")
     ] = True,
+    walltime_seconds: Annotated[
+        int,
+        typer.Option(
+            "--walltime-seconds",
+            help=(
+                "Batch job walltime in seconds. Required. The orchestrator triggers "
+                "graceful shutdown 30s before this elapses so in-flight jobs can be "
+                "marked Killed cleanly. Set automatically by `pbx qsub`/`pbx sbatch`."
+            ),
+        )
+    ] = ...,
 ):
     """
     Run Parsl workflows by discovering and executing application plugins.
@@ -269,6 +281,16 @@ def run(
         logger.info(f"Using default config path: {path_utils.PBX_CONFIG_FILE}")
 
     logger.info(f"Job submission delay: {os.getenv('PBX_RUN_DELAY', '0.2')}s (PBX_RUN_DELAY)")
+
+    # Walltime-aware graceful shutdown: trigger 30s before walltime so the
+    # main loop can flush state and mark in-flight jobs Killed cleanly.
+    SHUTDOWN_GRACE_SECONDS = 30
+    process_start = time.time()
+    shutdown_at = process_start + walltime_seconds - SHUTDOWN_GRACE_SECONDS
+    logger.info(
+        f"Walltime: {walltime_seconds}s; graceful shutdown will trigger at "
+        f"~{walltime_seconds - SHUTDOWN_GRACE_SECONDS}s ({SHUTDOWN_GRACE_SECONDS}s grace)"
+    )
 
     # Job Fetching and Filtering 
     # The job count will be passed to the config for dynamic worker allocation
@@ -596,6 +618,24 @@ def run(
     while True:
         try:
             current_time = time.time()
+
+            # Walltime-aware shutdown: trigger graceful shutdown before
+            # the scheduler kills the job. cleanup_parsl=True because we
+            # have the configured grace period of runway.
+            if current_time >= shutdown_at:
+                logger.warning(
+                    f"Approaching walltime ({SHUTDOWN_GRACE_SECONDS}s grace) - "
+                    f"initiating graceful shutdown"
+                )
+                perform_shutdown(
+                    status_buffer=status_buffer,
+                    job_tracker=job_tracker,
+                    parsl_loaded_flag=parsl_loaded_flag,
+                    logger=logger,
+                    reason="walltime",
+                    cleanup_parsl=True,
+                )
+                sys.exit(0)
 
             # Periodic status buffer flush (safety net for walltime termination)
             if current_time - last_flush_time >= flush_interval:

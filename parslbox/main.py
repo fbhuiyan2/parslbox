@@ -12,6 +12,8 @@ from parslbox.commands.info import app as info_jobs
 from parslbox.commands.filter import app as filter_jobs
 from parslbox.commands.qsub import app as qsub_jobs
 from parslbox.commands.sbatch import app as sbatch_jobs
+from parslbox.commands.qdel import app as qdel_cmd
+from parslbox.commands.scancel import app as scancel_cmd
 
 app = typer.Typer(help="A CLI tool to manage parsl workflows and jobs.",
                   no_args_is_help=True,)
@@ -71,6 +73,8 @@ app.add_typer(info_jobs)
 app.add_typer(filter_jobs)
 app.add_typer(qsub_jobs)
 app.add_typer(sbatch_jobs)
+app.add_typer(qdel_cmd)
+app.add_typer(scancel_cmd)
 
 
 if __name__ == "__main__":

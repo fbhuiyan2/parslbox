@@ -320,12 +320,18 @@ Note: Users submit via `pbx qsub` or `pbx sbatch`. These generate a `submit.sh` 
 
 - **pbx run** (internal) — Engine used by qsub/sbatch; not for direct use
   - `--dynamic/--static` controls live job discovery (default: `--dynamic`)
+  - Triggers graceful shutdown automatically ~30s before walltime so in-flight jobs are marked `Killed` cleanly in the database (no user knob required)
+
+- **pbx qdel `<jobid>`** / **pbx scancel `<jobid>`** — Cancel a running ParslBox batch job
+  - `--grace/-g` seconds between SIGTERM and hard kill (default: `30`)
+  - **Always prefer these over raw `qdel`/`scancel`.** Raw scheduler commands give the orchestrator only the site's default kill grace (often ~2s), which can leave jobs stuck in `Running` state in the database. `pbx qdel`/`pbx scancel` send SIGTERM first, wait for the orchestrator to mark in-flight jobs as `Killed`, then terminate.
 
 ## Configuration
 
 Environment variables:
 - `PBX_DB_PATH` — database file or directory path
 - `PBX_CONFIG_PATH` — config file or directory path
+- `PBX_RUN_DELAY` — seconds to sleep between consecutive job submissions (default: `0.2`). Bump up on systems like Perlmutter where rapid `srun` invocations can overload `slurmctld`.
 
 Defaults (when env vars are not set):
 - Database: `~/.parslbox/job_database_pbx.db`
@@ -335,9 +341,10 @@ Defaults (when env vars are not set):
 ```bash
 export PBX_DB_PATH=/scratch/mydbs/pbx.db
 export PBX_CONFIG_PATH=/scratch/mycfgs/config.yaml
+export PBX_RUN_DELAY=0.5
 ```
 
-Using separate `PBX_DB_PATH` and/or `PBX_CONFIG_PATH` allows multiple isolated databases and configurations.
+Using separate `PBX_DB_PATH` and/or `PBX_CONFIG_PATH` allows multiple isolated databases and configurations. All three env vars are automatically propagated into the qsub/sbatch submission script.
 
 ## Resource Manager
 
