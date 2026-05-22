@@ -100,6 +100,64 @@ class TestValidateResourceParameters:
         )
         assert params['final_ranks_per_node'] == 8
 
+    # --- Multi-node on GPU system: CPU vs GPU ---
+
+    def test_multinode_gpu_system_no_flags(self, sys_config):
+        """Multi-node on GPU system, no -g or -o → auto-assign all GPUs."""
+        params, info, _ = validate_resource_parameters(
+            ngpus=0, nnodes=2,
+            system_config=sys_config,
+        )
+        assert params['final_num_nodes'] == 2
+        assert params['final_ngpus'] == 8  # 2 nodes * 4 GPUs
+        assert params['final_node_occupancy'] == 1.0
+
+    def test_multinode_gpu_system_with_nocc(self, sys_config):
+        """Multi-node on GPU system with -o → CPU-only, no GPUs."""
+        from parslbox.apps.lammps_kk import LammpsKokkosApp as LammpsKKApp
+        params, _, _ = validate_resource_parameters(
+            ngpus=0, nnodes=2, node_occupancy=1.0,
+            system_config=sys_config, app_class=LammpsKKApp,
+        )
+        assert params['final_num_nodes'] == 2
+        assert params['final_ngpus'] == 0
+        assert params['final_node_occupancy'] == 1.0
+        assert params['final_ranks_per_node'] == 64
+
+    def test_multinode_gpu_system_explicit_gpus(self, sys_config):
+        """Multi-node with explicit -g → use specified GPU count."""
+        from parslbox.apps.lammps_kk import LammpsKokkosApp as LammpsKKApp
+        params, _, _ = validate_resource_parameters(
+            ngpus=4, nnodes=2,
+            system_config=sys_config, app_class=LammpsKKApp,
+        )
+        assert params['final_num_nodes'] == 2
+        assert params['final_ngpus'] == 4
+        assert params['final_ranks_per_node'] == 4  # GPUS_PER_NODE for multi-node
+
+    def test_multinode_cpu_system(self, sys_config):
+        """Multi-node on CPU-only system (no GPUs) → CPU job."""
+        sys_config.GPUS_PER_NODE = 0
+        from parslbox.apps.lammps_kk import LammpsKokkosApp as LammpsKKApp
+        params, _, _ = validate_resource_parameters(
+            ngpus=0, nnodes=2,
+            system_config=sys_config, app_class=LammpsKKApp,
+        )
+        assert params['final_num_nodes'] == 2
+        assert params['final_ngpus'] == 0
+        assert params['final_ranks_per_node'] == 64
+
+    def test_multinode_python_cpu_with_nocc(self, sys_config):
+        """Multi-node Python on GPU system with -o → CPU-only, 1 rank."""
+        from parslbox.apps.python import PythonApp
+        params, _, _ = validate_resource_parameters(
+            ngpus=0, nnodes=2, node_occupancy=1.0,
+            system_config=sys_config, app_class=PythonApp,
+        )
+        assert params['final_num_nodes'] == 2
+        assert params['final_ngpus'] == 0
+        assert params['final_ranks_per_node'] == 1
+
 
 class TestAddCommand:
     """Test suite for the add command functionality."""

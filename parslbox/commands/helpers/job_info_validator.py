@@ -160,38 +160,28 @@ def validate_resource_parameters(
     gpus_per_node = system_config.GPUS_PER_NODE
     
     # Determine final resource parameters
-    if nnodes > 1:
-        # Multi-node job: ignore ngpus and node occupancy
-        final_num_nodes = nnodes
-        final_ngpus = nnodes * gpus_per_node  # For display purposes
-        final_node_occupancy = 1.0
-        
-        # Add info for multi-node GPU jobs
-        if final_ngpus > 0:
-            info_messages.append(f"Multi-node job will use {nnodes * gpus_per_node} total GPUs ({gpus_per_node} per node)")
-    else:
-        # Single-node job: check for conflicting parameters
-        handle_gpu_cpu_conflict(ngpus, node_occupancy)  # raises ResourceConflictError if both > 0
-        
-        if ngpus > 0:
-            # Single-node GPU job (explicit -g flag)
-            if ngpus > gpus_per_node:
-                raise ValidationError(f"Requested {ngpus} GPUs but only {gpus_per_node} available per node")
+    handle_gpu_cpu_conflict(ngpus, node_occupancy)  # raises ResourceConflictError if both > 0
 
-            final_num_nodes = 1
-            final_ngpus = ngpus
-            final_node_occupancy = 1.0
-        elif gpus_per_node > 0 and node_occupancy is None:
-            # GPU system, no explicit -g or -o: auto-assign all GPUs (match multi-node behavior)
-            final_num_nodes = 1
-            final_ngpus = gpus_per_node
-            final_node_occupancy = 1.0
-            info_messages.append(f"Single-node job on GPU system: auto-assigned {gpus_per_node} GPUs")
+    final_num_nodes = max(nnodes, 1)
+
+    if ngpus > 0:
+        # Explicit GPU request
+        if nnodes == 1 and ngpus > gpus_per_node:
+            raise ValidationError(f"Requested {ngpus} GPUs but only {gpus_per_node} available per node")
+        final_ngpus = ngpus
+        final_node_occupancy = 1.0
+    elif gpus_per_node > 0 and node_occupancy is None:
+        # GPU system, no explicit -g or -o: auto-assign all GPUs
+        final_ngpus = nnodes * gpus_per_node if nnodes > 1 else gpus_per_node
+        final_node_occupancy = 1.0
+        if nnodes > 1:
+            info_messages.append(f"Multi-node job will use {final_ngpus} total GPUs ({gpus_per_node} per node)")
         else:
-            # CPU-only job (CPU system, or user explicitly set -o for CPU mode)
-            final_num_nodes = 1
-            final_ngpus = 0
-            final_node_occupancy = node_occupancy if node_occupancy is not None else 1.0
+            info_messages.append(f"Single-node job on GPU system: auto-assigned {gpus_per_node} GPUs")
+    else:
+        # CPU-only job (CPU system, or user explicitly set -o for CPU mode)
+        final_ngpus = 0
+        final_node_occupancy = node_occupancy if node_occupancy is not None else 1.0
     
     # Determine ranks_per_node: app default or user override
     if ranks_per_node is None:
