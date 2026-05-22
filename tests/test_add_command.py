@@ -6,7 +6,99 @@ from unittest.mock import patch, MagicMock
 from typer.testing import CliRunner
 
 from parslbox.commands.add import app as add_app
+from parslbox.commands.helpers.job_info_validator import validate_resource_parameters
 from parslbox.database import database
+
+
+class TestValidateResourceParameters:
+    """Unit tests for validate_resource_parameters — ranks_per_node + node_occupancy."""
+
+    @pytest.fixture
+    def sys_config(self):
+        mock = MagicMock()
+        mock.GPUS_PER_NODE = 4
+        mock.CORES_PER_NODE = 64
+        mock.EXCLUDE_CORES = None
+        return mock
+
+    @pytest.fixture
+    def sys_config_excluded(self):
+        mock = MagicMock()
+        mock.GPUS_PER_NODE = 4
+        mock.CORES_PER_NODE = 64
+        mock.EXCLUDE_CORES = [0, 1, 2, 3]
+        return mock
+
+    def test_lammps_cpu_full_node(self, sys_config):
+        """LAMMPS CPU job, full node → ranks = CORES_PER_NODE."""
+        from parslbox.apps.lammps_kk import LammpsKokkosApp as LammpsKKApp
+        params, _, _ = validate_resource_parameters(
+            ngpus=0, nnodes=1, node_occupancy=1.0,
+            system_config=sys_config, app_class=LammpsKKApp,
+        )
+        assert params['final_ranks_per_node'] == 64
+
+    def test_lammps_cpu_half_node(self, sys_config):
+        """LAMMPS CPU job, nocc=0.5 → ranks = 32."""
+        from parslbox.apps.lammps_kk import LammpsKokkosApp as LammpsKKApp
+        params, _, _ = validate_resource_parameters(
+            ngpus=0, nnodes=1, node_occupancy=0.5,
+            system_config=sys_config, app_class=LammpsKKApp,
+        )
+        assert params['final_ranks_per_node'] == 32
+
+    def test_lammps_cpu_quarter_node(self, sys_config):
+        """LAMMPS CPU job, nocc=0.25 → ranks = 16."""
+        from parslbox.apps.lammps_kk import LammpsKokkosApp as LammpsKKApp
+        params, _, _ = validate_resource_parameters(
+            ngpus=0, nnodes=1, node_occupancy=0.25,
+            system_config=sys_config, app_class=LammpsKKApp,
+        )
+        assert params['final_ranks_per_node'] == 16
+
+    def test_lammps_cpu_half_node_with_excluded(self, sys_config_excluded):
+        """LAMMPS CPU, nocc=0.5, 4 excluded cores → ranks = (64-4)*0.5 = 30."""
+        from parslbox.apps.lammps_kk import LammpsKokkosApp as LammpsKKApp
+        params, _, _ = validate_resource_parameters(
+            ngpus=0, nnodes=1, node_occupancy=0.5,
+            system_config=sys_config_excluded, app_class=LammpsKKApp,
+        )
+        assert params['final_ranks_per_node'] == 30
+
+    def test_python_cpu_half_node(self, sys_config):
+        """Python CPU job, nocc=0.5 → ranks stays 1 (Python override)."""
+        from parslbox.apps.python import PythonApp
+        params, _, _ = validate_resource_parameters(
+            ngpus=0, nnodes=1, node_occupancy=0.5,
+            system_config=sys_config, app_class=PythonApp,
+        )
+        assert params['final_ranks_per_node'] == 1
+
+    def test_lammps_gpu_job_ignores_occupancy(self, sys_config):
+        """GPU jobs should not scale ranks by occupancy."""
+        from parslbox.apps.lammps_kk import LammpsKokkosApp as LammpsKKApp
+        params, _, _ = validate_resource_parameters(
+            ngpus=2, nnodes=1,
+            system_config=sys_config, app_class=LammpsKKApp,
+        )
+        assert params['final_ranks_per_node'] == 2
+
+    def test_no_app_class_cpu_half_node(self, sys_config):
+        """Fallback (no app class), nocc=0.5 → ranks = 32."""
+        params, _, _ = validate_resource_parameters(
+            ngpus=0, nnodes=1, node_occupancy=0.5,
+            system_config=sys_config, app_class=None,
+        )
+        assert params['final_ranks_per_node'] == 32
+
+    def test_user_override_not_scaled(self, sys_config):
+        """User-specified ranks_per_node should NOT be scaled by occupancy."""
+        from parslbox.apps.lammps_kk import LammpsKokkosApp as LammpsKKApp
+        params, _, _ = validate_resource_parameters(
+            ngpus=0, nnodes=1, node_occupancy=0.5, ranks_per_node=8,
+            system_config=sys_config, app_class=LammpsKKApp,
+        )
+        assert params['final_ranks_per_node'] == 8
 
 
 class TestAddCommand:

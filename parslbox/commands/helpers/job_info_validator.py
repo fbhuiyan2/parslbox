@@ -200,6 +200,8 @@ def validate_resource_parameters(
             final_ranks_per_node = app_class.get_default_ranks_per_node(
                 final_ngpus, final_num_nodes, system_config
             )
+            if final_ngpus == 0 and final_node_occupancy < 1.0:
+                final_ranks_per_node = max(1, int(final_ranks_per_node * final_node_occupancy))
         elif final_ngpus > 0:
             # Fallback when no app class: 1 rank per GPU
             if final_num_nodes > 1:
