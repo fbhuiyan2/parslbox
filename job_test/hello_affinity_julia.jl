@@ -8,30 +8,40 @@ hostname = gethostname()
 gpu_id = get(ENV, "CUDA_VISIBLE_DEVICES",
          get(ENV, "ZE_AFFINITY_MASK", "No GPUs assigned"))
 
-# Detect CPU affinity (Linux: read /proc/self/status)
-cpu_affinity_str = "unknown"
-ncpu = 0
-try
+# Detect CPU affinity (Linux: read /proc/self/status).
+# Wrapped in a function so the do-block assignments propagate out — at
+# top-level script scope, assignments inside `open(...) do f` create
+# function-locals that shadow the outer variable.
+function read_cpu_affinity()
+    affinity_str = "unknown"
+    n = 0
     open("/proc/self/status", "r") do f
         for line in eachline(f)
             if startswith(line, "Cpus_allowed_list:")
-                cpu_affinity_str = strip(split(line, ":")[2])
+                affinity_str = strip(split(line, ":")[2])
                 # Parse "0-3,8,12-15" → count of CPUs
-                ncpu = sum(
+                n = sum(
                     let p = split(rng, "-")
                         length(p) == 1 ? 1 : parse(Int, p[2]) - parse(Int, p[1]) + 1
                     end
-                    for rng in split(cpu_affinity_str, ",")
+                    for rng in split(affinity_str, ",")
                 )
                 break
             end
         end
     end
+    return affinity_str, n
+end
+
+cpu_affinity_str = "unknown"
+ncpu = 0
+try
+    cpu_affinity_str, ncpu = read_cpu_affinity()
     println("Detected CPU affinity from /proc/self/status: $cpu_affinity_str")
 catch e
     cpu_affinity_str = "all"
     ncpu = Sys.CPU_THREADS
-    println("Fallback CPU affinity using Sys.CPU_THREADS: $ncpu")
+    println("Fallback CPU affinity using Sys.CPU_THREADS: $ncpu  ($e)")
 end
 
 println()
