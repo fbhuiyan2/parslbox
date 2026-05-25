@@ -491,7 +491,8 @@ def run(
     # Create new futures for rescheduled backlogged jobs in a while loop
     fut_to_item = {item['future']: item for item in futures}
 
-    logger.info(f"Starting to process {len(fut_to_item)} initial jobs...")
+    spinup_minutes = (time.time() - process_start) / 60
+    logger.info(f"Starting to process {len(fut_to_item)} initial jobs (elapsed time: {spinup_minutes:.2f} minutes)...")
     if dynamic:
         logger.info("Dynamic job discovery enabled (poll every 60s)")
 
@@ -865,4 +866,6 @@ def run(
 
     # 7. Cleanup
     parsl.dfk().cleanup()
+    total_minutes = (time.time() - process_start) / 60
+    logger.info(f"Total elapsed time: {total_minutes:.2f} minutes")
     logger.info("--- parslbox orchestrator finished ---")

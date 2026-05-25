@@ -142,7 +142,7 @@ pbx rm $(pbx filter --status done)
 
 | App | MPI | Input Required | Default Input | Success Check |
 |-----|-----|----------------|---------------|---------------|
-| **lammps** | Yes | Yes | `in.lammps` | Checks for "Total wall time:" in `log.lammps` |
+| **lammps-kk** | Yes | Yes | `in.lammps` | Checks for "Total wall time:" in `log.lammps` |
 | **vasp** | Yes | No | — | Auto-selects `vasp_gpu` or `vasp_std` |
 | **orca** | Internal | Yes | `input.inp` | Checks for "ORCA TERMINATED NORMALLY" in `.out` files |
 | **python** | No | Yes | — | Reads `PBX_JOB_STATUS_REPORT` file via `report_status()` |
@@ -208,6 +208,8 @@ Implement by inheriting from `AppBase` with `get_command_template()`. See [`pars
 | **lcrc-swing** | PBS | 8 | NVIDIA A100 | 64 | OpenMPI |
 | **lcrc-improv** | PBS | 0 (CPU-only) | — | 128 | OpenMPI |
 | **pinnacles-cenvalarc** | SLURM | 0 or 2 (auto-detected) | NVIDIA L40S / H200 NVL | 64 | srun |
+| **perlmutter-gpu** | SLURM | 4 | NVIDIA A100 | 128 | srun |
+| **perlmutter-cpu** | SLURM | 0 (CPU-only) | — | 128 | srun |
 
 Each system defines its own MPI defaults, scheduler templates, and resource detection methods. New systems can be added by creating a config class inheriting from `BaseSystemConfig`.
 
@@ -219,11 +221,13 @@ Main methods:
 - `add_jobs(paths, app, config, ...)`
 - `update_jobs(job_ids, ...)`
 - `list_jobs(...)` — returns all jobs when called with no filters
+- `filter_jobs(...)` — returns job IDs matching filters (status, app, tag, path, input)
 - `get_job(job_id)`, `get_jobs_by_ids(ids)`
 - `remove_job`, `remove_jobs`, `remove_all_jobs`
 - `qsub(...)` — submit via PBS
 - `sbatch(...)` — submit via SLURM
 - `run(...)` — execute jobs directly
+- `qdel(jobid, grace=30)` / `scancel(jobid, grace=30)` — graceful cancel of a running PBX batch job (SIGTERM → wait `grace` seconds → hard kill)
 
 Exceptions: `ParslBoxError`, `ValidationError`, `JobNotFoundError`
 
@@ -249,7 +253,7 @@ python -m parslbox.mcp.mcp_server
 python -m parslbox.mcp.mcp_server --stdio
 ```
 
-Exposed tools: `add_jobs`, `submit_pbs_job`, `submit_slurm_job`, `remove_job`, `update_job`, `filter_jobs`, `list_jobs`, `get_job`, `get_jobs`.
+Exposed tools: `add_jobs`, `submit_pbs_job`, `submit_slurm_job`, `cancel_pbs_job`, `cancel_slurm_job`, `remove_job`, `update_job`, `filter_jobs`, `list_jobs`, `get_job`, `get_jobs`.
 
 ### Claude Code Integration
 
@@ -370,7 +374,7 @@ Statuses:
 - Ready → Submitted → Running → Done | Failed | Killed
 - Restart — for recoverable errors / re-runs
 - Warning — if an app returns an invalid/unknown status
-- Killed — when walltime is exceeded (SIGTERM handler marks active jobs)
+- Killed — when walltime is exceeded, or when the user runs `pbx qdel`/`pbx scancel` (SIGTERM handler marks active jobs before the hard kill)
 
 ## Examples
 
