@@ -7,7 +7,8 @@ It creates directory structures, copies necessary files, and adds jobs to pbx wi
 resource configurations and parent dependencies.
 
 Usage:
-    python create_test_jobs.py <config_name> [--lammps N] [--python SCRIPT N] [--vasp N]
+    python create_test_jobs.py <config_name> [--lammps N] [--python SCRIPT N]
+                                             [--julia SCRIPT N] [--vasp N]
                                              [--tag TAG] [--lmp-exm-dir DIR]
 
 Arguments:
@@ -16,12 +17,14 @@ Arguments:
 Flags:
     --lammps N              Create N LAMMPS friction jobs
     --python SCRIPT N       Create N Python jobs using SCRIPT
+    --julia SCRIPT N        Create N Julia jobs using SCRIPT
     --vasp N                Create N VASP jobs
     --tag TAG               Tag to apply to all created jobs (default: 'test')
     --lmp-exm-dir DIR       Custom LAMMPS examples directory path (overrides auto-detection)
 
 Examples:
     python create_test_jobs.py polaris --lammps 10 --python hello_affinity.py 5 --vasp 8
+    python create_test_jobs.py polaris --julia hello_affinity_julia.jl 5 --tag julia_test
     python create_test_jobs.py crux --lammps 5 --tag scaling_test
     python create_test_jobs.py polaris --python test_script.py 3 --vasp 4 --tag my_run
     python create_test_jobs.py sophia --lammps 8 --lmp-exm-dir /path/to/lammps/examples
@@ -81,6 +84,7 @@ class TestJobCreator:
         # Create app-specific subdirectories
         (self.tests_dir / "lammps").mkdir(exist_ok=True)
         (self.tests_dir / "python").mkdir(exist_ok=True)
+        (self.tests_dir / "julia").mkdir(exist_ok=True)
         (self.tests_dir / "vasp").mkdir(exist_ok=True)
         
         print(f"✅ Created directory structure in {self.tests_dir.absolute()}")
@@ -227,6 +231,57 @@ class TestJobCreator:
         finally:
             os.chdir(original_cwd)
     
+    def create_julia_jobs(self, script_name: str, num_jobs: int):
+        """
+        Create Julia test jobs.
+
+        Args:
+            script_name: Name of the Julia script
+            num_jobs: Number of Julia jobs to create
+        """
+        print(f"🟣 Creating {num_jobs} Julia jobs for {script_name}...")
+
+        script_path = Path(script_name)
+        if not script_path.exists():
+            raise ValueError(f"Julia script not found: {script_name}")
+
+        # Derive environment file name
+        env_file_name = f"{script_path.stem}_env.sh"
+        env_file_path = Path(env_file_name)
+
+        if not env_file_path.exists():
+            print(f"⚠️  Warning: Environment file {env_file_name} not found in current directory")
+            env_file_path = None
+
+        julia_dir = self.tests_dir / "julia"
+
+        # Create job directories
+        job_dirs = []
+        for i in range(1, num_jobs + 1):
+            dest_dir = julia_dir / f"{script_path.stem}_{i}"
+            dest_dir.mkdir(exist_ok=True)
+
+            # Copy julia script
+            shutil.copy2(script_path, dest_dir)
+
+            # Copy environment file if it exists
+            if env_file_path and env_file_path.exists():
+                shutil.copy2(env_file_path, dest_dir)
+
+            job_dirs.append(dest_dir.name)
+            print(f"  📁 Created {dest_dir}")
+
+        # Change to julia directory and add jobs
+        original_cwd = Path.cwd()
+        try:
+            import os
+            os.chdir(julia_dir)
+
+            self._add_julia_jobs_to_pbx(job_dirs, script_path.name, env_file_name)
+
+        finally:
+            os.chdir(original_cwd)
+
     def create_vasp_jobs(self, num_jobs: int):
         """
         Create VASP test jobs.
@@ -479,6 +534,55 @@ class TestJobCreator:
             except Exception as e:
                 print(f"    ❌ Failed to add {job_dir}: {e}")
     
+    def _add_julia_jobs_to_pbx(self, job_dirs: List[str], script_name: str, env_file: Optional[str]):
+        """Add Julia jobs to pbx with varied configurations."""
+        print("  🔧 Adding Julia jobs to pbx...")
+
+        for i, job_dir in enumerate(job_dirs):
+            resource_kwargs, resource_desc = self._generate_resource_config(i, len(job_dirs))
+            parent_ids = self._generate_parent_dependencies(len(self.created_jobs))
+
+            # Determine environment file path
+            env_file_path = None
+            if env_file:
+                env_file_path = str((Path(job_dir) / env_file).resolve())
+
+            try:
+                # Use ParslBox API to add job
+                job_ids, failed_jobs, msg_log = self.pbx.add_jobs(
+                    paths=[job_dir],
+                    app="julia",
+                    config=self.config_name,
+                    input_file=script_name,
+                    tag=self.tag,
+                    env_file=env_file_path,
+                    parents=parent_ids if parent_ids else None,
+                    **resource_kwargs
+                )
+
+                # Display any warnings or info messages
+                for warning in msg_log["warnings"]:
+                    print(f"    ⚠️  Warning: {warning}")
+                for info in msg_log["info"]:
+                    print(f"    ℹ️  Info: {info}")
+
+                # Check for failures
+                if failed_jobs:
+                    for path, error in failed_jobs:
+                        print(f"    ❌ Failed to add {path}: {error}")
+                else:
+                    # Success - track the job ID
+                    if job_ids:
+                        job_id = job_ids[0]  # Should only be one job
+                        self.created_jobs.append(job_id)
+                        parent_info = f" (parents: {parent_ids})" if parent_ids else ""
+                        print(f"    ✅ Added {job_dir} - {resource_desc}, Job ID: {job_id}{parent_info}")
+                    else:
+                        print(f"    ❌ No job ID returned for {job_dir}")
+
+            except Exception as e:
+                print(f"    ❌ Failed to add {job_dir}: {e}")
+
     def _add_vasp_jobs_to_pbx(self, job_dirs: List[str]):
         """Add VASP jobs to pbx with varied configurations."""
         print("  🔧 Adding VASP jobs to pbx...")
@@ -530,6 +634,7 @@ def main():
         epilog="""
 Examples:
   %(prog)s polaris --lammps 10 --python hello_affinity.py 5 --vasp 8
+  %(prog)s polaris --julia hello_affinity_julia.jl 5 --tag julia_test
   %(prog)s crux --lammps 5
   %(prog)s polaris --python test_script.py 3 --vasp 4
         """
@@ -555,6 +660,13 @@ Examples:
     )
     
     parser.add_argument(
+        "--julia",
+        nargs=2,
+        metavar=("SCRIPT", "N"),
+        help="Create N Julia jobs using SCRIPT"
+    )
+
+    parser.add_argument(
         "--vasp",
         type=int,
         metavar="N",
@@ -578,8 +690,8 @@ Examples:
     args = parser.parse_args()
     
     # Validate that at least one job type is specified
-    if not any([args.lammps, args.python, args.vasp]):
-        parser.error("At least one job type must be specified (--lammps, --python, or --vasp)")
+    if not any([args.lammps, args.python, args.julia, args.vasp]):
+        parser.error("At least one job type must be specified (--lammps, --python, --julia, or --vasp)")
     
     try:
         # Create the test job creator
@@ -596,7 +708,12 @@ Examples:
             script_name, num_jobs_str = args.python
             num_jobs = int(num_jobs_str)
             creator.create_python_jobs(script_name, num_jobs)
-        
+
+        if args.julia:
+            script_name, num_jobs_str = args.julia
+            num_jobs = int(num_jobs_str)
+            creator.create_julia_jobs(script_name, num_jobs)
+
         if args.vasp:
             creator.create_vasp_jobs(args.vasp)
         
