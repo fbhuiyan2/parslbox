@@ -54,7 +54,16 @@ class AuroraTileMpiConfig(AuroraTileConfig):
                         max_blocks=1,
                         min_blocks=1,
                         nodes_per_block=nodes,
-                        launcher=MpiExecLauncher(),
+                        # ALCF-recommended args (Aurora docs):
+                        #   bind_cmd="--cpu-bind" — MPICH/PALS syntax (default
+                        #     "--bind-to" is OpenMPI-only and is rejected by PALS)
+                        #   overrides="--ppn 1" — exactly one manager rank per
+                        #     compute node; manager then spawns the
+                        #     max_workers_per_node workers locally
+                        launcher=MpiExecLauncher(
+                            bind_cmd="--cpu-bind",
+                            overrides="--ppn 1",
+                        ),
                     ),
                 )
             ],

@@ -15,6 +15,7 @@ from parslbox.system_configs.perlmutter_gpu import PerlmutterGpuConfig
 from parslbox.system_configs.perlmutter_cpu import PerlmutterCpuConfig
 from parslbox.system_configs.aurora_tile_mpi import AuroraTileMpiConfig
 from parslbox.system_configs.perlmutter_gpu_srun import PerlmutterGpuSrunConfig
+from parslbox.system_configs.lcrc_swing_mpi import LcrcSwingMpiConfig
 
 # Create a dictionary that maps the config name to its configuration class
 CONFIG_FACTORIES = {
@@ -32,6 +33,7 @@ CONFIG_FACTORIES = {
     # instead of concentrating them on the head node. Use for runs > ~10k workers.
     "aurora-tile-mpi": AuroraTileMpiConfig,
     "perlmutter-gpu-srun": PerlmutterGpuSrunConfig,
+    "lcrc-swing-mpi": LcrcSwingMpiConfig,
     # To add a new system, create its module and add it here.
 }
 

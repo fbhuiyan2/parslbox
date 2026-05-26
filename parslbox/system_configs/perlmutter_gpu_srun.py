@@ -8,6 +8,10 @@ would OOM under the default SimpleLauncher.
 
 SrunLauncher uses `--overlap` so the outer srun (managing managers) can
 coexist with PBX's inner srun calls (running scientific apps per job).
+`--cpu-bind=none` is set explicitly to suppress SLURM's auto-binding (which
+would otherwise pin the manager to one CPU because the allocation matches
+ntasks*cpus-per-task) and to prevent that binding from being inherited by
+the worker subprocesses the manager forks.
 """
 
 from pathlib import Path
@@ -57,7 +61,7 @@ class PerlmutterGpuSrunConfig(PerlmutterGpuConfig):
                         min_blocks=1,
                         nodes_per_block=nodes,
                         launcher=SrunLauncher(
-                            overrides='--overlap --ntasks-per-node=1 --cpus-per-task=1'
+                            overrides='--overlap --ntasks-per-node=1 --cpus-per-task=1 --cpu-bind=none'
                         ),
                     ),
                 )
