@@ -265,7 +265,7 @@ class TestMPICommandBuilder:
 
         assert "--gpus-per-node=4" in command
         assert "--gpu-bind=map_gpu:0,1,2,3" in command
-        assert "--overlap" not in command
+        assert "--overlap" in command
         assert "--gpus-per-task" not in command
         assert "-N 1" in command
 
@@ -284,7 +284,7 @@ class TestMPICommandBuilder:
 
         assert "--gpus-per-node=4" in command
         assert "--gpu-bind=map_gpu:0,1,2,3" in command
-        assert "--overlap" not in command
+        assert "--overlap" in command
         assert "-N 2" in command
 
     def test_srun_cpu_job_no_gpu_flags(self):

@@ -25,7 +25,7 @@ ParslBox provides a CLI (`pbx`), a Python API, and an MCP server for AI-agent in
   - CPU-GPU affinity-aware placement
   - MPI backends: MPICH, OpenMPI, srun
 - **Scheduler support:** PBS (`pbx qsub`) and SLURM (`pbx sbatch`) with configurable `--sched-opts`
-- **Pre-configured HPC systems:** Polaris, Aurora (GPU & Tile modes), Sophia, Crux, LCRC Swing, LCRC Improv
+- **Pre-configured HPC systems:** Polaris, Aurora (GPU & Tile modes), Sophia, Crux, LCRC Swing, LCRC Improv, Pinnacles-CenvalArc, Perlmutter (GPU & CPU), plus `*-mpi`/`*-srun` launcher variants for large-scale (>10k worker) runs
 - **Dynamic job discovery:** `--dynamic` (default) polls for newly added jobs during a run session. New jobs matching the same `--apps`/`--tags` filters are picked up every 60s. Failed jobs reset to Ready by the user (via `pbx update --status Ready` from another terminal) are also re-discovered and re-run. Use `--static` for collect-once behavior
 - **Fault tolerance:** Node health tracking, quarantine, and auto-recovery
 - **Script-driven status reporting:** Python/Julia scripts report success/failure via `report_status()` utility
@@ -210,8 +210,12 @@ Implement by inheriting from `AppBase` with `get_command_template()`. See [`pars
 | **pinnacles-cenvalarc** | SLURM | 0 or 2 (auto-detected) | NVIDIA L40S / H200 NVL | 64 | srun |
 | **perlmutter-gpu** | SLURM | 4 | NVIDIA A100 | 128 | srun |
 | **perlmutter-cpu** | SLURM | 0 (CPU-only) | — | 128 | srun |
+| **aurora-tile-mpi** | PBS | 12 (6x2 tiles) | Intel Max 1550 | 208 | MPICH |
+| **perlmutter-gpu-srun** | SLURM | 4 | NVIDIA A100 | 128 | srun |
 
 Each system defines its own MPI defaults, scheduler templates, and resource detection methods. New systems can be added by creating a config class inheriting from `BaseSystemConfig`.
+
+**Launcher variants** (`*-mpi` / `*-srun`): hardware-identical to their base configs (`aurora-tile`, `perlmutter-gpu`) but use `MpiExecLauncher` / `SrunLauncher` instead of `SimpleLauncher`. This places one Parsl manager per compute node (workers distributed across nodes) rather than concentrating all workers on the head node. Use for runs above ~10k workers, where head-node RAM would otherwise be the scaling ceiling. The base configs remain the default and are recommended for smaller runs.
 
 ## Programmatic API (Python)
 
@@ -364,7 +368,7 @@ Using separate `PBX_DB_PATH` and/or `PBX_CONFIG_PATH` allows multiple isolated d
 ParslBox generates MPI launch commands with CPU binding flags appropriate for each job type (subnode, fullnode, multinode) and scheduler:
 
 - **PBS systems (mpiexec/MPICH, mpirun/OpenMPI):** Configurable via `cpu_bind_method` in the `mpi:` config section. Options: `none`, `rankfile`, `list`, `depth`. The `rankfile` and `list` methods provide GPU-affinity-aware core assignments.
-- **SLURM systems (srun):** Native SLURM resource binding. Full/multi-node GPU: `--gpus-per-node` + `--gpu-bind=map_gpu|mask_gpu` with `--cpu-bind=cores|threads`. Sub-node GPU: `--gpu-bind=map_gpu:{pbx_gpu_ids}` + `--cpu-bind=mask_cpu:{hex}` + `--overlap` for concurrent step isolation. All jobs include `-N {nodes}` for explicit node control.
+- **SLURM systems (srun):** Native SLURM resource binding. Full/multi-node GPU: `--gpus-per-node` + `--gpu-bind=map_gpu|mask_gpu` with `--cpu-bind=cores|threads`. Sub-node GPU: `--gpu-bind=map_gpu:{pbx_gpu_ids}` + `--cpu-bind=mask_cpu:{hex}`. All srun jobs include `--overlap` (required when running under `SrunLauncher`-based configs like `perlmutter-gpu-srun`; also enables sub-node packing) and `-N {nodes}` for explicit node control.
 
 Details: [`parslbox/resource_manager/README.md`](parslbox/resource_manager/README.md)
 
