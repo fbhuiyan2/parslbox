@@ -370,6 +370,8 @@ class MPICommandBuilder:
         # CPU binding: sub-node srun uses mask_cpu for isolation between
         # concurrent steps; full/multi-node uses the configured method.
         if is_subnode:
+            cores_per_rank = int(context["cores_per_rank"])
+            extra.extend(["--cpus-per-task", str(cores_per_rank)])
             extra.extend(self._build_srun_mask_cpu(assignment))
         else:
             extra.extend(self._build_cpu_bind_flags(assignment, job_spec, job_path, context))
