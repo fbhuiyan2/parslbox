@@ -18,7 +18,9 @@ Submission flow: `pbx qsub` / `pbx sbatch` generate a `submit.sh` and submit it 
 | [`pbx qsub` / `pbx sbatch`](#pbx-qsub--pbx-sbatch) | Generate a `submit.sh` and submit it to PBS / SLURM. |
 | [`pbx qdel` / `pbx scancel`](#pbx-qdel-jobid--pbx-scancel-jobid) | Gracefully cancel a running ParslBox batch job (SIGTERM → grace → hard kill). |
 
-| [`pbx run`](#pbx-run-internal) | Internal — the engine invoked by qsub/sbatch's generated submit script. |
+| Internal | What it does |
+|---|---|
+| [`pbx run`](#pbx-run-internal) | Engine invoked by qsub/sbatch's generated submit script. Not for direct use. |
 
 ---
 
