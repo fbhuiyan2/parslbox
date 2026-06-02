@@ -186,3 +186,48 @@ class TestFilterJobs:
         """Test filtering when no jobs match."""
         ids = pbx.filter_jobs(status="Done")
         assert ids == []
+
+    def _seed_mixed(self, pbx, tmp_path):
+        """Seed 4 jobs: 2 lammps Ready (tags prod-run, prod-test),
+        1 vasp Done (tag prod-run), 1 python Failed (no tag)."""
+        env_file = tmp_path / "test.sh"
+        env_file.write_text("#!/bin/bash\n")
+        seeds = [
+            ("lammps-kk", "Ready",  "prod-run"),
+            ("lammps-kk", "Ready",  "prod-test"),
+            ("vasp",      "Done",   "prod-run"),
+            ("python",    "Failed", None),
+        ]
+        ids = []
+        for i, (app, status, tag) in enumerate(seeds):
+            d = tmp_path / f"j{i}"
+            d.mkdir()
+            jid, _, _ = pbx.add_jobs(
+                paths=[str(d)], app=app, config="polaris",
+                status=status, tag=tag, input_file="x", env_file=str(env_file),
+            )
+            ids.extend(jid)
+        return ids
+
+    def test_filter_exclude_status(self, pbx, tmp_path):
+        self._seed_mixed(pbx, tmp_path)
+        out = pbx.filter_jobs(exclude_status="Ready")
+        # Drops the two Ready jobs; keeps the Done + Failed
+        assert len(out) == 2
+
+    def test_filter_exclude_app(self, pbx, tmp_path):
+        self._seed_mixed(pbx, tmp_path)
+        out = pbx.filter_jobs(exclude_app="lammps-kk")
+        assert len(out) == 2  # vasp + python
+
+    def test_filter_exclude_tag_glob(self, pbx, tmp_path):
+        self._seed_mixed(pbx, tmp_path)
+        out = pbx.filter_jobs(exclude_tag="prod*")
+        # Drops all jobs with prod-* tags; keeps the untagged python job
+        assert len(out) == 1
+
+    def test_filter_exclude_combines_with_include(self, pbx, tmp_path):
+        self._seed_mixed(pbx, tmp_path)
+        # status=Ready (2 jobs) minus tag=prod-run → just prod-test job
+        out = pbx.filter_jobs(status="Ready", exclude_tag="prod-run")
+        assert len(out) == 1

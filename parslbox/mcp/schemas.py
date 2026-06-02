@@ -93,6 +93,18 @@ class FilterJobsSchema(BaseModel):
         default=None,
         description="Filter jobs by input file (partial match).",
     )
+    exclude_status: Optional[str] = Field(
+        default=None,
+        description="Drop jobs with this status.",
+    )
+    exclude_app: Optional[str] = Field(
+        default=None,
+        description="Drop jobs with this app.",
+    )
+    exclude_tag: Optional[str] = Field(
+        default=None,
+        description="Drop jobs with this tag. Supports `*` glob (same syntax as the include `tag` filter).",
+    )
 
 
 class ListJobsSchema(BaseModel):
