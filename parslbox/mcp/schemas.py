@@ -83,7 +83,7 @@ class FilterJobsSchema(BaseModel):
     )
     tag: Optional[str] = Field(
         default=None,
-        description="Filter jobs by tag.",
+        description="Filter jobs by tag. Supports `*` glob: '*prod' (suffix), 'run*' (prefix), '*3c*' (substring). Plain strings match exactly.",
     )
     path: Optional[str] = Field(
         default=None,
@@ -108,7 +108,7 @@ class ListJobsSchema(BaseModel):
     )
     tag: Optional[str] = Field(
         default=None,
-        description="Filter jobs by tag.",
+        description="Filter jobs by tag. Supports `*` glob: '*prod' (suffix), 'run*' (prefix), '*3c*' (substring). Plain strings match exactly.",
     )
     path: Optional[str] = Field(
         default=None,
@@ -179,7 +179,10 @@ class QSubSchema(BaseModel):
     tags: Optional[List[str]] = Field(
         default=None,
         description=(
-            "List of tags to run. Will be rendered as a comma-separated list in the submit script."
+            "List of tags to run. Each entry may be a literal tag or a `*` glob "
+            "('*prod', 'run*', '*3c*'). Globs are resolved against the DB before "
+            "submission; every entry must match at least one existing tag or the "
+            "call will fail. The final literal list is rendered into the submit script."
         ),
     )
 
@@ -238,7 +241,12 @@ class SBatchSchema(BaseModel):
 
     tags: Optional[List[str]] = Field(
         default=None,
-        description="List of tags to run.",
+        description=(
+            "List of tags to run. Each entry may be a literal tag or a `*` glob "
+            "('*prod', 'run*', '*3c*'). Globs are resolved against the DB before "
+            "submission; every entry must match at least one existing tag or the "
+            "call will fail. The final literal list is rendered into the submit script."
+        ),
     )
 
     retries: int = Field(

@@ -363,6 +363,7 @@ class TestSubmitJob:
                 run_dir=tmp_path,
                 scheduler_type="pbs",
                 submit_command="qsub",
+                validate_runnable=False,
             )
 
             assert result["success"] is True
@@ -399,6 +400,7 @@ class TestSubmitJob:
                 sched_opts=["#PBS -l filesystems=home:eagle", "#PBS -l place=scatter"],
                 scheduler_type="pbs",
                 submit_command="qsub",
+                validate_runnable=False,
             )
 
             assert result["success"] is True
@@ -430,6 +432,7 @@ class TestSubmitJob:
                 run_dir=tmp_path,
                 scheduler_type="slurm",
                 submit_command="sbatch",
+                validate_runnable=False,
             )
 
             assert result["success"] is True
@@ -466,6 +469,7 @@ class TestSubmitJob:
                 run_dir=tmp_path,
                 scheduler_type="pbs",
                 submit_command="qsub",
+                validate_runnable=False,
             )
 
             assert result["success"] is True
@@ -492,6 +496,7 @@ class TestSubmitJob:
                     run_dir=tmp_path,
                     scheduler_type="pbs",
                     submit_command="qsub",
+                validate_runnable=False,
                 )
 
     def test_validation_error_missing_system(self, tmp_path):
@@ -513,6 +518,7 @@ class TestSubmitJob:
                     run_dir=tmp_path,
                     scheduler_type="pbs",
                     submit_command="qsub",
+                validate_runnable=False,
                 )
 
     def test_validation_error_empty_config(self, tmp_path):
@@ -532,6 +538,7 @@ class TestSubmitJob:
                     run_dir=tmp_path,
                     scheduler_type="pbs",
                     submit_command="qsub",
+                validate_runnable=False,
                 )
 
     def test_submit_command_not_found(self, tmp_path):
@@ -556,6 +563,7 @@ class TestSubmitJob:
                     run_dir=tmp_path,
                     scheduler_type="pbs",
                     submit_command="qsub",
+                validate_runnable=False,
                 )
 
 
@@ -597,6 +605,7 @@ class TestSystemDefaultSchedOpts:
                 run_dir=tmp_path,
                 scheduler_type="pbs",
                 submit_command="qsub",
+                validate_runnable=False,
             )
 
             assert result["success"] is True
@@ -636,6 +645,7 @@ class TestSystemDefaultSchedOpts:
                 run_dir=tmp_path,
                 scheduler_type="pbs",
                 submit_command="qsub",
+                validate_runnable=False,
             )
 
             assert result["success"] is True
@@ -677,6 +687,7 @@ class TestSystemDefaultSchedOpts:
                 sched_opts=["#PBS -l filesystems=home:flare"],
                 scheduler_type="pbs",
                 submit_command="qsub",
+                validate_runnable=False,
             )
 
             assert result["success"] is True
@@ -712,6 +723,7 @@ class TestSystemDefaultSchedOpts:
                 run_dir=tmp_path,
                 scheduler_type="pbs",
                 submit_command="qsub",
+                validate_runnable=False,
             )
 
             assert result["success"] is True
@@ -751,6 +763,7 @@ class TestSystemDefaultSchedOpts:
                 run_dir=tmp_path,
                 scheduler_type="pbs",
                 submit_command="qsub",
+                validate_runnable=False,
             )
 
             assert result["success"] is True

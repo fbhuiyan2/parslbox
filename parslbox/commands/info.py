@@ -6,6 +6,7 @@ from rich.table import Table
 
 from parslbox.database import database
 from parslbox.utils import path_utils
+from parslbox.commands.helpers.ls_cmd_helpers import truncate_path
 
 console = Console()
 
@@ -40,8 +41,13 @@ def format_job_id_with_parents(job_id: int, parents: List[int], show_all: bool =
 @app.command()
 def info(
     job_ids: List[str] = typer.Argument(..., help="ID(s) of the job(s) to get information about. Supports ranges (e.g., 1-5 8 14-20)."),
-    path: bool = typer.Option(False, "--path", "-p", help="Show only the path field."),
-    ngpus: bool = typer.Option(False, "--ngpus", "-n", help="Show only the number of GPUs field."),
+    path_full: bool = typer.Option(False, "--path", help="Show the path field with full (untruncated) display."),
+    path_auto: bool = typer.Option(False, "-p", help="Show the path field; auto-truncates when more than 3 fields are selected."),
+    ngpus: bool = typer.Option(False, "--ngpus", "-g", help="Show only the number of GPUs field."),
+    nodes: bool = typer.Option(False, "--nodes", "-n", help="Show only the number of nodes field."),
+    ranks: bool = typer.Option(False, "--ranks", help="Show only the ranks-per-node field."),
+    nocc: bool = typer.Option(False, "--nocc", "-o", help="Show only the node occupancy field."),
+    resrc: bool = typer.Option(False, "--resrc", "-r", help="Show the full resource string (n/r/g/nocc)."),
     app_name: bool = typer.Option(False, "--app", "-a", help="Show only the application field."),
     status: bool = typer.Option(False, "--status", "-s", help="Show only the status field."),
     tag: bool = typer.Option(False, "--tag", "-t", help="Show only the tag field."),
@@ -50,8 +56,8 @@ def info(
     timestamp: bool = typer.Option(False, "--timestamp", "-ts", help="Show only the timestamp field."),
     env_file: bool = typer.Option(False, "--envfile", "-e", help="Show only the environment file field."),
     parents: bool = typer.Option(False, "--parents", "-P", help="Show all parent dependencies without truncation."),
-    req: Optional[str] = typer.Option(None, "--req", "-r", help="Calculate resource requirements for a target system (e.g., polaris, crux, sophia)."),
-    cmdline: Optional[str] = typer.Option(None, "--cmdline", "-c", help="Show MPI/srun command line for a target system (e.g., polaris, crux, sophia)."),
+    req: Optional[str] = typer.Option(None, "--req", help="Calculate resource requirements for a target system (e.g., polaris, crux, sophia)."),
+    cmdline: Optional[str] = typer.Option(None, "--cmdline", help="Show MPI/srun command line for a target system (e.g., polaris, crux, sophia)."),
 ):
     """
     Shows detailed information about specific jobs.
@@ -78,12 +84,23 @@ def info(
         console.print("[red]❌ No jobs found with the specified IDs.[/red]")
         raise typer.Exit(code=1)
     
+    # Path selection: --path forces full display, -p uses auto-truncation rule
+    path_selected = path_full or path_auto
+
     # Determine which fields to show
     selected_fields = []
-    if path:
+    if path_selected:
         selected_fields.append(('path', 'Path'))
     if ngpus:
         selected_fields.append(('ngpus', 'NGPUs'))
+    if nodes:
+        selected_fields.append(('num_nodes', 'NNodes'))
+    if ranks:
+        selected_fields.append(('ranks_per_node', 'Ranks/Node'))
+    if nocc:
+        selected_fields.append(('node_occupancy', 'NOcc'))
+    if resrc:
+        selected_fields.append(('_resrc', 'Resources'))
     if app_name:
         selected_fields.append(('app', 'App'))
     if status:
@@ -100,9 +117,11 @@ def info(
         selected_fields.append(('env_file', 'Env File'))
     if parents:
         selected_fields.append(('parents', 'Parents'))
-    
+
+    is_default_view = not selected_fields
+
     # If no specific fields selected, show all fields
-    if not selected_fields:
+    if is_default_view:
         selected_fields = [
             ('job_id', 'ID'),
             ('app', 'App'),
@@ -118,14 +137,18 @@ def info(
     else:
         # Always include job_id as the first column when specific fields are selected
         selected_fields.insert(0, ('job_id', 'ID'))
+
+    # Truncate path when -p (auto) is used and more than 3 fields are shown.
+    # --path forces full display; default view keeps existing wrap behavior.
+    should_truncate_path = path_auto and not path_full and len(selected_fields) > 3
     
     # Create and populate table
     headers = [field[1] for field in selected_fields]
-    
+
     # Check if path is being displayed to configure wrapping
     path_in_fields = any(field[0] == 'path' for field in selected_fields)
-    
-    if path_in_fields:
+
+    if path_in_fields and not should_truncate_path:
         # Configure table to allow wrapping for long paths
         table = Table(*headers, expand=True)
         # Find the path column index and configure it for wrapping
@@ -135,14 +158,19 @@ def info(
                 table.columns[i].overflow = "fold"
     else:
         table = Table(*headers)
-    
+
     for job in jobs:
         row_data = []
         for field_key, _ in selected_fields:
+            if field_key == '_resrc':
+                row_data.append(_format_resource_string(job))
+                continue
             value = job[field_key]
             if value is None:
                 row_data.append("None")
-            elif field_key == 'ngpus':
+            elif field_key == 'path' and should_truncate_path:
+                row_data.append(truncate_path(str(value)))
+            elif field_key in ('ngpus', 'num_nodes', 'ranks_per_node', 'node_occupancy'):
                 row_data.append(str(value))
             elif field_key == 'job_id':
                 # When parents flag is used, show plain job ID (parents will be in separate column)
@@ -182,6 +210,21 @@ def info(
     # Command line preview
     if cmdline:
         _print_cmdline(jobs, cmdline)
+
+
+def _format_resource_string(job: dict) -> str:
+    """Build resource summary string matching the ls command format."""
+    num_nodes = job.get('num_nodes', 1)
+    ngpus = job.get('ngpus', 0)
+    node_occupancy = job.get('node_occupancy', 1.0)
+    ranks_per_node = job.get('ranks_per_node', 1)
+    total_ranks = num_nodes * ranks_per_node
+    if num_nodes > 1:
+        return f"n:{num_nodes}-r:{total_ranks}-g:{ngpus}-nocc:NA"
+    elif ngpus > 0:
+        return f"n:1-r:{total_ranks}-g:{ngpus}-nocc:NA"
+    else:
+        return f"n:1-r:{total_ranks}-g:0-nocc:{node_occupancy}"
 
 
 def _print_resource_requirements(jobs: list, system_name: str):
@@ -446,7 +489,7 @@ def _create_synthetic_assignment(job_spec, gpus_per_node, effective_cores):
 
     # Calculate GPUs per rank for assignment display
     if job_spec.is_gpu_job():
-        gpus_on_node = system_config.GPUS_PER_NODE if num_nodes > 1 else job_spec.ngpus
+        gpus_on_node = gpus_per_node if num_nodes > 1 else job_spec.ngpus
         gpus_per_rank = max(1, gpus_on_node // ranks_per_node)
     else:
         gpus_per_rank = 0

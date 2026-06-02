@@ -25,6 +25,56 @@ class ValidationError(Exception):
     pass
 
 
+def count_matching_runnable_jobs(
+    db_path: Path,
+    apps_list: Optional[List[str]],
+    tags_list: Optional[List[str]],
+) -> int:
+    """Count Ready/Restart jobs matching the given apps/tags filters.
+
+    Apps and tags are matched exactly. `None` for either means "no filter".
+    Used by qsub/sbatch to verify there's actually work to do before submitting.
+    """
+    from parslbox.database import database
+    jobs = database.get_jobs(db_path, status='Ready')
+    jobs += database.get_jobs(db_path, status='Restart')
+
+    app_set = set(apps_list) if apps_list else None
+    tag_set = set(tags_list) if tags_list else None
+
+    count = 0
+    for j in jobs:
+        if app_set and j['app'] not in app_set:
+            continue
+        if tag_set and j['tag'] not in tag_set:
+            continue
+        count += 1
+    return count
+
+
+def render_submit_script_panel(submit_file_path):
+    """Build a Rich Panel containing the submit script with the `pbx run` line
+    highlighted in red. Returns the Panel ready to be `console.print`-ed.
+    """
+    from rich.panel import Panel
+    from rich.text import Text
+
+    script = Path(submit_file_path).read_text()
+    text = Text()
+    for line in script.splitlines():
+        if 'pbx run' in line:
+            text.append(line, style="bold red")
+        else:
+            text.append(line)
+        text.append("\n")
+    return Panel(
+        text,
+        title=f"[bold cyan]Submit Script[/bold cyan] [dim]({submit_file_path})[/dim]",
+        border_style="cyan",
+        expand=True,
+    )
+
+
 def submit_job(
     config_name: str,
     job_name: str,
@@ -42,6 +92,7 @@ def submit_job(
     scheduler_type: str = "pbs",
     submit_command: str = "qsub",
     dynamic: bool = True,
+    validate_runnable: bool = True,
 ) -> Dict[str, Any]:
     """
     Core scheduler submission logic - used by both PBS (qsub) and SLURM (sbatch).
@@ -70,6 +121,24 @@ def submit_job(
         ValidationError: If configuration is invalid
         FileNotFoundError: If submit command is not found
     """
+    # Tag glob expansion + runnable-jobs guard (skipped when caller has already
+    # validated, e.g. unit tests that bypass the DB).
+    matched_count = None
+    if validate_runnable:
+        from parslbox.utils import path_utils
+        if tags:
+            from parslbox.utils.tag_match import expand_tag_patterns
+            try:
+                tags = expand_tag_patterns(path_utils.DB_FILE, list(tags))
+            except ValueError as e:
+                raise ValidationError(str(e))
+        matched_count = count_matching_runnable_jobs(path_utils.DB_FILE, list(apps) if apps else None, list(tags) if tags else None)
+        if matched_count == 0:
+            raise ValidationError(
+                "No Ready/Restart jobs match the given --apps/--tags filters. "
+                "Refusing to submit (would waste the allocation)."
+            )
+
     # Load configuration
     try:
         config = load_config(config_path)
@@ -208,6 +277,8 @@ def submit_job(
             "job_id": job_id,
             "run_dir": str(run_dir),
             "submit_file": str(submit_file),
+            "matched_jobs": matched_count,
+            "resolved_tags": list(tags) if tags else None,
         }
         if scheduler_type == "pbs":
             result_dict["pbs_job_id"] = job_id
@@ -222,6 +293,8 @@ def submit_job(
             "error": e.stderr,
             "run_dir": str(run_dir),
             "submit_file": str(submit_file),
+            "matched_jobs": matched_count,
+            "resolved_tags": list(tags) if tags else None,
         }
     except FileNotFoundError:
         raise ValidationError(

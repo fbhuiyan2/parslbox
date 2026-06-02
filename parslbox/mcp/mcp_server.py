@@ -17,6 +17,32 @@ from parslbox.mcp.schemas import (
 # Start ParslBox and MCP.
 pbx = ParslBox()
 
+
+def _fmt_resources(job: dict) -> str:
+    """Compact resource summary: 'nodes:5, ranks:60, gpus:60, nocc:1.0'."""
+    nn = job.get('num_nodes', 1)
+    g = job.get('ngpus', 0)
+    rpn = job.get('ranks_per_node', 1)
+    occ = job.get('node_occupancy', 1.0)
+    return f"nodes:{nn}, ranks:{nn * rpn}, gpus:{g}, nocc:{occ}"
+
+
+def _job_one_line(job: dict) -> str:
+    """Single-line job summary for list_jobs."""
+    return " | ".join([
+        f"#{job['job_id']}",
+        f"{job.get('app', '?')}",
+        f"{job.get('status', '?')}",
+        _fmt_resources(job),
+        f"tag:{job.get('tag')}",
+        f"sched:{job.get('sched_job_id')}",
+        f"in:{job.get('in_file')}",
+        f"env:{job.get('env_file')}",
+        f"parents:{job.get('parents')}",
+        f"{job.get('timestamp', '')}",
+        f"{job.get('path', '')}",
+    ])
+
 mcp = FastMCP(
     name="ParslBox Tool MCP",
     instructions=(
@@ -94,11 +120,18 @@ def submit_pbs_job(params: QSubSchema) -> str:
     if status.get("success") is True:
         job_id = status.get("job_id", status.get("pbs_job_id", "UNKNOWN"))
         run_dir = status.get("run_dir", "UNKNOWN")
-        return (
-            f"Job was submitted successfully.\n"
-            f"PBS job ID: {job_id}\n"
-            f"Run directory: {run_dir}"
-        )
+        matched = status.get("matched_jobs")
+        resolved = status.get("resolved_tags")
+        lines = [
+            f"Job was submitted successfully.",
+            f"PBS job ID: {job_id}",
+            f"Run directory: {run_dir}",
+        ]
+        if matched is not None:
+            lines.append(f"Matched {matched} runnable job(s) in DB.")
+        if resolved:
+            lines.append(f"Resolved tags: {', '.join(resolved)}")
+        return "\n".join(lines)
     else:
         error_msg = status.get("error", "Unknown error")
         run_dir = status.get("run_dir", "UNKNOWN")
@@ -130,11 +163,18 @@ def submit_slurm_job(params: SBatchSchema) -> str:
     if status.get("success") is True:
         job_id = status.get("job_id", status.get("slurm_job_id", "UNKNOWN"))
         run_dir = status.get("run_dir", "UNKNOWN")
-        return (
-            f"SLURM job was submitted successfully.\n"
-            f"SLURM job ID: {job_id}\n"
-            f"Run directory: {run_dir}"
-        )
+        matched = status.get("matched_jobs")
+        resolved = status.get("resolved_tags")
+        lines = [
+            f"SLURM job was submitted successfully.",
+            f"SLURM job ID: {job_id}",
+            f"Run directory: {run_dir}",
+        ]
+        if matched is not None:
+            lines.append(f"Matched {matched} runnable job(s) in DB.")
+        if resolved:
+            lines.append(f"Resolved tags: {', '.join(resolved)}")
+        return "\n".join(lines)
     else:
         error_msg = status.get("error", "Unknown error")
         run_dir = status.get("run_dir", "UNKNOWN")
@@ -274,7 +314,12 @@ def filter_jobs(params: FilterJobsSchema) -> str:
 
 @mcp.tool(
     name="list_jobs",
-    description="List jobs with full details. Returns all job fields (job_id, app, path, status, resources, tag, etc.) with optional filtering.",
+    description=(
+        "List jobs as one compact line per job (id, app, status, resources, "
+        "tag, sched_job_id, input/env files, parents, timestamp, path). "
+        "Supports the same filters as filter_jobs (tag accepts `*` globs). "
+        "For full per-field details on specific jobs, use get_job / get_jobs."
+    ),
 )
 def list_jobs(params: ListJobsSchema) -> str:
     input_dict = params.model_dump()
@@ -286,16 +331,9 @@ def list_jobs(params: ListJobsSchema) -> str:
     if not jobs:
         return "No jobs found matching the given filters."
 
-    # Format each job as a readable block
-    response_parts = [f"Found {len(jobs)} job(s):\n"]
-    for job in jobs:
-        parts = [f"  Job {job['job_id']}:"]
-        for key, value in job.items():
-            if key != "job_id":
-                parts.append(f"    {key}: {value}")
-        response_parts.append("\n".join(parts))
-
-    return "\n".join(response_parts)
+    lines = [f"Found {len(jobs)} job(s):"]
+    lines.extend(_job_one_line(j) for j in jobs)
+    return "\n".join(lines)
 
 
 @mcp.tool(

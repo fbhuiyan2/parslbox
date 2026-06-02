@@ -100,7 +100,14 @@ pbx sbatch -c polaris -N myrun -p gpu --nodes 2 -T 90 -A myproject -a lammps -t 
 # Long flags
 pbx qsub --config sophia --job-name myrun --queue gpu --select 2 --walltime 90 --project myproject --apps lammps --tags production
 pbx sbatch --config polaris --job-name myrun --partition gpu --nodes 2 --walltime 90 --account myproject --apps lammps --tags production
+
+# Glob tags: use `*` to match a substring. Quote to prevent shell expansion.
+pbx qsub -c sophia -N myrun -q gpu --select 2 -T 90 -A myproject -a lammps -t '*nomix,prod-run'
 ```
+
+> **Tag globs:** `--tag` / `--tags` accept `*`-style globs (e.g. `*test`, `film*mix`, `*3c*`).
+> `qsub` and `sbatch` resolve globs against the DB at submission time and error out if any
+> token (glob or literal) matches no existing tag. Quote globs to stop the shell from expanding `*`.
 
 Inspect, filter, update, remove:
 ```bash
@@ -112,7 +119,8 @@ pbx ls -n 15
 pbx ls -n -20
 
 # Show fields per job (supports ranges: 1-5 8 14-20)
-pbx info 1-5 8 --path --ngpus --envfile --parents
+pbx info 1-5 8 -p --ngpus --envfile --parents      # -p auto-truncates path when >3 fields
+pbx info 1-5 8 --path --ngpus --envfile --parents  # --path forces full path
 
 # Calculate resource requirements for a target system
 pbx info 1-10 --req polaris
@@ -313,8 +321,9 @@ Note: Users submit via `pbx qsub` or `pbx sbatch`. These generate a `submit.sh` 
   - Auto-paginates (first 10 + last 10) when > 25 jobs
 
 - **pbx info** — Show detailed job information. Supports ID ranges (e.g., `pbx info 1-5 8`)
-  - Field selectors: `--path/-p`, `--ngpus/-n`, `--app/-a`, `--status/-s`, `--tag/-t`, `--input/-i`, `--sched-job-id/-j`, `--timestamp/-ts`, `--envfile/-e`, `--parents/-P`
-  - `--req/-r SYSTEM` — Calculate resource requirements for target system (simultaneous vs optimal packing)
+  - Field selectors: `--path` (full), `-p` (auto-truncates when >3 fields), `--ngpus/-g`, `--nodes/-n`, `--ranks`, `--nocc/-o`, `--resrc/-r`, `--app/-a`, `--status/-s`, `--tag/-t`, `--input/-i`, `--sched-job-id/-j`, `--timestamp/-ts`, `--envfile/-e`, `--parents/-P`
+  - `--req SYSTEM` — Calculate resource requirements for target system (simultaneous vs optimal packing)
+  - `--cmdline SYSTEM` — Preview the MPI/srun command line for target system
 
 - **pbx filter** — Output space-separated job IDs for command composition
   - Filters: `--status/-s`, `--app/-a`, `--tag/-t`, `--path/-p`, `--in-file/-i`
