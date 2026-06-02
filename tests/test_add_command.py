@@ -656,3 +656,75 @@ class TestAddCommand:
             jobs = database.get_jobs(temp_db)
             assert len(jobs) == 1
             assert jobs[0]['in_file'] == "script.py --file afile -o 8 bfile"
+
+    def _seed_parents(self, temp_db, n):
+        """Add `n` simple parent jobs and return their IDs."""
+        ids = []
+        for i in range(n):
+            ids.append(database.add_job(
+                db_path=temp_db, path=f"/parent_{i}", app="lammps-kk",
+                num_nodes=1, ngpus=0, node_occupancy=1.0, tag="parent",
+            ))
+        return ids
+
+    def test_parents_supports_range(self, temp_db, temp_job_dirs, mock_system_config):
+        """--parents '1-3 5' should expand to [1,2,3,5]."""
+        self._seed_parents(temp_db, 5)
+        runner = CliRunner()
+        with patch('parslbox.commands.add.path_utils.DB_FILE', temp_db), \
+             patch('parslbox.system_configs.loader.get_system_config', return_value=mock_system_config), \
+             patch('parslbox.apps.app_registry.is_app_registered', return_value=True), \
+             patch('parslbox.apps.app_registry.get_app_config', return_value={
+                 'INPUT_REQUIRED': True, 'DFLT_INPUT': 'in.lammps',
+             }):
+            result = runner.invoke(add_app, [
+                str(temp_job_dirs["job1"]),
+                "--app", "lammps-kk", "--config", "polaris",
+                "--ngpus", "2", "--tag", "child",
+                "--parents", "1-3 5",
+            ])
+        assert result.exit_code == 0, result.stdout
+        # The new child is job_id 6 (parents seeded 1-5)
+        child = [j for j in database.get_jobs(temp_db) if j['tag'] == 'child'][0]
+        import json
+        assert [int(x) for x in json.loads(child['parents'])] == [1, 2, 3, 5]
+
+    def test_parents_mixed_ranges_and_singles(self, temp_db, temp_job_dirs, mock_system_config):
+        """--parents '1-2 4 6-7' should expand to [1,2,4,6,7]."""
+        self._seed_parents(temp_db, 7)
+        runner = CliRunner()
+        with patch('parslbox.commands.add.path_utils.DB_FILE', temp_db), \
+             patch('parslbox.system_configs.loader.get_system_config', return_value=mock_system_config), \
+             patch('parslbox.apps.app_registry.is_app_registered', return_value=True), \
+             patch('parslbox.apps.app_registry.get_app_config', return_value={
+                 'INPUT_REQUIRED': True, 'DFLT_INPUT': 'in.lammps',
+             }):
+            result = runner.invoke(add_app, [
+                str(temp_job_dirs["job1"]),
+                "--app", "lammps-kk", "--config", "polaris",
+                "--ngpus", "2", "--tag", "child",
+                "--parents", "1-2 4 6-7",
+            ])
+        assert result.exit_code == 0, result.stdout
+        child = [j for j in database.get_jobs(temp_db) if j['tag'] == 'child'][0]
+        import json
+        assert [int(x) for x in json.loads(child['parents'])] == [1, 2, 4, 6, 7]
+
+    def test_parents_invalid_range_errors(self, temp_db, temp_job_dirs, mock_system_config):
+        """Backwards range '5-3' should produce a clear error and not add anything."""
+        self._seed_parents(temp_db, 5)
+        runner = CliRunner()
+        with patch('parslbox.commands.add.path_utils.DB_FILE', temp_db), \
+             patch('parslbox.system_configs.loader.get_system_config', return_value=mock_system_config), \
+             patch('parslbox.apps.app_registry.is_app_registered', return_value=True), \
+             patch('parslbox.apps.app_registry.get_app_config', return_value={
+                 'INPUT_REQUIRED': True, 'DFLT_INPUT': 'in.lammps',
+             }):
+            result = runner.invoke(add_app, [
+                str(temp_job_dirs["job1"]),
+                "--app", "lammps-kk", "--config", "polaris",
+                "--ngpus", "2",
+                "--parents", "5-3",
+            ])
+        assert result.exit_code != 0
+        assert "Invalid parent job IDs" in result.stdout
