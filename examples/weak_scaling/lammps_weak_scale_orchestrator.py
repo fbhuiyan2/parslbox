@@ -378,16 +378,28 @@ class LammpsWeakScaleOrchestrator:
                         'tag': self.tag
                     }
                 else:  # core mode
-                    job_params = {
-                        'paths': [job_dir],
-                        'app': 'lammps-kk',
-                        'config': self.config_name,
-                        'input_file': input_file,
-                        'ncores': count,
-                        'nnodes': required_nodes,
-                        'rankspercore': rankspercore,
-                        'tag': self.tag
-                    }
+                    cores_per_node = units_per_node
+                    if required_nodes == 1 and count < cores_per_node:
+                        job_params = {
+                            'paths': [job_dir],
+                            'app': 'lammps-kk',
+                            'config': self.config_name,
+                            'input_file': input_file,
+                            'nnodes': 1,
+                            'node_occupancy': count / cores_per_node,
+                            'ranks_per_node': rankspercore * count,
+                            'tag': self.tag,
+                        }
+                    else:
+                        job_params = {
+                            'paths': [job_dir],
+                            'app': 'lammps-kk',
+                            'config': self.config_name,
+                            'input_file': input_file,
+                            'nnodes': required_nodes,
+                            'ranks_per_node': rankspercore * cores_per_node,
+                            'tag': self.tag,
+                        }
                 
                 # Use ParslBox API to add job
                 job_ids, failed_jobs, msg_log = self.pbx.add_jobs(**job_params)
