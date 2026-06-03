@@ -370,12 +370,19 @@ class MPICommandBuilder:
         # CPU binding: sub-node srun uses mask_cpu for isolation between
         # concurrent steps; full/multi-node uses the configured method.
         if is_subnode:
+            cores_per_rank = int(context["cores_per_rank"])
+            extra.extend(["--cpus-per-task", str(cores_per_rank)])
             extra.extend(self._build_srun_mask_cpu(assignment))
         else:
             extra.extend(self._build_cpu_bind_flags(assignment, job_spec, job_path, context))
 
-        # Sub-node srun: --overlap allows concurrent steps on the same node
-        if is_subnode:
+        # srun --overlap: required when this inner srun runs inside an outer
+        # srun step (e.g., SrunLauncher-based system configs like
+        # perlmutter-gpu-srun, where the Parsl manager is itself an outer
+        # srun rank). Also enables sub-node packing (concurrent inner steps
+        # on the same node). Safe to always include — no-op when there's
+        # nothing to overlap with.
+        if self.config.backend == MPIBackend.SRUN:
             extra.append("--overlap")
 
         return extra

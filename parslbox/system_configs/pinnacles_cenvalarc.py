@@ -119,6 +119,9 @@ class PinnaclesCenvalarcConfig(SystemConfig):
             retries=retries,
         )
 
+    def get_default_sched_opts(self) -> str:
+        return "#SBATCH --mincpus=64"
+
     def get_default_mpi_config_yaml(self) -> dict:
         """Pinnacles CENVALARC MPI defaults for config generation."""
         return {

@@ -170,8 +170,13 @@ def get_jobs(db_path: Path, status: Optional[str] = None, app: Optional[str] = N
             params.append(app)
 
         if tag:
-            conditions.append("tag = ?")
-            params.append(tag)
+            from parslbox.utils.tag_match import has_glob, to_sql_like
+            if has_glob(tag):
+                conditions.append("tag LIKE ? ESCAPE '\\'")
+                params.append(to_sql_like(tag))
+            else:
+                conditions.append("tag = ?")
+                params.append(tag)
         
         if path:
             conditions.append("path LIKE ?")

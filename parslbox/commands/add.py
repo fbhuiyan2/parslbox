@@ -206,7 +206,7 @@ def add(
     ] = None,
     parents: Annotated[
         Optional[str],
-        typer.Option("--parents", "-P", help="Space-separated job IDs in quotes (e.g., '1 2 3')"),
+        typer.Option("--parents", "-P", help="Space-separated job IDs in quotes; supports ranges (e.g., '1-5 8 14-20')."),
     ] = None,
     parent_tag: Annotated[
         Optional[str],
@@ -272,13 +272,18 @@ def add(
                 raise typer.Exit(code=1)
             env_file = 'pass'  # Special value to indicate no env file for core function
         
-        # Parse parents string for CLI
+        # Parse parents string for CLI (supports ranges like "1-5 10 14-20")
         final_parents = None
         if parents:
+            from parslbox.commands.helpers.job_id_parser import parse_job_ids
             try:
-                final_parents = [int(x) for x in parents.split()]
-            except ValueError:
-                typer.secho("❌ Error: Invalid parent job IDs. Use space-separated integers in quotes.", fg=typer.colors.RED)
+                final_parents = parse_job_ids(parents.split())
+            except ValueError as e:
+                typer.secho(
+                    f"❌ Error: Invalid parent job IDs ({e}). "
+                    "Use space-separated integers or ranges in quotes (e.g., '1-5 8 14-20').",
+                    fg=typer.colors.RED,
+                )
                 raise typer.Exit(code=1)
         
         # Call the core function

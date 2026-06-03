@@ -3,8 +3,13 @@ from pathlib import Path
 from typing import Optional, List
 from typing_extensions import Annotated
 
-from parslbox.commands.helpers.submit_helpers import submit_job, ValidationError
+from parslbox.commands.helpers.submit_helpers import (
+    submit_job, ValidationError, render_submit_script_panel,
+)
 from parslbox.commands.helpers.qsub_cmd_helpers import parse_walltime
+from rich.console import Console
+
+console = Console()
 
 app = typer.Typer()
 
@@ -136,8 +141,21 @@ def qsub(
         )
 
         # CLI-specific output formatting
+        if result.get("matched_jobs") is not None:
+            tags_used = result.get("resolved_tags") or tags_list
+            filt = []
+            if apps_list:
+                filt.append(f"apps={','.join(apps_list)}")
+            if tags_used:
+                filt.append(f"tags={','.join(tags_used)}")
+            filt_str = f" [{'; '.join(filt)}]" if filt else ""
+            typer.secho(
+                f"\U0001f4ca Matched {result['matched_jobs']} runnable job(s) in DB{filt_str}.",
+                fg=typer.colors.CYAN,
+            )
         typer.secho(f"\U0001f4c1 Created run directory: {result['run_dir']}", fg=typer.colors.BLUE)
         typer.secho(f"\U0001f4dd Generated submit script: {result['submit_file']}", fg=typer.colors.GREEN)
+        console.print(render_submit_script_panel(result['submit_file']))
 
         if result["success"]:
             job_id = result.get("pbs_job_id", result.get("job_id", "UNKNOWN"))

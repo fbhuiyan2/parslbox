@@ -1002,8 +1002,9 @@ class TestMPICommandGeneration:
         assert "--overlap" in commands["PBX_SRUN_PREFIX"]
         assert "--exact" not in commands["PBX_SRUN_PREFIX"]
 
-    def test_srun_fullnode_no_overlap(self):
-        """Test that srun full-node jobs do NOT include --overlap."""
+    def test_srun_fullnode_has_overlap(self):
+        """Test that srun full-node jobs include --overlap (required when running
+        inside an outer SrunLauncher step; harmless otherwise)."""
         config = MockSystemConfig(mpi_cmd="srun")
         rm = ResourceManager(config, job_tracker=None)
 
@@ -1014,7 +1015,7 @@ class TestMPICommandGeneration:
         mpi_config = MPIConfig(backend=MPIBackend.SRUN)
         commands = build_mpi_command(mpi_config, config, assignment, spec)
 
-        assert "--overlap" not in commands["PBX_SRUN_PREFIX"]
+        assert "--overlap" in commands["PBX_SRUN_PREFIX"]
 
     def test_gpu_wrapper_disabled_via_config(self, resource_manager):
         """Test that gpu-wrapper can be disabled via MPIConfig.disable."""

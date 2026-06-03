@@ -25,7 +25,7 @@ ParslBox provides a CLI (`pbx`), a Python API, and an MCP server for AI-agent in
   - CPU-GPU affinity-aware placement
   - MPI backends: MPICH, OpenMPI, srun
 - **Scheduler support:** PBS (`pbx qsub`) and SLURM (`pbx sbatch`) with configurable `--sched-opts`
-- **Pre-configured HPC systems:** Polaris, Aurora (GPU & Tile modes), Sophia, Crux, LCRC Swing, LCRC Improv
+- **Pre-configured HPC systems:** Polaris, Aurora (GPU & Tile modes), Sophia, Crux, LCRC Swing, LCRC Improv, Pinnacles-CenvalArc, Perlmutter (GPU & CPU), plus `*-mpi`/`*-srun` launcher variants for large-scale (>10k worker) runs
 - **Dynamic job discovery:** `--dynamic` (default) polls for newly added jobs during a run session. New jobs matching the same `--apps`/`--tags` filters are picked up every 60s. Failed jobs reset to Ready by the user (via `pbx update --status Ready` from another terminal) are also re-discovered and re-run. Use `--static` for collect-once behavior
 - **Fault tolerance:** Node health tracking, quarantine, and auto-recovery
 - **Script-driven status reporting:** Python/Julia scripts report success/failure via `report_status()` utility
@@ -100,101 +100,18 @@ pbx sbatch -c polaris -N myrun -p gpu --nodes 2 -T 90 -A myproject -a lammps -t 
 # Long flags
 pbx qsub --config sophia --job-name myrun --queue gpu --select 2 --walltime 90 --project myproject --apps lammps --tags production
 pbx sbatch --config polaris --job-name myrun --partition gpu --nodes 2 --walltime 90 --account myproject --apps lammps --tags production
+
+# Glob tags: use `*` to match a substring. Quote to prevent shell expansion.
+pbx qsub -c sophia -N myrun -q gpu --select 2 -T 90 -A myproject -a lammps -t '*nomix,prod-run'
 ```
 
-Inspect, filter, update, remove:
-```bash
-# List jobs (rich table)
-pbx ls
-pbx ls --status Running --app lammps --tag production
-pbx ls --all
-pbx ls -n 15
-pbx ls -n -20
-
-# Show fields per job (supports ranges: 1-5 8 14-20)
-pbx info 1-5 8 --path --ngpus --envfile --parents
-
-# Calculate resource requirements for a target system
-pbx info 1-10 --req polaris
-
-# Get IDs via filters (use in command composition)
-pbx filter --status done --app vasp
-pbx filter -s failed -a lammps -t test -p /path/part -i input.lammps
-
-# Update fields and dependencies (supports ranges)
-pbx update 1-5 --status Restart --tag high-priority
-pbx update 10 --nnodes 2          # multi-node
-pbx update 11 --nocc 0.25         # CPU-only fractional occupancy
-pbx update 12 --add_deps "8 9" --rm_deps "7"
-pbx update 13 --envfile ./env.sh
-pbx update 14 --input new_input.dat
-pbx update 15 --args "--new-flag value"
-
-# Remove jobs (supports ranges)
-pbx rm 1-5 8 10-15
-pbx rm all
-pbx rm $(pbx filter --status done)
-```
+> **Tag globs:** `--tag` / `--tags` accept `*`-style globs (e.g. `*test`, `film*mix`, `*3c*`).
+> `qsub` and `sbatch` resolve globs against the DB at submission time and error out if any
+> token (glob or literal) matches no existing tag. Quote globs to stop the shell from expanding `*`.
 
 ## Supported Applications
 
-### Built-in Apps
-
-| App | MPI | Input Required | Default Input | Success Check |
-|-----|-----|----------------|---------------|---------------|
-| **lammps-kk** | Yes | Yes | `in.lammps` | Checks for "Total wall time:" in `log.lammps` |
-| **vasp** | Yes | No | — | Auto-selects `vasp_gpu` or `vasp_std` |
-| **orca** | Internal | Yes | `input.inp` | Checks for "ORCA TERMINATED NORMALLY" in `.out` files |
-| **python** | No | Yes | — | Reads `PBX_JOB_STATUS_REPORT` file via `report_status()` |
-| **julia** | No | Yes | — | Reads `PBX_JOB_STATUS_REPORT` file |
-
-ORCA manages its own MPI parallelism via a bundled OpenMPI — pbx does not wrap it with `mpirun`. Instead, pbx generates a `.nodes` file and passes `--host` to ORCA's internal launcher. Parallelism is controlled by `%pal nprocs N end` in the ORCA input file. Ensure ORCA's directory is first on `PATH` so its bundled `mpirun` takes priority over the system MPI.
-
-Non-MPI apps (Python, Julia) are automatically constrained to their assigned node/resources via a resource launcher. Scripts can access the MPI command via the `PBX_MPI_PREFIX` environment variable if needed.
-
-### Script-Driven Status Reporting
-
-Python and Julia scripts must report their outcome so PBX can determine job success:
-
-```python
-# In your Python script
-from parslbox.apps.utils import report_status
-
-# ... do work ...
-
-if success:
-    report_status("done")
-else:
-    report_status("failed")
-```
-
-```julia
-# In your Julia script
-open("PBX_JOB_STATUS_REPORT", "w") do f
-    write(f, "Done")   # or "Failed"
-end
-```
-
-If the status file is not found after execution, the job is marked as Failed.
-
-### Custom Apps
-
-Custom apps can be registered via `config.yaml` without modifying ParslBox source code:
-
-```yaml
-custom_apps:
-  my_app:
-    module: "/path/to/my_app.py"
-    class: "MyAppClass"
-
-my_app:
-  polaris:
-    executable_path: "/path/to/exe"
-    environment_setup: |
-      module load my_module
-```
-
-Implement by inheriting from `AppBase` with `get_command_template()`. See [`parslbox/apps/EXAMPLE_NEW_APP.py`](parslbox/apps/EXAMPLE_NEW_APP.py) for templates including MPI and non-MPI examples.
+Built-in: **lammps-kk**, **vasp**, **orca**, **python**, **julia**. Custom apps can be registered via `config.yaml`. Full details, per-app notes, status reporting protocol, and custom-app templates: [`docs/apps.md`](docs/apps.md).
 
 ## Supported HPC Systems
 
@@ -210,8 +127,12 @@ Implement by inheriting from `AppBase` with `get_command_template()`. See [`pars
 | **pinnacles-cenvalarc** | SLURM | 0 or 2 (auto-detected) | NVIDIA L40S / H200 NVL | 64 | srun |
 | **perlmutter-gpu** | SLURM | 4 | NVIDIA A100 | 128 | srun |
 | **perlmutter-cpu** | SLURM | 0 (CPU-only) | — | 128 | srun |
+| **aurora-tile-mpi** | PBS | 12 (6x2 tiles) | Intel Max 1550 | 208 | MPICH |
+| **perlmutter-gpu-srun** | SLURM | 4 | NVIDIA A100 | 128 | srun |
 
 Each system defines its own MPI defaults, scheduler templates, and resource detection methods. New systems can be added by creating a config class inheriting from `BaseSystemConfig`.
+
+**Launcher variants** (`*-mpi` / `*-srun`): hardware-identical to their base configs (`aurora-tile`, `perlmutter-gpu`) but use `MpiExecLauncher` / `SrunLauncher` instead of `SimpleLauncher`. This places one Parsl manager per compute node (workers distributed across nodes) rather than concentrating all workers on the head node. Use for runs above ~10k workers, where head-node RAM would otherwise be the scaling ceiling. The base configs remain the default and are recommended for smaller runs.
 
 ## Programmatic API (Python)
 
@@ -231,15 +152,7 @@ Main methods:
 
 Exceptions: `ParslBoxError`, `ValidationError`, `JobNotFoundError`
 
-```python
-from parslbox.api import ParslBox
-pbx = ParslBox()
-job_ids, failures, log = pbx.add_jobs(
-    paths=["/path/to/sim"], app="lammps", config="polaris", ngpus=2
-)
-jobs = pbx.list_jobs()
-pbx.update_jobs(job_ids, status="Restart")
-```
+Full per-method reference with examples: [`docs/api-details.md`](docs/api-details.md).
 
 ## MCP Server
 
@@ -257,78 +170,13 @@ Exposed tools: `add_jobs`, `submit_pbs_job`, `submit_slurm_job`, `cancel_pbs_job
 
 ### Claude Code Integration
 
-The project includes a `.mcp.json` for automatic MCP server discovery. When running Claude Code from the project directory, it will offer to connect to the ParslBox MCP server.
-
-For global access (any directory), add to `~/.claude/.mcp.json`:
-```json
-{
-  "mcpServers": {
-    "parslbox": {
-      "command": "/path/to/conda/envs/parslbox/bin/python",
-      "args": ["-m", "parslbox.mcp.mcp_server", "--stdio"],
-      "cwd": "/path/to/parslbox"
-    }
-  }
-}
-```
+The project ships a [`.mcp.json`](.mcp.json) for automatic discovery — Claude Code launched from the repo directory will offer to connect. For global access, copy that file to `~/.claude/.mcp.json` and edit the two `/path/to/...` placeholders.
 
 See [`examples/chemgraph_parslbox_example/`](examples/chemgraph_parslbox_example/) for an HTTP client example.
 
 ## Commands Overview
 
-Note: Users submit via `pbx qsub` or `pbx sbatch`. These generate a `submit.sh` and submit it to the scheduler; `submit.sh` invokes `pbx run` under the hood.
-
-- **pbx config** — Interactive wizard to create/reconfigure configuration
-  - Prompts for config path, system selection, app selection, and database creation
-  - Arguments: optional path (`.` for current dir, `~` for home, or custom path)
-
-- **pbx add** — Add jobs to the database
-  - Arguments: paths (one or more directories, or `all`)
-  - Required: `--app/-a`, `--config/-c`
-  - Options: `--tag/-t`, `--input/-i`, `--args`, `--ngpus/-g`, `--nnodes/-n`, `--nocc/-o`, `--ranks-per-node/-rpn`, `--mpiopts`, `--envfile/-e`
-  - Dependencies: `--parents/-P "1 2 3"`, `--parent-tag`
-  - Initial status: `--status/-s` (default Ready)
-  - `--args` appends arguments to input file (e.g., `python script.py --flag value`)
-  - For `--nnodes > 1`, pbx ignores `--ngpus` and `--nocc`
-  - Single-node GPU jobs auto-assign all GPUs on GPU systems when `-g` is not specified
-
-- **pbx qsub** — Submit PBS job
-  - Required: `--config/-c`, `--job-name/-N`, `--queue/-q`, `--select`, `--walltime/-T`, `--project/-A`
-  - `--walltime` defaults to minutes; supports `h` (hours) and `d` (days) suffixes (e.g., `90`, `4.25h`, `3.5d`)
-  - Optional: `--run-dir`, `--apps/-a`, `--tags/-t`, `--retries`, `--sched-opts`, `--dynamic/--static`
-  - `--sched-opts` adds extra `#PBS` directives (repeatable)
-  - `--dynamic` (default) enables live discovery of new jobs during the run; `--static` for collect-once behavior
-
-- **pbx sbatch** — Submit SLURM job
-  - Required: `--config/-c`, `--job-name/-N`, `--partition/-p`, `--nodes`, `--walltime/-T`, `--account/-A`
-  - Optional: `--run-dir`, `--apps/-a`, `--tags/-t`, `--retries`, `--sched-opts`, `--dynamic/--static`
-
-- **pbx ls** — List jobs with filtering and pagination
-  - Filters: `--status/-s`, `--app/-a`, `--tag/-t`
-  - `--all` shows all; `-n N` first N; `-n -N` last N; `-n 0` all
-  - Auto-paginates (first 10 + last 10) when > 25 jobs
-
-- **pbx info** — Show detailed job information. Supports ID ranges (e.g., `pbx info 1-5 8`)
-  - Field selectors: `--path/-p`, `--ngpus/-n`, `--app/-a`, `--status/-s`, `--tag/-t`, `--input/-i`, `--sched-job-id/-j`, `--timestamp/-ts`, `--envfile/-e`, `--parents/-P`
-  - `--req/-r SYSTEM` — Calculate resource requirements for target system (simultaneous vs optimal packing)
-
-- **pbx filter** — Output space-separated job IDs for command composition
-  - Filters: `--status/-s`, `--app/-a`, `--tag/-t`, `--path/-p`, `--in-file/-i`
-
-- **pbx update** — Update job fields and dependencies. Supports ID ranges (e.g., `pbx update 1-5 8`)
-  - Fields: `--status`, `--tag`, `--input/-i`, `--args`, `--ngpus/-g`, `--envfile/-e`, `--nnodes/-n`, `--nocc/-o`, `--ranks-per-node/-rpn`
-  - Dependencies: `--add_deps/--padd`, `--rm_deps/--parm`
-  - Validates dependencies and prevents circular references
-
-- **pbx rm** — Remove jobs by IDs or ranges (e.g., `pbx rm 1-5 8`), or `pbx rm all` (with confirmation)
-
-- **pbx run** (internal) — Engine used by qsub/sbatch; not for direct use
-  - `--dynamic/--static` controls live job discovery (default: `--dynamic`)
-  - Triggers graceful shutdown automatically ~30s before walltime so in-flight jobs are marked `Killed` cleanly in the database (no user knob required)
-
-- **pbx qdel `<jobid>`** / **pbx scancel `<jobid>`** — Cancel a running ParslBox batch job
-  - `--grace/-g` seconds between SIGTERM and hard kill (default: `30`)
-  - **Always prefer these over raw `qdel`/`scancel`.** Raw scheduler commands give the orchestrator only the site's default kill grace (often ~2s), which can leave jobs stuck in `Running` state in the database. `pbx qdel`/`pbx scancel` send SIGTERM first, wait for the orchestrator to mark in-flight jobs as `Killed`, then terminate.
+Full per-command reference with examples lives in [`docs/commands.md`](docs/commands.md).
 
 ## Configuration
 
@@ -364,7 +212,7 @@ Using separate `PBX_DB_PATH` and/or `PBX_CONFIG_PATH` allows multiple isolated d
 ParslBox generates MPI launch commands with CPU binding flags appropriate for each job type (subnode, fullnode, multinode) and scheduler:
 
 - **PBS systems (mpiexec/MPICH, mpirun/OpenMPI):** Configurable via `cpu_bind_method` in the `mpi:` config section. Options: `none`, `rankfile`, `list`, `depth`. The `rankfile` and `list` methods provide GPU-affinity-aware core assignments.
-- **SLURM systems (srun):** Native SLURM resource binding. Full/multi-node GPU: `--gpus-per-node` + `--gpu-bind=map_gpu|mask_gpu` with `--cpu-bind=cores|threads`. Sub-node GPU: `--gpu-bind=map_gpu:{pbx_gpu_ids}` + `--cpu-bind=mask_cpu:{hex}` + `--overlap` for concurrent step isolation. All jobs include `-N {nodes}` for explicit node control.
+- **SLURM systems (srun):** Native SLURM resource binding. Full/multi-node GPU: `--gpus-per-node` + `--gpu-bind=map_gpu|mask_gpu` with `--cpu-bind=cores|threads`. Sub-node GPU: `--gpu-bind=map_gpu:{pbx_gpu_ids}` + `--cpu-bind=mask_cpu:{hex}`. All srun jobs include `--overlap` (required when running under `SrunLauncher`-based configs like `perlmutter-gpu-srun`; also enables sub-node packing) and `-N {nodes}` for explicit node control.
 
 Details: [`parslbox/resource_manager/README.md`](parslbox/resource_manager/README.md)
 

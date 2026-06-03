@@ -337,6 +337,9 @@ class ParslBox:
         tag: Optional[str] = None,
         path: Optional[str] = None,
         in_file: Optional[str] = None,
+        exclude_status: Optional[str] = None,
+        exclude_app: Optional[str] = None,
+        exclude_tag: Optional[str] = None,
     ) -> List[int]:
         """
         Filter jobs and return their IDs.
@@ -344,15 +347,25 @@ class ParslBox:
         Args:
             status: Filter by status
             app: Filter by application
-            tag: Filter by tag
+            tag: Filter by tag (supports `*` glob)
             path: Filter by path (partial match)
             in_file: Filter by input file (partial match)
+            exclude_status: Drop jobs with this status
+            exclude_app: Drop jobs with this app
+            exclude_tag: Drop jobs with this tag (supports `*` glob)
 
         Returns:
             List of job IDs matching the filters
         """
+        from parslbox.commands.helpers.filter_helpers import apply_excludes
         jobs = self.list_jobs(
             status=status, app=app, tag=tag, path=path, in_file=in_file
+        )
+        jobs = apply_excludes(
+            jobs,
+            exclude_status=exclude_status,
+            exclude_app=exclude_app,
+            exclude_tag=exclude_tag,
         )
         return [job["job_id"] for job in jobs]
     
