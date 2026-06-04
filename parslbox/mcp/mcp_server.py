@@ -124,6 +124,7 @@ def submit_pbs_job(params: QSubSchema) -> str:
         run_dir = status.get("run_dir", "UNKNOWN")
         matched = status.get("matched_jobs")
         resolved = status.get("resolved_tags")
+        restart_template = status.get("restart_template_file")
         lines = [
             f"Job was submitted successfully.",
             f"PBS job ID: {job_id}",
@@ -133,6 +134,8 @@ def submit_pbs_job(params: QSubSchema) -> str:
             lines.append(f"Matched {matched} runnable job(s) in DB.")
         if resolved:
             lines.append(f"Resolved tags: {', '.join(resolved)}")
+        if restart_template:
+            lines.append(f"Restart template: {restart_template} (chain auto-resubmits at walltime)")
         return "\n".join(lines)
     else:
         error_msg = status.get("error", "Unknown error")
@@ -169,6 +172,7 @@ def submit_slurm_job(params: SBatchSchema) -> str:
         run_dir = status.get("run_dir", "UNKNOWN")
         matched = status.get("matched_jobs")
         resolved = status.get("resolved_tags")
+        restart_template = status.get("restart_template_file")
         lines = [
             f"SLURM job was submitted successfully.",
             f"SLURM job ID: {job_id}",
@@ -178,6 +182,8 @@ def submit_slurm_job(params: SBatchSchema) -> str:
             lines.append(f"Matched {matched} runnable job(s) in DB.")
         if resolved:
             lines.append(f"Resolved tags: {', '.join(resolved)}")
+        if restart_template:
+            lines.append(f"Restart template: {restart_template} (chain auto-resubmits at walltime)")
         return "\n".join(lines)
     else:
         error_msg = status.get("error", "Unknown error")
