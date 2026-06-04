@@ -223,7 +223,8 @@ Generate a `submit.sh` and submit it to PBS / SLURM. Both commands share most fl
 
 Notes:
 - `--walltime` defaults to **minutes**; supports `h` and `d` suffixes (`90`, `4.25h`, `3.5d`).
-- `--sched-opts` adds extra `#PBS` / `#SBATCH` directives. Repeatable; directives matching a template key override it.
+- `--retries N` is passed through to Parsl: each individual ParslBox job that fails (non-zero exit, app exception) is retried up to `N` times before being marked `Failed`. Default `0` (no retry).
+- `--sched-opts` adds extra scheduler directives. **Each value is a complete directive line including the `#PBS` / `#SBATCH` prefix** (e.g., `'#PBS -l filesystems=home:eagle'`, `'#SBATCH --qos=regular'`). Repeatable; directives matching a template key override it.
 - `--dynamic` (default) polls the DB for new Ready/Restart jobs matching the same `--apps`/`--tags` filters every 60s. `--static` disables this.
 - **Tag globs**: each `--tags` token may be a literal or a `*` glob (`*prod`, `run*`, `*3c*`). Globs are resolved against the DB before submission. **If any token matches no existing tag, submission aborts.** Quote globs to stop the shell from expanding `*`.
 - **Job-count guard**: before submitting, qsub/sbatch query the DB for matching Ready/Restart jobs. **If zero match, submission aborts** to avoid wasting the allocation.
@@ -243,10 +244,13 @@ pbx sbatch --config polaris --job-name myrun --partition gpu --nodes 2 \
 # Tag glob (quote to dodge shell expansion)
 pbx qsub -c sophia -N myrun -q gpu --select 2 -T 90 -A myproject -a lammps -t '*nomix,prod-run'
 
-# Extra scheduler directives
+# Extra scheduler directives (full directive lines, repeatable)
 pbx qsub -c polaris -N myrun -q prod --select 4 -T 4h -A myproject \
   --sched-opts '#PBS -l filesystems=home:eagle' \
   --sched-opts '#PBS -l place=scatter'
+pbx sbatch -c perlmutter-gpu -N myrun -p regular --nodes 2 -T 2h -A m1234 \
+  --sched-opts '#SBATCH --qos=regular' \
+  --sched-opts '#SBATCH --constraint=gpu'
 
 # Walltime suffixes
 pbx qsub ... -T 90     # 90 minutes
