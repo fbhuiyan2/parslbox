@@ -244,6 +244,30 @@ def run(
             ),
         )
     ] = ...,
+    restart_mode: Annotated[
+        bool,
+        typer.Option(
+            "--restart-mode",
+            help=(
+                "Internal: enable the self-restart chain. Set automatically by "
+                "`pbx qsub --restart` / `pbx sbatch --restart`. At walltime, "
+                "in-flight jobs are marked Restart and a new allocation is "
+                "auto-submitted (if --max-restarts > 0). On startup, jobs in "
+                "Restart status get app.restart() called before the run loop."
+            ),
+        )
+    ] = False,
+    max_restarts: Annotated[
+        int,
+        typer.Option(
+            "--max-restarts",
+            help=(
+                "Internal: remaining auto-resubmissions in the chain. "
+                "Decremented at every link by the orchestrator. When 0, the "
+                "chain ends and walltime-killed jobs go Failed instead of Restart."
+            ),
+        )
+    ] = 0,
 ):
     """
     Run Parsl workflows by discovering and executing application plugins.
@@ -295,11 +319,49 @@ def run(
         f"~{walltime_seconds - SHUTDOWN_GRACE_SECONDS}s ({SHUTDOWN_GRACE_SECONDS}s grace)"
     )
 
-    # Job Fetching and Filtering 
+    # Job Fetching and Filtering
     # The job count will be passed to the config for dynamic worker allocation
     app_filter = set(apps.split(',')) if apps else None
     tag_filter = set(tags.split(',')) if tags else None
-    
+
+    # --- Restart-mode startup hook ---
+    # When the orchestrator is launched under --restart-mode, every job currently
+    # in Restart status came from the previous link's walltime kill. Hand each
+    # one to its app's restart() per the three-scene contract before the run
+    # loop touches them. This is a no-op on the very first link (no Restart
+    # jobs exist yet).
+    if restart_mode:
+        from parslbox.commands.helpers.restart_helpers import apply_restart_hook
+        from parslbox.apps.app_registry import get_app_instance
+
+        restart_jobs = database.get_jobs(db_path, status='Restart')
+        # Same filter the rest of the orchestrator uses.
+        restart_jobs = [
+            j for j in restart_jobs
+            if (not app_filter or j['app'] in app_filter)
+            and (not tag_filter or j['tag'] in tag_filter)
+        ]
+        if restart_jobs:
+            # Load app instances just for those apps (fast; no MPI config needed
+            # for the restart() call itself).
+            restart_app_instances = {}
+            for app_name in set(j['app'] for j in restart_jobs):
+                try:
+                    restart_app_instances[app_name] = get_app_instance(app_name)
+                except Exception as e:
+                    logger.warning(
+                        f"Restart hook: could not load app '{app_name}' ({e}); "
+                        f"jobs of this app will be marked Failed."
+                    )
+            apply_restart_hook(
+                restart_jobs=restart_jobs,
+                app_instances=restart_app_instances,
+                db_path=db_path,
+                logger=logger,
+            )
+        else:
+            logger.info("Restart-mode: no Restart-status jobs to process.")
+
     all_runnable_jobs = database.get_jobs(db_path, status='Ready')
     all_runnable_jobs += database.get_jobs(db_path, status='Restart')
 
@@ -348,7 +410,25 @@ def run(
     # Initialize Status Buffer for batching database updates
     status_buffer = StatusBuffer(db_path)
     logger.info("Initialized StatusBuffer for batching database updates")
-    
+
+    # Build restart-mode context (consumed by perform_shutdown at walltime).
+    # None when --restart-mode is off → existing Killed-and-exit behavior.
+    restart_ctx = None
+    if restart_mode:
+        restart_ctx = {
+            "max_restarts": max_restarts,
+            "run_dir": run_dir,
+            "system_config": system_config,
+            "db_path": db_path,
+            "app_filter": app_filter,
+            "tag_filter": tag_filter,
+        }
+        logger.info(
+            f"Restart-mode active: max_restarts={max_restarts}. "
+            f"At walltime, in-flight jobs will be marked "
+            f"{'Restart and chain will resubmit' if max_restarts > 0 else 'Failed (chain end)'}."
+        )
+
     # Register signal handlers for graceful shutdown on walltime exceeded
     shutdown_handler = create_shutdown_handler(status_buffer, logger, parsl_loaded_flag, job_tracker)
     signal.signal(signal.SIGTERM, shutdown_handler)
@@ -638,6 +718,7 @@ def run(
                     logger=logger,
                     reason="walltime",
                     cleanup_parsl=True,
+                    restart_ctx=restart_ctx,
                 )
                 sys.exit(0)
 
