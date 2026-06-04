@@ -106,6 +106,8 @@ def add_jobs(params: AddJobSchema) -> str:
         "Takes configuration (system config name, job name, queue, select, walltime, project) "
         "plus optional run directory, apps, tags, retries, and sched_opts for extra PBS directives. "
         "Walltime defaults to minutes; supports h/d suffixes (e.g., 90, 4.25h, 3.5d). "
+        "Set restart=True with max_restarts=N to enable a self-restart chain: at walltime, "
+        "in-flight jobs are marked Restart and a new allocation is auto-submitted, up to N times. "
         "Returns a short message describing whether submission succeeded."
     ),
 )
@@ -149,6 +151,8 @@ def submit_pbs_job(params: QSubSchema) -> str:
         "Takes configuration (system config name, job name, partition, nodes, walltime, project) "
         "plus optional run directory, apps, tags, retries, and sched_opts for extra SLURM directives. "
         "Walltime defaults to minutes; supports h/d suffixes (e.g., 90, 4.25h, 3.5d). "
+        "Set restart=True with max_restarts=N to enable a self-restart chain: at walltime, "
+        "in-flight jobs are marked Restart and a new allocation is auto-submitted, up to N times. "
         "Returns a short message describing whether submission succeeded."
     ),
 )

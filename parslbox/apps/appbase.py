@@ -87,10 +87,10 @@ class AppBase(ABC):
     def preprocess(self, job_id: int, job_path: Path, db_path: Path, app_config: dict, config_name: str):
         """
         Preprocessing before job execution.
-        
+
         This method is called before the main parsl_app execution.
         Default implementation does nothing.
-        
+
         Args:
             job_id (int): The job ID
             job_path (Path): Path to the job directory
@@ -99,7 +99,38 @@ class AppBase(ABC):
             config_name (str): Name of the system configuration (e.g., 'polaris')
         """
         pass
-    
+
+    def restart(self, job_dict: dict) -> dict | None:
+        """
+        Restart hook called by `pbx run --restart-mode` for jobs in `Restart` status
+        before they re-enter the run loop.
+
+        Three scenes, encoded by whether the subclass overrides this method:
+
+        - Scene A (real restart): override to return a dict of changed job fields
+          (e.g., {"in_file": "in.restart"}). Orchestrator patches those fields in
+          the DB, flips status to `Ready`, and re-runs with `preprocess` skipped.
+        - Scene B (re-run as-is): override to return None or {}. Orchestrator flips
+          status to `Ready` without patches; re-runs unchanged, `preprocess` skipped.
+        - Scene C (no restart capability): do NOT override. Base class raises
+          NotImplementedError; orchestrator marks the job `Failed` with reason
+          "app does not support restart".
+
+        Args:
+            job_dict (dict): Full job row from the DB.
+
+        Returns:
+            dict | None: Partial mapping of DB column names to new values, or
+            None/{} to re-run as-is.
+
+        Raises:
+            NotImplementedError: Base default; signals Scene C.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support restart. "
+            f"Override restart() to enable --restart for jobs of this app."
+        )
+
     def parsl_app(self, job_id: int, job_path: Path, db_path: Path, assignment, mpi_commands: dict,
                   app_config: dict, config_name: str, in_file: str, mpi_opts: str, env_file: str, 
                   stdout: str, stderr: str):

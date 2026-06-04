@@ -212,6 +212,25 @@ class QSubSchema(BaseModel):
         ),
     )
 
+    restart: bool = Field(
+        default=False,
+        description=(
+            "Enable self-restart chain. When True, at walltime the orchestrator "
+            "marks in-flight jobs as Restart and auto-resubmits a new allocation, "
+            "continuing until all jobs reach Done/Failed or max_restarts is exhausted. "
+            "Requires max_restarts."
+        ),
+    )
+
+    max_restarts: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Required when restart=True; number of automatic resubmissions to perform "
+            "after the initial run (>= 0)."
+        ),
+    )
+
 
 class SBatchSchema(BaseModel):
     """Schema for generating and submitting a SLURM job via ParslBox."""
@@ -272,6 +291,25 @@ class SBatchSchema(BaseModel):
         description=(
             "List of extra SLURM scheduler directives (e.g., ['#SBATCH --mem=64G', '#SBATCH -C gpu&hbm80g']). "
             "Directives matching a template key override it; new directives are appended."
+        ),
+    )
+
+    restart: bool = Field(
+        default=False,
+        description=(
+            "Enable self-restart chain. When True, at walltime the orchestrator "
+            "marks in-flight jobs as Restart and auto-resubmits a new allocation, "
+            "continuing until all jobs reach Done/Failed or max_restarts is exhausted. "
+            "Requires max_restarts."
+        ),
+    )
+
+    max_restarts: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Required when restart=True; number of automatic resubmissions to perform "
+            "after the initial run (>= 0)."
         ),
     )
 

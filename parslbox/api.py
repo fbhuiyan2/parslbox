@@ -451,6 +451,8 @@ class ParslBox:
         retries: int = 0,
         loglevel: str = "info",
         sched_opts: Optional[List[str]] = None,
+        restart: bool = False,
+        max_restarts: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Generate and submit a PBS job script.
@@ -468,12 +470,19 @@ class ParslBox:
             retries: Number of retries for failed tasks
             loglevel: Logging level
             sched_opts: List of extra PBS directive strings
+            restart: Enable self-restart chain. At walltime the orchestrator marks
+                in-flight jobs as Restart and auto-resubmits a new allocation.
+                Requires max_restarts.
+            max_restarts: Required when restart=True; number of automatic
+                resubmissions to perform after the initial run.
 
         Returns:
-            Dictionary with submission details including job_id and run_dir
+            Dictionary with submission details including job_id and run_dir.
+            When restart=True, also includes 'restart_template_file'.
 
         Raises:
-            ValidationError: If configuration is invalid
+            ValidationError: If configuration is invalid, or if restart/max_restarts
+                are inconsistent (one without the other, or max_restarts < 0).
             FileNotFoundError: If qsub command is not found
         """
         try:
@@ -493,6 +502,8 @@ class ParslBox:
                 loglevel=loglevel,
                 config_path=self.config_path,
                 sched_opts=sched_opts,
+                restart=restart,
+                max_restarts=max_restarts,
             )
             return result
         except Exception as e:
@@ -516,6 +527,8 @@ class ParslBox:
         retries: int = 0,
         loglevel: str = "info",
         sched_opts: Optional[List[str]] = None,
+        restart: bool = False,
+        max_restarts: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Generate and submit a SLURM job script.
@@ -533,12 +546,19 @@ class ParslBox:
             retries: Number of retries for failed tasks
             loglevel: Logging level
             sched_opts: List of extra SLURM directive strings
+            restart: Enable self-restart chain. At walltime the orchestrator marks
+                in-flight jobs as Restart and auto-resubmits a new allocation.
+                Requires max_restarts.
+            max_restarts: Required when restart=True; number of automatic
+                resubmissions to perform after the initial run.
 
         Returns:
-            Dictionary with submission details including job_id and run_dir
+            Dictionary with submission details including job_id and run_dir.
+            When restart=True, also includes 'restart_template_file'.
 
         Raises:
-            ValidationError: If configuration is invalid
+            ValidationError: If configuration is invalid, or if restart/max_restarts
+                are inconsistent (one without the other, or max_restarts < 0).
             FileNotFoundError: If sbatch command is not found
         """
         try:
@@ -557,6 +577,8 @@ class ParslBox:
                 loglevel=loglevel,
                 config_path=self.config_path,
                 sched_opts=sched_opts,
+                restart=restart,
+                max_restarts=max_restarts,
             )
             return result
         except Exception as e:

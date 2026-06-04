@@ -52,7 +52,7 @@ def count_matching_runnable_jobs(
     return count
 
 
-def render_submit_script_panel(submit_file_path):
+def render_submit_script_panel(submit_file_path, title: str = "Submit Script"):
     """Build a Rich Panel containing the submit script with the `pbx run` line
     highlighted in red. Returns the Panel ready to be `console.print`-ed.
     """
@@ -69,10 +69,39 @@ def render_submit_script_panel(submit_file_path):
         text.append("\n")
     return Panel(
         text,
-        title=f"[bold cyan]Submit Script[/bold cyan] [dim]({submit_file_path})[/dim]",
+        title=f"[bold cyan]{title}[/bold cyan] [dim]({submit_file_path})[/dim]",
         border_style="cyan",
         expand=True,
     )
+
+
+RESTART_TEMPLATE_HEADER = """#######################################################################
+# PBX RESTART TEMPLATE
+#
+# Generated once by `pbx qsub --restart`. NEVER overwritten by pbx.
+#
+# RESOURCE PLACEHOLDERS - safe to edit:
+#   <<PBX_AUTO_SELECT>>   <<PBX_AUTO_NODES>>   <<PBX_AUTO_NGPUS>>
+# Replace with concrete numbers to fix size for all subsequent
+# restarts; otherwise pbx auto-computes from remaining work, capped
+# at the original allocation size.
+#
+# DO NOT EDIT the `pbx run ...` line below. The --max-restarts value
+# is pbx-managed; any edit will be overwritten each cycle. If any
+# required arg is missing from that line, pbx will error out and
+# stop the chain.
+#
+# To STOP the chain: `pbx qdel <jobid>` or `pbx scancel <jobid>`.
+# Do not try to stop it by editing or deleting this file.
+#######################################################################"""
+
+
+def _prepend_restart_header(script: str) -> str:
+    """Insert the restart-template header comment after the shebang."""
+    lines = script.split('\n', 1)
+    if lines and lines[0].startswith('#!'):
+        return f"{lines[0]}\n{RESTART_TEMPLATE_HEADER}\n{lines[1] if len(lines) > 1 else ''}"
+    return f"{RESTART_TEMPLATE_HEADER}\n{script}"
 
 
 def submit_job(
@@ -92,6 +121,8 @@ def submit_job(
     scheduler_type: str = "pbs",
     submit_command: str = "qsub",
     dynamic: bool = True,
+    restart: bool = False,
+    max_restarts: Optional[int] = None,
     validate_runnable: bool = True,
 ) -> Dict[str, Any]:
     """
@@ -113,14 +144,36 @@ def submit_job(
         sched_opts: List of extra scheduler directive strings from CLI
         scheduler_type: "pbs" or "slurm"
         submit_command: "qsub" or "sbatch"
+        restart: When True, generate a restart_template.sh alongside submit.sh and
+            embed --restart-mode --max-restarts in both scripts' pbx run line so the
+            chain self-perpetuates at every walltime boundary. Requires max_restarts.
+        max_restarts: Required when restart=True; integer >= 0. Number of automatic
+            resubmissions to perform after the initial run.
 
     Returns:
-        Dictionary with submission details including job_id and run_dir
+        Dictionary with submission details including job_id and run_dir.
+        When restart=True, also includes 'restart_template_file' pointing to the
+        generated template path.
 
     Raises:
-        ValidationError: If configuration is invalid
+        ValidationError: If configuration is invalid, or if --restart is set without
+            --max-restarts (or vice versa), or if max_restarts is negative.
         FileNotFoundError: If submit command is not found
     """
+    # --restart and --max-restarts must be used together.
+    if restart and max_restarts is None:
+        raise ValidationError(
+            "--restart requires --max-restarts N (number of automatic resubmissions)."
+        )
+    if max_restarts is not None and not restart:
+        raise ValidationError(
+            "--max-restarts only applies when --restart is set."
+        )
+    if max_restarts is not None and max_restarts < 0:
+        raise ValidationError(
+            f"--max-restarts must be >= 0, got {max_restarts}."
+        )
+
     # Tag glob expansion + runnable-jobs guard (skipped when caller has already
     # validated, e.g. unit tests that bypass the DB).
     matched_count = None
@@ -193,6 +246,9 @@ def submit_job(
         run_options.append(f"--loglevel {loglevel}")
     if not dynamic:  # Only add when disabling (default is dynamic)
         run_options.append("--static")
+    if restart:
+        run_options.append("--restart-mode")
+        run_options.append(f"--max-restarts {max_restarts}")
 
     # Always pass walltime to `pbx run` so it can trigger graceful shutdown
     # 30s before the batch job's walltime expires.
@@ -259,6 +315,27 @@ def submit_job(
     with open(submit_file, 'w') as f:
         f.write(submit_script)
 
+    # When --restart is set, also generate restart_template.sh alongside submit.sh.
+    # Same content except the resource line has a placeholder for auto-fill at
+    # restart time, and the file starts with an educational header comment.
+    restart_template_file: Optional[Path] = None
+    if restart:
+        restart_template_vars = dict(template_vars)
+        restart_template_vars['select'] = (
+            "<<PBX_AUTO_SELECT>>" if scheduler_type == "pbs" else "<<PBX_AUTO_NODES>>"
+        )
+        restart_rendered = sched_template.format(**restart_template_vars)
+        if not project:
+            restart_rendered = '\n'.join(
+                line for line in restart_rendered.split('\n')
+                if not re.match(r'\s*#(PBS\s+-A|SBATCH\s+--account=)\s*$', line)
+            )
+        restart_script = merge_sched_opts(restart_rendered, combined_config_opts, sched_opts)
+        restart_script = _prepend_restart_header(restart_script)
+        restart_template_file = run_dir / "restart_template.sh"
+        with open(restart_template_file, 'w') as f:
+            f.write(restart_script)
+
     # Submit the job
     try:
         result = subprocess.run(
@@ -277,6 +354,7 @@ def submit_job(
             "job_id": job_id,
             "run_dir": str(run_dir),
             "submit_file": str(submit_file),
+            "restart_template_file": str(restart_template_file) if restart_template_file else None,
             "matched_jobs": matched_count,
             "resolved_tags": list(tags) if tags else None,
         }
@@ -293,6 +371,7 @@ def submit_job(
             "error": e.stderr,
             "run_dir": str(run_dir),
             "submit_file": str(submit_file),
+            "restart_template_file": str(restart_template_file) if restart_template_file else None,
             "matched_jobs": matched_count,
             "resolved_tags": list(tags) if tags else None,
         }
