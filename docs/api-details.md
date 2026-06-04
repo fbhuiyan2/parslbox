@@ -191,7 +191,7 @@ pbx.remove_jobs(done_ids)
 
 ## `qsub` — submit a PBS batch
 
-Generates the batch script, validates `tags` against the DB (literal **and** glob entries must each match at least one Ready job), aborts cleanly if nothing is runnable, and submits. Returns a dict with `success`, `job_id`, `run_dir`, and — when validation ran — `matched_jobs` + `resolved_tags`.
+Generates the batch script, validates `tags` against the DB (literal **and** glob entries must each match at least one Ready job), aborts cleanly if nothing is runnable, and submits. Returns a dict with `success`, `job_id`, `run_dir`, and — when validation ran — `matched_jobs` + `resolved_tags`. When `restart=True`, the result dict also includes `restart_template_file` (path to the generated `restart_template.sh`).
 
 ```python
 result = pbx.qsub(
@@ -207,6 +207,18 @@ result = pbx.qsub(
 )
 print(result["job_id"], result["run_dir"])
 print("matched", result.get("matched_jobs"), "tags →", result.get("resolved_tags"))
+```
+
+Self-restart chain — `restart=True` requires `max_restarts` (non-negative int). pbx generates `restart_template.sh` alongside `submit.sh`; at every walltime expiry the orchestrator marks in-flight jobs `Restart` and auto-submits the next link with `max_restarts` decremented by 1. When the counter reaches 0, in-flight jobs go to `Failed` and the chain ends. Full lifecycle: [`pbx-run-details.md`](pbx-run-details.md).
+
+```python
+result = pbx.qsub(
+    config="sophia", job_name="sweep", queue="gpu",
+    select="4", walltime="4h", project="MYPROJ",
+    apps=["lammps-kk"], tags=["sweep"],
+    restart=True, max_restarts=3,
+)
+print("restart template:", result.get("restart_template_file"))
 ```
 
 Pass extra PBS directives verbatim:
@@ -234,7 +246,7 @@ except ValidationError as e:
 
 ## `sbatch` — submit a SLURM batch
 
-Same shape as `qsub`. `select` is the node count; `queue` is the partition.
+Same shape as `qsub`, including `restart` + `max_restarts`. `select` is the node count; `queue` is the partition.
 
 ```python
 result = pbx.sbatch(
@@ -247,6 +259,7 @@ result = pbx.sbatch(
     apps=["lammps-kk", "vasp"],
     tags=["prod-*"],
     sched_opts=["--qos=regular", "--constraint=gpu"],
+    restart=True, max_restarts=2,  # optional self-restart chain
 )
 print(result["job_id"], result["run_dir"])
 ```

@@ -27,6 +27,7 @@ ParslBox provides a CLI (`pbx`), a Python API, and an MCP server for AI-agent in
 - **Scheduler support:** PBS (`pbx qsub`) and SLURM (`pbx sbatch`) with configurable `--sched-opts`
 - **Pre-configured HPC systems:** Polaris, Aurora (GPU & Tile modes), Sophia, Crux, LCRC Swing, LCRC Improv, Pinnacles-CenvalArc, Perlmutter (GPU & CPU), plus `*-mpi`/`*-srun` launcher variants for large-scale (>10k worker) runs
 - **Dynamic job discovery:** `--dynamic` (default) polls for newly added jobs during a run session. New jobs matching the same `--apps`/`--tags` filters are picked up every 60s. Failed jobs reset to Ready by the user (via `pbx update --status Ready` from another terminal) are also re-discovered and re-run. Use `--static` for collect-once behavior
+- **Self-restart chain:** `pbx qsub --restart --max-restarts N` produces a self-perpetuating submission chain that auto-resubmits at every walltime boundary. Jobs preempted mid-run are marked `Restart`; each next link calls each app's `restart()` hook at startup so apps can decide how to resume. See [`docs/pbx-run-details.md`](docs/pbx-run-details.md)
 - **Fault tolerance:** Node health tracking, quarantine, and auto-recovery
 - **Script-driven status reporting:** Python/Julia scripts report success/failure via `report_status()` utility
 - **Python API and MCP server** for programmatic and AI-agent integration
@@ -103,6 +104,10 @@ pbx sbatch --config polaris --job-name myrun --partition gpu --nodes 2 --walltim
 
 # Glob tags: use `*` to match a substring. Quote to prevent shell expansion.
 pbx qsub -c sophia -N myrun -q gpu --select 2 -T 90 -A myproject -a lammps -t '*nomix,prod-run'
+
+# Self-restart chain: auto-resubmit at every walltime boundary, up to 3 times
+pbx qsub -c sophia -N sweep -q gpu --select 4 -T 4h -A myproject -a lammps -t sweep \
+  --restart --max-restarts 3
 ```
 
 > **Tag globs:** `--tag` / `--tags` accept `*`-style globs (e.g. `*test`, `film*mix`, `*3c*`).
@@ -220,9 +225,13 @@ Details: [`parslbox/resource_manager/README.md`](parslbox/resource_manager/READM
 
 Statuses:
 - Ready → Submitted → Running → Done | Failed | Killed
-- Restart — for recoverable errors / re-runs
 - Warning — if an app returns an invalid/unknown status
-- Killed — when walltime is exceeded, or when the user runs `pbx qdel`/`pbx scancel` (SIGTERM handler marks active jobs before the hard kill)
+- Killed — when walltime is exceeded **in a non-restart-mode run**, or whenever the user runs `pbx qdel`/`pbx scancel` (SIGTERM handler marks active jobs before the hard kill)
+- Restart — has **two distinct meanings** depending on context:
+  - **User-set** (`pbx update --status Restart`) — "re-run this job"; treated identically to `Ready` by a normal `pbx run`
+  - **Orchestrator-set** in a `--restart` chain — "this job was preempted mid-execution by walltime"; the next chain link's startup calls the app's `restart()` hook to decide how to resume each one (patch fields and re-run / re-run as-is / mark Failed)
+
+Full state-transition table and end-to-end chain walkthrough: [`docs/pbx-run-details.md`](docs/pbx-run-details.md).
 
 ## Examples
 

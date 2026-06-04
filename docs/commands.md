@@ -219,16 +219,17 @@ Generate a `submit.sh` and submit it to PBS / SLURM. Both commands share most fl
 **Required**:
 - `--config/-c`, `--job-name/-N`, `--queue/-q` (PBS) or `--partition/-p` (SLURM), `--select` (PBS) or `--nodes` (SLURM), `--walltime/-T`, `--project/-A` or `--account/-A`
 
-**Optional**: `--run-dir`, `--apps/-a`, `--tags/-t`, `--retries`, `--sched-opts`, `--dynamic`/`--static`, `--loglevel`
+**Optional**: `--run-dir`, `--apps/-a`, `--tags/-t`, `--retries`, `--sched-opts`, `--dynamic`/`--static`, `--restart` + `--max-restarts`, `--loglevel`
 
 Notes:
 - `--walltime` defaults to **minutes**; supports `h` and `d` suffixes (`90`, `4.25h`, `3.5d`).
 - `--retries N` is passed through to Parsl: each individual ParslBox job that fails (non-zero exit, app exception) is retried up to `N` times before being marked `Failed`. Default `0` (no retry).
 - `--sched-opts` adds extra scheduler directives. **Each value is a complete directive line including the `#PBS` / `#SBATCH` prefix** (e.g., `'#PBS -l filesystems=home:eagle'`, `'#SBATCH --qos=regular'`). Repeatable; directives matching a template key override it.
 - `--dynamic` (default) polls the DB for new Ready/Restart jobs matching the same `--apps`/`--tags` filters every 60s. `--static` disables this.
+- `--restart` + `--max-restarts N` (required together) enables the self-restart chain. A `restart_template.sh` is generated alongside `submit.sh`. At each walltime expiry, in-flight jobs are marked `Restart` (instead of `Killed`) and the next link is auto-submitted with `--max-restarts (N-1)`. When `--max-restarts == 0`, in-flight jobs go to `Failed` and the chain ends. Full lifecycle + per-link behavior: [`pbx-run-details.md`](pbx-run-details.md).
 - **Tag globs**: each `--tags` token may be a literal or a `*` glob (`*prod`, `run*`, `*3c*`). Globs are resolved against the DB before submission. **If any token matches no existing tag, submission aborts.** Quote globs to stop the shell from expanding `*`.
 - **Job-count guard**: before submitting, qsub/sbatch query the DB for matching Ready/Restart jobs. **If zero match, submission aborts** to avoid wasting the allocation.
-- After generation, the submit script is printed in a cyan box with the `pbx run` line highlighted in red.
+- After generation, the submit script is printed in a cyan box with the `pbx run` line highlighted in red. When `--restart` is set, `restart_template.sh` is also printed (yellow note explains the placeholder behavior).
 
 ```bash
 # Short flags
@@ -256,6 +257,10 @@ pbx sbatch -c perlmutter-gpu -N myrun -p regular --nodes 2 -T 2h -A m1234 \
 pbx qsub ... -T 90     # 90 minutes
 pbx qsub ... -T 4.25h  # 4h 15m
 pbx qsub ... -T 3.5d   # 3d 12h
+
+# Self-restart chain (auto-resubmit at every walltime, up to 3 more times)
+pbx qsub -c sophia -N sweep -q gpu --select 4 -T 4h -A myproject -a lammps -t sweep \
+  --restart --max-restarts 3
 ```
 
 ---
@@ -277,7 +282,8 @@ pbx scancel 7654321 -g 60  # custom grace
 
 ## `pbx run` (internal)
 
-Engine used by qsub/sbatch — not for direct use.
+Engine used by qsub/sbatch — not for direct use. Full runtime reference: [`pbx-run-details.md`](pbx-run-details.md).
 
 - `--dynamic` (default) / `--static` controls live job discovery during the run session.
-- Triggers a graceful shutdown automatically ~30s before walltime so in-flight jobs are marked `Killed` cleanly in the database. No user knob required.
+- Triggers a graceful shutdown automatically ~30s before walltime so in-flight jobs are marked cleanly in the database — `Killed` by default, or `Restart`/`Failed` under restart-mode.
+- `--restart-mode` and `--max-restarts N` are set internally by `pbx qsub --restart` / `pbx sbatch --restart`. They turn on the startup `restart()` hook and the walltime-time auto-resubmission step. Do not invoke `pbx run` with these directly — use `pbx qsub --restart --max-restarts N`.
