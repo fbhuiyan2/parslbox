@@ -60,6 +60,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `docs/commands.md` — CLI command reference
   - `docs/pbx-run-details.md` — `pbx run` runtime/restart-chain reference
 
+#### Hooks on Compute (`RUN_HOOKS_ON_COMPUTE`)
+- **New opt-in class attribute on `AppBase`** — When set to `True`, an app's `preprocess()` and `postprocess()` Python methods are dispatched on the assigned compute node via a subprocess wrapped with `build_resource_launcher()`, instead of running in-process in the `pbx run` orchestrator on the head node
+  - Default `False` preserves prior behavior — no existing app is affected
+  - Does **not** affect `restart()` (which runs before any assignment exists)
+  - Frees the head node from heavy hook work; lets hooks use the same modules/Python env/GPU access as the job itself
+- **New compute-side dispatcher** — `parslbox/apps/_hook_runner.py` invoked as `python -m parslbox.apps._hook_runner <app_name> <method_name> <args_json>`; re-instantiates the app via `app_registry.get_app_instance()`, calls the method, writes its return value to `<job_path>/PBX_HOOK_RETURN` (mirrors the existing `PBX_JOB_STATUS_REPORT` idiom from v0.8.7)
+- **New head-side helper** — `parslbox/commands/helpers/hook_dispatch.py` builds the `bash -c` payload with `shlex.quote()`, sources `env_file` if present, captures stdout/stderr, propagates `CalledProcessError` to the orchestrator's existing exception handlers
+- **Resource launcher built for MPI apps too** when the flag is True — previously only built for `USES_MPI=False`. The single-rank launcher constrains the hook subprocess to assigned resources
+
 ### Fixed
 
 #### Multi-GPU-per-Rank GPU Wrapper
@@ -95,6 +104,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `parslbox/commands/helpers/cancel_helpers.py`
 - `parslbox/commands/helpers/restart_helpers.py`
 - `parslbox/commands/helpers/resource_estimate.py`
+- `parslbox/commands/helpers/hook_dispatch.py`
+- `parslbox/apps/_hook_runner.py`
 - `parslbox/utils/tag_match.py`
 - `parslbox/system_configs/aurora_tile_mpi.py`
 - `parslbox/system_configs/lcrc_swing_mpi.py`
@@ -142,6 +153,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `job_test/create_test_jobs.py` — Julia job generation
 - `tests/test_add_command.py` — tests for `--parent` range, sub-node occupancy, multinode CPU on GPU systems
 - `tests/api_tests/test_job_queries.py` — tests for `exclude_tags` filter
+- `tests/test_hooks_on_compute.py` — tests for `RUN_HOOKS_ON_COMPUTE` dispatch path
+- `parslbox/apps/appbase.py` — `RUN_HOOKS_ON_COMPUTE` attribute
+- `parslbox/apps/EXAMPLE_NEW_APP.py` — documents `RUN_HOOKS_ON_COMPUTE`
+- `docs/apps.md` — documents `RUN_HOOKS_ON_COMPUTE` in optional overrides table
 
 ---
 

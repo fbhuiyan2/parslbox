@@ -109,6 +109,9 @@ Optional overrides:
 | `preprocess(job_id, job_path, db_path, app_config, config_name)` | One-time setup (file copies, validation) before submission |
 | `check_success(job_id, job_path, db_path, error_message)` | Custom success determination beyond status file / exit code |
 | `postprocess(job_id, job_path, db_path)` | Cleanup or analysis after the job finishes |
+| `RUN_HOOKS_ON_COMPUTE: bool` | When `True`, `preprocess`/`postprocess` run on the assigned compute node via a subprocess wrapped with the resource launcher, instead of in-process in `pbx run` on the head node. Default `False`. Does not affect `restart()`. |
+
+Set `RUN_HOOKS_ON_COMPUTE = True` when your hooks do non-trivial work (file staging on node-local scratch, NumPy/HDF5 post-analysis, anything that imports the heavy modules the job uses). The app class is re-instantiated on the compute node, so its `__init__` must be side-effect-free. The hook's return value (the status string from `postprocess`) is communicated back via a `PBX_HOOK_RETURN` file in the job directory, mirroring the `PBX_JOB_STATUS_REPORT` pattern.
 
 See [`parslbox/apps/EXAMPLE_NEW_APP.py`](../parslbox/apps/EXAMPLE_NEW_APP.py) for full templates covering both MPI and non-MPI cases.
 

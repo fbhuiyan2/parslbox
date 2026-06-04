@@ -9,7 +9,9 @@ To create a new app, you only need to:
 2. Set INPUT_REQUIRED and DFLT_INPUT class attributes
 3. Implement get_command_template() method
 4. Optionally set USES_MPI = False for non-MPI apps (default is True)
-5. Optionally override get_additional_setup(), check_success(), or postprocess()
+5. Optionally set RUN_HOOKS_ON_COMPUTE = True to dispatch preprocess/postprocess
+   on the assigned compute node (default False runs them on the head node)
+6. Optionally override get_additional_setup(), check_success(), or postprocess()
 
 That's it! All the common logic (environment setup, resource handling, 
 bash script construction) is handled by the base class.
@@ -32,6 +34,10 @@ class ExampleApp(AppBase):
     INPUT_REQUIRED = True  # Does this app require an input file?
     DFLT_INPUT = "input.txt"  # Default input filename (or None)
     # USES_MPI = True  # (default) Set to False for non-MPI apps like Python scripts
+    # RUN_HOOKS_ON_COMPUTE = False  # (default) Set to True to run
+    #     preprocess()/postprocess() on the assigned compute node instead of
+    #     the head node. Requires a side-effect-free __init__ (the app is
+    #     re-instantiated on the compute node).
     
     def get_command_template(self, **kwargs) -> str:
         """

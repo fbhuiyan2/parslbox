@@ -35,6 +35,7 @@ from parslbox.commands.helpers.run_cmd_helpers import (
     create_atexit_handler,
     perform_shutdown,
 )
+from parslbox.commands.helpers.hook_dispatch import dispatch_hook_on_compute
 from parslbox.database.status_buffer import StatusBuffer
 
 app = typer.Typer()
@@ -130,9 +131,13 @@ def create_parsl_future(job, app_instance, app_config, mpi_config, config_name, 
 
         logger.info(f"Job {job_id}: Generated MPI command - {mpi_commands.get('PBX_MPI_PREFIX', 'None')}")
 
-        # For non-MPI apps, generate a resource launcher to constrain
-        # execution to the assigned node/resources
-        if not app_instance.USES_MPI:
+        # Build the single-rank resource launcher when either:
+        #   (a) the app is non-MPI — used as command prefix so the bash_app
+        #       runs on the assigned node instead of the head node, or
+        #   (b) the app opts into RUN_HOOKS_ON_COMPUTE — used to wrap the
+        #       hook subprocess so preprocess/postprocess execute on the
+        #       assigned node.
+        if (not app_instance.USES_MPI) or app_instance.RUN_HOOKS_ON_COMPUTE:
             resource_launcher = build_resource_launcher(
                 mpi_config=mpi_config,
                 system_config=system_config,
@@ -143,15 +148,30 @@ def create_parsl_future(job, app_instance, app_config, mpi_config, config_name, 
             mpi_commands['PBX_RESOURCE_LAUNCHER'] = resource_launcher
             logger.info(f"Job {job_id}: Resource launcher - {resource_launcher}")
 
-        # Run preprocessing
+        # Run preprocessing — either in-process on the head node (default) or
+        # dispatched to the assigned compute node when the app opts in.
         logger.info(f"Running preprocessing for Job ID {job_id}...")
-        app_instance.preprocess(
-            job_id=job_id, 
-            job_path=job_path, 
-            db_path=db_path, 
-            app_config=app_config, 
-            config_name=config_name
-        )
+        if app_instance.RUN_HOOKS_ON_COMPUTE:
+            dispatch_hook_on_compute(
+                app_name=job['app_name'],
+                method_name='preprocess',
+                resource_launcher=mpi_commands['PBX_RESOURCE_LAUNCHER'],
+                env_file=job.get('env_file'),
+                # method kwargs (forwarded to preprocess)
+                job_id=job_id,
+                job_path=job_path,
+                db_path=db_path,
+                app_config=app_config,
+                config_name=config_name,
+            )
+        else:
+            app_instance.preprocess(
+                job_id=job_id,
+                job_path=job_path,
+                db_path=db_path,
+                app_config=app_config,
+                config_name=config_name,
+            )
         
         
         # Create Parsl future
@@ -170,13 +190,18 @@ def create_parsl_future(job, app_instance, app_config, mpi_config, config_name, 
             stderr=(str(job_path / f"pbx_job_{job_id}.err"), 'w')
         )
         
-        # Add to futures list
+        # Add to futures list. Stash resource_launcher and env_file so the
+        # postprocess wrap below can dispatch to the same assigned compute
+        # node — by the time the future completes, the local mpi_commands
+        # dict here is out of scope.
         futures.append({
-            'future': fut, 
-            'job': job, 
+            'future': fut,
+            'job': job,
             'app_instance': app_instance,
             'assignment': assignment,
-            'resource_manager': resource_manager
+            'resource_manager': resource_manager,
+            'resource_launcher': mpi_commands.get('PBX_RESOURCE_LAUNCHER'),
+            'env_file': job.get('env_file'),
         })
         
         logger.info(f"Job {job_id}: Successfully created Parsl future")
@@ -777,11 +802,27 @@ def run(
                 # Validate and normalize the status from check_success
                 job_status = validate_and_normalize_status(job_status, job_id)
 
-                # If job succeeded, run post-processing
+                # If job succeeded, run post-processing — either in-process on
+                # the head node (default) or dispatched to the assigned compute
+                # node when the app opts in via RUN_HOOKS_ON_COMPUTE.
                 if job_status == "Done":
                     logger.info(f"Job {job_id}: Success check passed. Running post-processing...")
                     try:
-                        final_status = app_instance.postprocess(job_id=job_id, job_path=job_path, db_path=db_path)
+                        if app_instance.RUN_HOOKS_ON_COMPUTE:
+                            final_status = dispatch_hook_on_compute(
+                                app_name=job['app_name'],
+                                method_name='postprocess',
+                                resource_launcher=item['resource_launcher'],
+                                env_file=item['env_file'],
+                                # method kwargs (forwarded to postprocess)
+                                job_id=job_id,
+                                job_path=job_path,
+                                db_path=db_path,
+                            )
+                        else:
+                            final_status = app_instance.postprocess(
+                                job_id=job_id, job_path=job_path, db_path=db_path,
+                            )
 
                         # Validate and use postprocess result if it returns a valid status
                         if final_status:

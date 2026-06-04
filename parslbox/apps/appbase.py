@@ -27,6 +27,14 @@ class AppBase(ABC):
                            # Non-MPI apps get a resource launcher prepended to
                            # constrain execution to the assigned node/resources.
 
+    # When True, preprocess() and postprocess() are dispatched on the assigned
+    # compute node via a subprocess wrapped with the resource launcher, instead
+    # of running in-process in the pbx run orchestrator on the head node.
+    # Default False preserves prior behavior. Does NOT affect restart().
+    # Apps opting in MUST have a side-effect-free __init__ (the dispatcher
+    # re-instantiates the app on the compute node via get_app_instance()).
+    RUN_HOOKS_ON_COMPUTE: bool = False
+
     @classmethod
     def get_default_ranks_per_node(cls, ngpus, num_nodes, system_config):
         """Return default ranks_per_node when user doesn't specify --ranks-per-node.
