@@ -387,8 +387,11 @@ def run(
         else:
             logger.info("Restart-mode: no Restart-status jobs to process.")
 
-    all_runnable_jobs = database.get_jobs(db_path, status='Ready')
-    all_runnable_jobs += database.get_jobs(db_path, status='Restart')
+    # Restart jobs get priority over Ready jobs — they've already consumed
+    # resources once and are mid-workflow; we want to clear them before
+    # starting fresh work. Within each group, order is FIFO by job_id.
+    all_runnable_jobs = database.get_jobs(db_path, status='Restart')
+    all_runnable_jobs += database.get_jobs(db_path, status='Ready')
 
     filtered_jobs = []
     for job in all_runnable_jobs:
@@ -624,8 +627,9 @@ def run(
         Returns:
             int: Number of new jobs discovered
         """
-        new_runnable = database.get_jobs(db_path, status='Ready')
-        new_runnable += database.get_jobs(db_path, status='Restart')
+        # Restart jobs first — same priority rule as the initial collection.
+        new_runnable = database.get_jobs(db_path, status='Restart')
+        new_runnable += database.get_jobs(db_path, status='Ready')
 
         new_jobs = []
         for job in new_runnable:
