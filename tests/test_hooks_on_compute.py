@@ -411,3 +411,70 @@ def test_hook_runner_propagates_exception_as_non_zero_exit(tmp_path, monkeypatch
 def test_hook_runner_bad_argv_returns_2(tmp_path):
     assert _hook_runner.main([]) == 2
     assert _hook_runner.main(["only-one"]) == 2
+
+
+# ============================================================
+# Regression: run.py must read job['app'], not job['app_name']
+#
+# DB schema has a column named `app`, not `app_name` (database.py).
+# Twice we shipped run.py code (in the RUN_HOOKS_ON_COMPUTE = True
+# branches) that read `job['app_name']`, blowing up with KeyError
+# the moment any custom app opted into compute-side hooks. Existing
+# tests in this file mock dispatch_hook_on_compute(...) directly and
+# never exercise the caller, so the bug slipped through. These two
+# tests pin down the convention on both sides.
+# ============================================================
+
+
+def test_db_job_row_uses_app_key_not_app_name(tmp_path):
+    """A job row fetched from the DB must expose its app name under key 'app'.
+
+    Locks in the schema contract the RUN_HOOKS_ON_COMPUTE caller depends on.
+    """
+    from parslbox.database import database
+
+    db_path = tmp_path / "jobs.db"
+    job_dir = tmp_path / "j1"
+    job_dir.mkdir()
+    database.initialize_database(db_path)
+    database.add_job(
+        db_path,
+        path=str(job_dir),
+        app="lammps-kk",
+        num_nodes=1,
+        ngpus=0,
+        node_occupancy=1.0,
+        tag=None,
+    )
+    rows = database.get_jobs(db_path)
+    assert len(rows) == 1
+    row = rows[0]
+    assert "app" in row, "DB row must expose app name under 'app'"
+    assert "app_name" not in row, (
+        "DB row must NOT expose 'app_name' — the schema column is 'app' "
+        "(see database.py). Callers that read job['app_name'] crash with KeyError."
+    )
+    assert row["app"] == "lammps-kk"
+
+
+def test_run_py_does_not_read_job_app_name(tmp_path):
+    """Source-level guard against the KeyError regression on run.py:156 / :820.
+
+    Both dispatch_hook_on_compute call sites in run.py must read job['app'],
+    matching the DB column. job['app_name'] does not exist in any row dict and
+    raises KeyError the first time a RUN_HOOKS_ON_COMPUTE = True app reaches
+    the dispatch path.
+    """
+    import re
+    from pathlib import Path
+    import parslbox.commands.run as run_mod
+
+    src = Path(run_mod.__file__).read_text()
+    # Match both quoting styles
+    bad = re.findall(r"""job\[\s*['"]app_name['"]\s*\]""", src)
+    assert not bad, (
+        f"run.py contains {len(bad)} reference(s) to job['app_name'] — "
+        "the DB column is 'app' (see database.py). Use job['app'] instead. "
+        "This bug previously broke every custom app with "
+        "RUN_HOOKS_ON_COMPUTE = True on its first dispatch."
+    )

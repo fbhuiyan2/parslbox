@@ -153,7 +153,7 @@ def create_parsl_future(job, app_instance, app_config, mpi_config, config_name, 
         logger.info(f"Running preprocessing for Job ID {job_id}...")
         if app_instance.RUN_HOOKS_ON_COMPUTE:
             dispatch_hook_on_compute(
-                app_name=job['app_name'],
+                app_name=job['app'],
                 method_name='preprocess',
                 resource_launcher=mpi_commands['PBX_RESOURCE_LAUNCHER'],
                 env_file=job.get('env_file'),
@@ -817,7 +817,7 @@ def run(
                     try:
                         if app_instance.RUN_HOOKS_ON_COMPUTE:
                             final_status = dispatch_hook_on_compute(
-                                app_name=job['app_name'],
+                                app_name=job['app'],
                                 method_name='postprocess',
                                 resource_launcher=item['resource_launcher'],
                                 env_file=item['env_file'],
