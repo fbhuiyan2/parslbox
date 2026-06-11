@@ -102,7 +102,7 @@ Link 3:  restart_link_3.sh                      →   pbx run --max-restarts 0  
 
 > If the user *did* manually flip some jobs to `Restart` before submitting, the orchestrator's startup hook will treat them as Scene B / C (whichever the app returns) and re-queue them as `Ready`. The hook does not care whether a row was flipped by the user or by a prior link.
 
-**Walltime expiry.** The internal timer fires ~30 s before the scheduler's stated walltime:
+**Walltime expiry.** The internal timer fires ~90 s before the scheduler's stated walltime (restart-mode uses a wider grace than the non-restart 30 s — the resubmit path needs the extra runway):
 
 1. Stop dispatching new jobs.
 2. All in-flight (`Running` / `Submitted`) jobs are marked **`Restart`** (not `Killed` — this is the key difference from non-restart-mode).

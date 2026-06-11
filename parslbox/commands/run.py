@@ -264,8 +264,9 @@ def run(
             "--walltime-seconds",
             help=(
                 "Batch job walltime in seconds. Required. The orchestrator triggers "
-                "graceful shutdown 30s before this elapses so in-flight jobs can be "
-                "marked Killed cleanly. Set automatically by `pbx qsub`/`pbx sbatch`."
+                "graceful shutdown before this elapses so in-flight jobs can be "
+                "marked Killed cleanly (30s grace, or 90s under --restart-mode). "
+                "Set automatically by `pbx qsub`/`pbx sbatch`."
             ),
         )
     ] = ...,
@@ -334,9 +335,11 @@ def run(
 
     logger.info(f"Job submission delay: {os.getenv('PBX_RUN_DELAY', '0.2')}s (PBX_RUN_DELAY)")
 
-    # Walltime-aware graceful shutdown: trigger 30s before walltime so the
-    # main loop can flush state and mark in-flight jobs Killed cleanly.
-    SHUTDOWN_GRACE_SECONDS = 30
+    # Walltime-aware graceful shutdown: trigger before walltime so the main
+    # loop can flush state and mark in-flight jobs Killed cleanly. Restart-mode
+    # needs more runway (mark Restart + generate next-link script + qsub/sbatch
+    # from the compute node), so we widen the grace from 30s to 90s.
+    SHUTDOWN_GRACE_SECONDS = 90 if restart_mode else 30
     process_start = time.time()
     shutdown_at = process_start + walltime_seconds - SHUTDOWN_GRACE_SECONDS
     logger.info(
