@@ -76,7 +76,7 @@ Run `pbx config` to interactively create a configuration file. Edit the generate
 Add jobs:
 ```bash
 # Add a single LAMMPS job (requires system config name)
-pbx add /path/to/sim --app lammps --config polaris --ngpus 2 --tag run1
+pbx add /path/to/sim --app lammps-kk --config polaris --ngpus 2 --tag run1
 
 # Add all subdirectories in current folder as VASP jobs
 pbx add all --app vasp --config polaris --tag ManyVaspCalc
@@ -95,24 +95,20 @@ pbx add /path/to/calc2 --app vasp --config polaris --parent-tag stage1
 Submit via PBS or SLURM:
 ```bash
 # Short flags
-pbx qsub -c sophia -N myrun -q gpu --select 2 -T 90 -A myproject -a lammps -t production
-pbx sbatch -c polaris -N myrun -p gpu --nodes 2 -T 90 -A myproject -a lammps -t production
+pbx qsub -c sophia -N myrun -q gpu --select 2 -T 90 -A myproject -a lammps-kk -t production
+pbx sbatch -c polaris -N myrun -p gpu --nodes 2 -T 90 -A myproject -a lammps-kk -t production
 
 # Long flags
-pbx qsub --config sophia --job-name myrun --queue gpu --select 2 --walltime 90 --project myproject --apps lammps --tags production
-pbx sbatch --config polaris --job-name myrun --partition gpu --nodes 2 --walltime 90 --account myproject --apps lammps --tags production
+pbx qsub --config sophia --job-name myrun --queue gpu --select 2 --walltime 90 --project myproject --apps lammps-kk --tags production
+pbx sbatch --config polaris --job-name myrun --partition gpu --nodes 2 --walltime 90 --account myproject --apps lammps-kk --tags production
 
 # Glob tags: use `*` to match a substring. Quote to prevent shell expansion.
-pbx qsub -c sophia -N myrun -q gpu --select 2 -T 90 -A myproject -a lammps -t '*nomix,prod-run'
+pbx qsub -c sophia -N myrun -q gpu --select 2 -T 90 -A myproject -a lammps-kk -t '*nomix,prod-run'
 
 # Self-restart chain: auto-resubmit at every walltime boundary, up to 3 times
-pbx qsub -c sophia -N sweep -q gpu --select 4 -T 4h -A myproject -a lammps -t sweep \
+pbx qsub -c sophia -N sweep -q gpu --select 4 -T 4h -A myproject -a lammps-kk -t sweep \
   --restart --max-restarts 3
 ```
-
-> **Tag globs:** `--tag` / `--tags` accept `*`-style globs (e.g. `*test`, `film*mix`, `*3c*`).
-> `qsub` and `sbatch` resolve globs against the DB at submission time and error out if any
-> token (glob or literal) matches no existing tag. Quote globs to stop the shell from expanding `*`.
 
 ## Supported Applications
 
