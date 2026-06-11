@@ -92,8 +92,18 @@ def dispatch_hook_on_compute(
         inner = f"source {shlex.quote(env_file)} && {inner}"
     cmd = ["bash", "-c", inner]
 
+    # Run from the job directory so relative paths in resource_launcher
+    # (e.g. mpiexec's `--rankfile ./rankfile_pbx_mpich_N.txt`, GPU wrapper
+    # scripts) resolve correctly — same convention as the bash_app, which
+    # `cd`s to job_path at the top of its generated script.
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=str(job_path),
+        )
         logger.info(
             f"Job {job_id}: hook {method_name} returned rc={proc.returncode}"
         )

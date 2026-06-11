@@ -59,7 +59,7 @@ def _fake_run_writes_return(tmp_path: Path, return_value: str | None):
     """Build a subprocess.run replacement that simulates the runner writing
     PBX_HOOK_RETURN. Pass return_value=None to simulate the runner crashing
     before it could write the file."""
-    def fake_run(cmd, *, capture_output, text, check):
+    def fake_run(cmd, *, capture_output, text, check, cwd=None):
         if return_value is not None:
             (tmp_path / PBX_HOOK_RETURN_FILE).write_text(return_value)
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
@@ -106,7 +106,7 @@ def _call_postprocess(tmp_path: Path, **overrides):
 def test_dispatch_builds_bash_c_command_with_launcher_prefix(tmp_path, monkeypatch):
     captured = {}
 
-    def fake_run(cmd, *, capture_output, text, check):
+    def fake_run(cmd, *, capture_output, text, check, cwd=None):
         captured['cmd'] = cmd
         (tmp_path / PBX_HOOK_RETURN_FILE).write_text("Done")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
@@ -128,7 +128,7 @@ def test_dispatch_builds_bash_c_command_with_launcher_prefix(tmp_path, monkeypat
 def test_dispatch_sources_env_file_when_present(tmp_path, monkeypatch):
     captured = {}
 
-    def fake_run(cmd, *, capture_output, text, check):
+    def fake_run(cmd, *, capture_output, text, check, cwd=None):
         captured['cmd'] = cmd
         (tmp_path / PBX_HOOK_RETURN_FILE).write_text("")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
@@ -145,7 +145,7 @@ def test_dispatch_sources_env_file_when_present(tmp_path, monkeypatch):
 def test_dispatch_quotes_env_file_with_spaces(tmp_path, monkeypatch):
     captured = {}
 
-    def fake_run(cmd, *, capture_output, text, check):
+    def fake_run(cmd, *, capture_output, text, check, cwd=None):
         captured['cmd'] = cmd
         (tmp_path / PBX_HOOK_RETURN_FILE).write_text("")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
@@ -162,7 +162,7 @@ def test_dispatch_quotes_env_file_with_spaces(tmp_path, monkeypatch):
 def test_dispatch_no_source_when_env_file_is_none(tmp_path, monkeypatch):
     captured = {}
 
-    def fake_run(cmd, *, capture_output, text, check):
+    def fake_run(cmd, *, capture_output, text, check, cwd=None):
         captured['cmd'] = cmd
         (tmp_path / PBX_HOOK_RETURN_FILE).write_text("")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
@@ -180,7 +180,7 @@ def test_dispatch_no_source_when_env_file_is_none(tmp_path, monkeypatch):
 def test_dispatch_no_source_when_env_file_is_empty_string(tmp_path, monkeypatch):
     captured = {}
 
-    def fake_run(cmd, *, capture_output, text, check):
+    def fake_run(cmd, *, capture_output, text, check, cwd=None):
         captured['cmd'] = cmd
         (tmp_path / PBX_HOOK_RETURN_FILE).write_text("")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
@@ -256,7 +256,7 @@ def test_dispatch_returns_none_when_return_file_missing(tmp_path, monkeypatch):
 
 
 def test_dispatch_raises_on_subprocess_failure(tmp_path, monkeypatch):
-    def fake_run(cmd, *, capture_output, text, check):
+    def fake_run(cmd, *, capture_output, text, check, cwd=None):
         # check=True semantics: simulate non-zero exit by raising
         raise subprocess.CalledProcessError(1, cmd, output="", stderr="boom")
 
@@ -287,7 +287,7 @@ def test_dispatch_clears_stale_return_file_before_run(tmp_path, monkeypatch):
 
     seen_during_run = {}
 
-    def fake_run(cmd, *, capture_output, text, check):
+    def fake_run(cmd, *, capture_output, text, check, cwd=None):
         f = tmp_path / PBX_HOOK_RETURN_FILE
         seen_during_run['exists_before_runner'] = f.exists()
         f.write_text("Fresh")
@@ -301,10 +301,29 @@ def test_dispatch_clears_stale_return_file_before_run(tmp_path, monkeypatch):
     assert result == "Fresh"
 
 
+def test_dispatch_runs_subprocess_with_cwd_set_to_job_path(tmp_path, monkeypatch):
+    """Relative paths in resource_launcher (mpiexec --rankfile ./rankfile_*.txt,
+    GPU wrapper scripts) live in job_path. The bash subprocess must run from
+    job_path so those resolve — same convention as the bash_app's `cd job_path`.
+    Regression test for the 'mpiexec exit 127' failure mode."""
+    captured = {}
+
+    def fake_run(cmd, *, capture_output, text, check, cwd=None):
+        captured['cwd'] = cwd
+        (tmp_path / PBX_HOOK_RETURN_FILE).write_text("")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(hook_dispatch.subprocess, "run", fake_run)
+
+    _call_preprocess(tmp_path)
+
+    assert captured['cwd'] == str(tmp_path)
+
+
 def test_dispatch_serializes_path_args_as_strings(tmp_path, monkeypatch):
     captured = {}
 
-    def fake_run(cmd, *, capture_output, text, check):
+    def fake_run(cmd, *, capture_output, text, check, cwd=None):
         tokens = shlex.split(cmd[-1])
         args_path = next(t for t in tokens if t.endswith(".json"))
         captured['args'] = json.loads(Path(args_path).read_text())
