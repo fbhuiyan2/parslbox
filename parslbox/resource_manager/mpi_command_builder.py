@@ -691,11 +691,12 @@ def build_resource_launcher(
     job_path: Optional[str] = None
 ) -> str:
     """
-    Build a single-process MPI launcher for non-MPI apps (USES_MPI=False).
+    Build a single-process MPI launcher used to land hook subprocesses on
+    the assigned compute node (gated by an app's RUN_HOOKS_ON_COMPUTE flag).
 
-    Non-MPI apps don't use MPI for parallelization. The MPI launcher's only
-    role is to place a single process on the assigned node with the assigned
-    CPU/GPU resources. The app handles any internal parallelism itself.
+    The launcher's only role is to place a single process on the assigned
+    node with the assigned CPU/GPU resources. The hook (or any future caller)
+    handles its own logic.
 
     This function reuses MPICommandBuilder.build_command() with modified inputs:
     - A synthetic JobResourceSpec that forces -n 1 --ppn 1 output, regardless
@@ -725,7 +726,7 @@ def build_resource_launcher(
 
     # Synthetic spec to make MPICommandBuilder produce -n 1 --ppn 1.
     # The actual job can be any size — PBX always launches 1 process
-    # since the app handles its own parallelism (USES_MPI=False).
+    # for the launcher since the caller handles its own logic.
     # node_occupancy starts at 1.0 and is recalculated below from the
     # actual core assignment, so the srun step is scoped to exactly the
     # resources the resource manager allocated (not the original request,
@@ -766,7 +767,7 @@ def build_resource_launcher(
         node_occupancy=assignment.node_occupancy,
     )
 
-    # For srun multi-node non-MPI jobs: add --nodes=N and remove
+    # For srun multi-node single-rank launchers: add --nodes=N and remove
     # --ntasks-per-node so srun reserves all assigned nodes but
     # launches only 1 process.
     launcher_config = mpi_config

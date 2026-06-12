@@ -1,9 +1,9 @@
 """
-Tests for build_resource_launcher() and the USES_MPI app attribute.
+Tests for build_resource_launcher().
 
 Verifies that the resource launcher correctly generates single-process MPI
-commands for non-MPI apps, ensuring they run on assigned resources rather
-than the head node.
+commands used to land hook subprocesses on assigned resources rather than
+on the head node.
 """
 
 import pytest
@@ -109,7 +109,7 @@ class TestBuildResourceLauncher:
         assert "--ntasks-per-node 1" in launcher
 
     def test_srun_multinode_uses_nodes_flag(self):
-        """SRUN multi-node non-MPI: -n 1 --nodes=N, no --ntasks-per-node."""
+        """SRUN multi-node single-rank launcher: -n 1 --nodes=N, no --ntasks-per-node."""
         config = MPIConfig(backend=MPIBackend.SRUN)
         sys_config = self._make_system_config()
 
@@ -247,27 +247,3 @@ class TestBuildResourceLauncher:
         launcher = build_resource_launcher(config, sys_config, assignment, job_spec)
 
         assert "--cpu-bind" not in launcher
-
-
-class TestUsesMPIAttribute:
-    """Tests for the USES_MPI class attribute on app classes."""
-
-    def test_appbase_default_true(self):
-        """AppBase.USES_MPI defaults to True."""
-        from parslbox.apps.appbase import AppBase
-        assert AppBase.USES_MPI is True
-
-    def test_python_app_true(self):
-        """PythonApp.USES_MPI is True."""
-        from parslbox.apps.python import PythonApp
-        assert PythonApp.USES_MPI is True
-
-    def test_vasp_app_true(self):
-        """VaspApp.USES_MPI is True (inherited)."""
-        from parslbox.apps.vasp import VaspApp
-        assert VaspApp.USES_MPI is True
-
-    def test_lammps_app_true(self):
-        """LammpsKokkosApp.USES_MPI is True (inherited)."""
-        from parslbox.apps.lammps_kk import LammpsKokkosApp
-        assert LammpsKokkosApp.USES_MPI is True

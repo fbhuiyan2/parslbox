@@ -33,8 +33,7 @@ class LammpsBasicApp(AppBase):
     # App configuration
     INPUT_REQUIRED = True
     DFLT_INPUT = "in.lammps"
-    USES_MPI = True  # LAMMPS uses MPI for parallelization
-    
+
     def get_command_template(self, **kwargs) -> str:
         """
         Construct CPU-only LAMMPS execution command.

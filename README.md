@@ -21,7 +21,6 @@ ParslBox provides a CLI (`pbx`), a Python API, and an MCP server for AI-agent in
 - **Resource-aware execution:**
   - Pack multiple sub-node jobs onto shared nodes (GPU or CPU)
   - Run multi-node MPI jobs with exclusive node allocation
-  - Resource constraining for non-MPI apps (Python, Julia) via resource launcher
   - CPU-GPU affinity-aware placement
   - MPI backends: MPICH, OpenMPI, srun
 - **Scheduler support:** PBS (`pbx qsub`) and SLURM (`pbx sbatch`) with configurable `--sched-opts`

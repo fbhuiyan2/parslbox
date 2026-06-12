@@ -8,9 +8,8 @@ class OrcaApp(AppBase):
     ORCA application implementation for ParslBox.
 
     ORCA manages its own internal MPI parallelism via a bundled OpenMPI.
-    It is NOT launched with an external mpirun/mpiexec. Instead, pbx
-    sets USES_MPI = True for proper multi-node resource allocation but
-    the command template ignores mpi_prefix entirely.
+    It is NOT launched with an external mpirun/mpiexec — its command
+    template ignores mpi_prefix entirely.
 
     ORCA requires:
     - A .nodes file listing hostnames and available slots per host

@@ -9,14 +9,14 @@ ParslBox ships with built-in support for a small set of HPC apps, and lets you r
 | **LAMMPS (Kokkos)** | `lammps-kk` | Yes | Yes | `in.lammps` | "Total wall time:" in `log.lammps` |
 | **VASP** | `vasp` | Yes | No | — | Auto-selects `vasp_gpu` or `vasp_std` based on system |
 | **ORCA** | `orca` | Internal (bundled OpenMPI) | Yes | `input.inp` | "ORCA TERMINATED NORMALLY" in `.out` files |
-| **Python** | `python` | No (constrained launcher) | Yes | — | Reads `PBX_JOB_STATUS_REPORT` via `report_status()` |
-| **Julia** | `julia` | No (constrained launcher) | Yes | — | Reads `PBX_JOB_STATUS_REPORT` |
+| **Python** | `python` | Yes (1 rank/node default) | Yes | — | Reads `PBX_JOB_STATUS_REPORT` via `report_status()` |
+| **Julia** | `julia` | Yes (1 rank/node default) | Yes | — | Reads `PBX_JOB_STATUS_REPORT` |
 
 ### App-specific notes
 
 **ORCA** manages its own MPI parallelism via a bundled OpenMPI — pbx does **not** wrap it with `mpirun`. Instead, pbx generates a `.nodes` file and passes `--host` to ORCA's internal launcher. Parallelism is controlled by `%pal nprocs N end` in the ORCA input file. Ensure ORCA's directory is first on `PATH` so its bundled `mpirun` takes priority over the system MPI.
 
-**Python / Julia (non-MPI apps)** are automatically constrained to their assigned node/resources via a resource launcher. Scripts that need to launch MPI subprocesses themselves can read the prepared MPI command from the `PBX_MPI_PREFIX` environment variable that pbx exports into their environment.
+**Python / Julia** scripts are launched via `mpiexec`/`srun` with 1 rank per node by default — they run constrained to the assigned nodes whether or not they use `mpi4py`/`MPI.jl`. Scripts that want to launch nested MPI subprocesses can read the prepared MPI command from the `PBX_MPI_PREFIX` environment variable that pbx exports into their environment.
 
 **VASP** auto-detects whether to run `vasp_gpu` or `vasp_std` based on the system's GPU configuration. No `--input` flag needed.
 
@@ -113,7 +113,7 @@ Optional overrides:
 
 Set `RUN_HOOKS_ON_COMPUTE = True` when your hooks do non-trivial work (file staging on node-local scratch, NumPy/HDF5 post-analysis, anything that imports the heavy modules the job uses). The app class is re-instantiated on the compute node, so its `__init__` must be side-effect-free. The hook's return value (the status string from `postprocess`) is communicated back via a `PBX_HOOK_RETURN` file in the job directory, mirroring the `PBX_JOB_STATUS_REPORT` pattern.
 
-See [`parslbox/apps/EXAMPLE_NEW_APP.py`](../parslbox/apps/EXAMPLE_NEW_APP.py) for full templates covering both MPI and non-MPI cases.
+See [`parslbox/apps/EXAMPLE_NEW_APP.py`](../parslbox/apps/EXAMPLE_NEW_APP.py) for full templates.
 
 ### Where custom apps live
 

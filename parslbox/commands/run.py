@@ -131,13 +131,10 @@ def create_parsl_future(job, app_instance, app_config, mpi_config, config_name, 
 
         logger.info(f"Job {job_id}: Generated MPI command - {mpi_commands.get('PBX_MPI_PREFIX', 'None')}")
 
-        # Build the single-rank resource launcher when either:
-        #   (a) the app is non-MPI — used as command prefix so the bash_app
-        #       runs on the assigned node instead of the head node, or
-        #   (b) the app opts into RUN_HOOKS_ON_COMPUTE — used to wrap the
-        #       hook subprocess so preprocess/postprocess execute on the
-        #       assigned node.
-        if (not app_instance.USES_MPI) or app_instance.RUN_HOOKS_ON_COMPUTE:
+        # Build the single-rank resource launcher when the app opts into
+        # RUN_HOOKS_ON_COMPUTE — used to wrap the hook subprocess so
+        # preprocess/postprocess execute on the assigned compute node.
+        if app_instance.RUN_HOOKS_ON_COMPUTE:
             resource_launcher = build_resource_launcher(
                 mpi_config=mpi_config,
                 system_config=system_config,
