@@ -71,7 +71,7 @@ def _call_preprocess(tmp_path: Path, **overrides):
     kwargs = dict(
         app_name="example",
         method_name="preprocess",
-        resource_launcher="mpiexec -n 1 --ppn 1",
+        single_rank_launcher="mpiexec -n 1 --ppn 1",
         env_file=None,
         # method kwargs:
         job_id=42,
@@ -88,7 +88,7 @@ def _call_postprocess(tmp_path: Path, **overrides):
     kwargs = dict(
         app_name="example",
         method_name="postprocess",
-        resource_launcher="srun -N 1 -n 1",
+        single_rank_launcher="srun -N 1 -n 1",
         env_file=None,
         job_id=1,
         job_path=tmp_path,
@@ -195,12 +195,120 @@ def test_dispatch_no_source_when_env_file_is_empty_string(tmp_path, monkeypatch)
     assert not inner.startswith("source ")
 
 
+# ============================================================
+# gpu_env_vars: unset + export pattern
+#
+# The orchestrator's outer allocation may have CUDA_VISIBLE_DEVICES /
+# ZE_AFFINITY_MASK set across the whole node. We MUST unset those before
+# exporting whatever ResourceAssignment.get_env_vars() returned for THIS
+# specific job — otherwise a CPU-only job sees the orchestrator's GPUs.
+# ============================================================
+
+
+def test_dispatch_always_unsets_gpu_vars_regardless_of_input(tmp_path, monkeypatch):
+    """The unset line MUST appear even when gpu_env_vars is None or empty —
+    that's the whole point of the defensive clear for CPU-only jobs."""
+    captured = {}
+
+    def fake_run(cmd, *, capture_output, text, check, cwd=None):
+        captured.setdefault('inners', []).append(cmd[2])
+        (tmp_path / PBX_HOOK_RETURN_FILE).write_text("")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(hook_dispatch.subprocess, "run", fake_run)
+
+    # gpu_env_vars omitted (defaults to None)
+    _call_preprocess(tmp_path)
+    # gpu_env_vars explicitly empty dict
+    _call_preprocess(tmp_path, gpu_env_vars={})
+
+    for inner in captured['inners']:
+        assert "unset CUDA_VISIBLE_DEVICES ZE_AFFINITY_MASK" in inner
+        # And no stale export lines from the orchestrator
+        assert "export CUDA_VISIBLE_DEVICES" not in inner
+        assert "export ZE_AFFINITY_MASK" not in inner
+
+
+def test_dispatch_exports_provided_gpu_env_vars(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_run(cmd, *, capture_output, text, check, cwd=None):
+        captured['inner'] = cmd[2]
+        (tmp_path / PBX_HOOK_RETURN_FILE).write_text("")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(hook_dispatch.subprocess, "run", fake_run)
+
+    _call_preprocess(tmp_path, gpu_env_vars={
+        "CUDA_VISIBLE_DEVICES": "0,2",
+        "ZE_AFFINITY_MASK": "0.0,2.0",
+    })
+
+    inner = captured['inner']
+    assert "export CUDA_VISIBLE_DEVICES=0,2" in inner
+    assert "export ZE_AFFINITY_MASK=0.0,2.0" in inner
+    # Exports come AFTER the unset (so they take effect)
+    unset_pos = inner.find("unset CUDA_VISIBLE_DEVICES")
+    cuda_export_pos = inner.find("export CUDA_VISIBLE_DEVICES")
+    ze_export_pos = inner.find("export ZE_AFFINITY_MASK")
+    assert unset_pos != -1 and unset_pos < cuda_export_pos < ze_export_pos
+
+
+def test_dispatch_command_ordering_source_unset_export_launcher(tmp_path, monkeypatch):
+    """Full ordering check: source env_file → unset → export → launcher."""
+    captured = {}
+
+    def fake_run(cmd, *, capture_output, text, check, cwd=None):
+        captured['inner'] = cmd[2]
+        (tmp_path / PBX_HOOK_RETURN_FILE).write_text("")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(hook_dispatch.subprocess, "run", fake_run)
+
+    _call_preprocess(
+        tmp_path,
+        env_file="/etc/env.sh",
+        gpu_env_vars={"CUDA_VISIBLE_DEVICES": "1"},
+    )
+
+    inner = captured['inner']
+    pos_source = inner.find("source /etc/env.sh")
+    pos_unset = inner.find("unset CUDA_VISIBLE_DEVICES")
+    pos_export = inner.find("export CUDA_VISIBLE_DEVICES=1")
+    pos_launcher = inner.find("mpiexec")
+    # Each step is present and comes strictly before the next
+    assert -1 < pos_source < pos_unset < pos_export < pos_launcher
+
+
+def test_dispatch_does_not_set_subprocess_env_kwarg(tmp_path, monkeypatch):
+    """GPU env vars are handled via bash `export` in the inner command, NOT
+    via subprocess.run's env= kwarg. Setting env= would override the
+    orchestrator's PATH/PYTHONPATH/etc. and is fragile w.r.t. mpiexec env
+    propagation. This test pins down the design: env= is never passed."""
+    captured = {}
+
+    def fake_run(cmd, *, capture_output, text, check, cwd=None, env=None, **extra):
+        captured['env_kwarg'] = env
+        captured['extra'] = extra
+        (tmp_path / PBX_HOOK_RETURN_FILE).write_text("")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(hook_dispatch.subprocess, "run", fake_run)
+
+    _call_preprocess(tmp_path, gpu_env_vars={"CUDA_VISIBLE_DEVICES": "3"})
+
+    assert captured['env_kwarg'] is None, (
+        "dispatch_hook_on_compute must not pass env= to subprocess.run — "
+        "env management belongs in the bash inner command (see hook_dispatch.py)."
+    )
+
+
 def test_dispatch_rejects_unknown_method(tmp_path):
     with pytest.raises(ValueError, match="method_name must be one of"):
         dispatch_hook_on_compute(
             app_name="example",
             method_name="restart",  # not in allowlist
-            resource_launcher="x",
+            single_rank_launcher="x",
             env_file=None,
             job_id=1,
             job_path=tmp_path,
@@ -213,7 +321,7 @@ def test_dispatch_rejects_missing_job_path(tmp_path):
         dispatch_hook_on_compute(
             app_name="example",
             method_name="preprocess",
-            resource_launcher="x",
+            single_rank_launcher="x",
             env_file=None,
             # missing job_path
             job_id=1,
@@ -302,7 +410,7 @@ def test_dispatch_clears_stale_return_file_before_run(tmp_path, monkeypatch):
 
 
 def test_dispatch_runs_subprocess_with_cwd_set_to_job_path(tmp_path, monkeypatch):
-    """Relative paths in resource_launcher (mpiexec --rankfile ./rankfile_*.txt,
+    """Relative paths in single_rank_launcher (mpiexec --rankfile ./rankfile_*.txt,
     GPU wrapper scripts) live in job_path. The bash subprocess must run from
     job_path so those resolve — same convention as the bash_app's `cd job_path`.
     Regression test for the 'mpiexec exit 127' failure mode."""

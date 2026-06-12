@@ -3,7 +3,7 @@ Head-node-side helper that dispatches an app's preprocess/postprocess on the
 assigned compute node when the app sets `RUN_HOOKS_ON_COMPUTE = True`.
 
 The actual work is done by parslbox.apps._hook_runner inside a subprocess
-launched via the resource launcher built by build_resource_launcher(). The
+launched via the single-rank launcher built by build_single_rank_launcher(). The
 runner writes its return value to <job_path>/PBX_HOOK_RETURN, which this
 helper reads and deletes before returning to the orchestrator.
 """
@@ -13,11 +13,19 @@ import logging
 import shlex
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 
 PBX_HOOK_RETURN_FILE = "PBX_HOOK_RETURN"
 ALLOWED_METHODS = {"preprocess", "postprocess"}
+
+# GPU-visibility env vars that the orchestrator's outer allocation may have
+# set and that would otherwise leak into the hook subprocess. Always unset
+# before exporting whatever ResourceAssignment.get_env_vars() returned for
+# this specific job — so CPU-only jobs see no GPUs and GPU jobs see exactly
+# their assigned GPUs. Keep in sync with get_env_vars() in
+# parslbox/resource_manager/models.py.
+_GPU_VISIBILITY_VARS = ("CUDA_VISIBLE_DEVICES", "ZE_AFFINITY_MASK")
 
 
 def _json_safe(value):
@@ -30,8 +38,9 @@ def _json_safe(value):
 def dispatch_hook_on_compute(
     app_name: str,
     method_name: str,
-    resource_launcher: str,
+    single_rank_launcher: str,
     env_file: Optional[str],
+    gpu_env_vars: Optional[Dict[str, str]] = None,
     **method_kwargs,
 ) -> Optional[str]:
     """
@@ -41,9 +50,16 @@ def dispatch_hook_on_compute(
         app_name: Job's `app_name` field. Resolved by app_registry.get_app_instance()
                   on the compute node.
         method_name: "preprocess" or "postprocess".
-        resource_launcher: PBX_RESOURCE_LAUNCHER prefix string from build_resource_launcher().
+        single_rank_launcher: PBX_SINGLE_RANK_LAUNCHER prefix string from build_single_rank_launcher().
         env_file: Optional env file to `source` before invoking the runner.
                   None/empty skips the source step.
+        gpu_env_vars: Optional dict of GPU-visibility env vars (typically
+            CUDA_VISIBLE_DEVICES / ZE_AFFINITY_MASK) computed for THIS job
+            by ResourceAssignment.get_env_vars(). Always exported in the
+            bash inner command — after a defensive `unset` of all known
+            GPU-visibility vars — so the orchestrator's allocation-wide
+            values cannot leak into the hook. Empty/None → no exports, but
+            the unset still runs (CPU-only jobs see no GPUs).
         **method_kwargs: Keyword args forwarded to the hook method. MUST include
             `job_path` (used as the location of the args JSON and return files).
 
@@ -81,21 +97,29 @@ def dispatch_hook_on_compute(
     return_file = job_path / PBX_HOOK_RETURN_FILE
     return_file.unlink(missing_ok=True)
 
-    # Build inner shell command. The resource_launcher string is trusted as-is
-    # (it's built by our own code, not user-supplied). Other interpolated paths
-    # are shlex-quoted to handle spaces/quotes.
-    inner = (
-        f"{resource_launcher} python -m parslbox.apps._hook_runner "
+    # Build inner shell command. Order matters:
+    #   1. source env_file       — user modules/conda first
+    #   2. unset GPU vars        — defensive clear of orchestrator's leaked values
+    #   3. export gpu_env_vars   — set ONLY this job's GPU visibility
+    #   4. <launcher> python ... — mpiexec/srun propagates the shell env to compute
+    # The single_rank_launcher string is trusted as-is (built by our own code).
+    # Interpolated paths/values are shlex-quoted to handle spaces/quotes.
+    parts = []
+    if env_file:
+        parts.append(f"source {shlex.quote(env_file)}")
+    parts.append("unset " + " ".join(_GPU_VISIBILITY_VARS))
+    for k, v in (gpu_env_vars or {}).items():
+        parts.append(f"export {k}={shlex.quote(v)}")
+    parts.append(
+        f"{single_rank_launcher} python -m parslbox.apps._hook_runner "
         f"{shlex.quote(app_name)} {shlex.quote(method_name)} {shlex.quote(str(args_file))}"
     )
-    if env_file:
-        inner = f"source {shlex.quote(env_file)} && {inner}"
+    inner = " && ".join(parts)
     cmd = ["bash", "-c", inner]
 
-    # Run from the job directory so relative paths in resource_launcher
-    # (e.g. mpiexec's `--rankfile ./rankfile_pbx_mpich_N.txt`, GPU wrapper
-    # scripts) resolve correctly — same convention as the bash_app, which
-    # `cd`s to job_path at the top of its generated script.
+    # Run from the job directory so the launcher and any relative paths
+    # the hook uses resolve correctly — same convention as the bash_app,
+    # which `cd`s to job_path at the top of its generated script.
     try:
         proc = subprocess.run(
             cmd,

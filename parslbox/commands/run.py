@@ -20,7 +20,7 @@ from parslbox.utils.pbx_config_utils import load_app_config, is_app_configured, 
 from parslbox.database import database
 from parslbox.resource_manager.node_failure_tracker import NodeHealth
 from parslbox.resource_manager.mpi_config import load_mpi_config
-from parslbox.resource_manager.mpi_command_builder import build_mpi_command, build_resource_launcher
+from parslbox.resource_manager.mpi_command_builder import build_mpi_command, build_single_rank_launcher
 from parslbox.resource_manager.exceptions import InsufficientResources
 from parslbox.resource_manager.models import create_job_resource_spec
 from parslbox.resource_manager.job_tracker import JobTracker
@@ -131,19 +131,22 @@ def create_parsl_future(job, app_instance, app_config, mpi_config, config_name, 
 
         logger.info(f"Job {job_id}: Generated MPI command - {mpi_commands.get('PBX_MPI_PREFIX', 'None')}")
 
-        # Build the single-rank resource launcher when the app opts into
-        # RUN_HOOKS_ON_COMPUTE — used to wrap the hook subprocess so
-        # preprocess/postprocess execute on the assigned compute node.
+        # Build the single-rank launcher + per-job GPU env vars when the app
+        # opts into RUN_HOOKS_ON_COMPUTE. The launcher lands the hook subprocess
+        # on the assigned compute node; the GPU env vars (forwarded explicitly
+        # in the bash inner cmd) constrain GPU visibility for that subprocess.
+        hook_gpu_env_vars = None
         if app_instance.RUN_HOOKS_ON_COMPUTE:
-            resource_launcher = build_resource_launcher(
+            single_rank_launcher = build_single_rank_launcher(
                 mpi_config=mpi_config,
-                system_config=system_config,
                 assignment=assignment,
-                job_spec=job_spec,
-                job_path=str(job_path),
             )
-            mpi_commands['PBX_RESOURCE_LAUNCHER'] = resource_launcher
-            logger.info(f"Job {job_id}: Resource launcher - {resource_launcher}")
+            mpi_commands['PBX_SINGLE_RANK_LAUNCHER'] = single_rank_launcher
+            logger.info(f"Job {job_id}: Single-rank launcher - {single_rank_launcher}")
+            hook_gpu_env_vars = assignment.get_env_vars(
+                mpi_backend=mpi_commands.get('PBX_MPI_BACKEND'),
+                tile_mode=mpi_commands.get('PBX_GPU_TILE_MODE', False),
+            )
 
         # Run preprocessing — either in-process on the head node (default) or
         # dispatched to the assigned compute node when the app opts in.
@@ -152,8 +155,9 @@ def create_parsl_future(job, app_instance, app_config, mpi_config, config_name, 
             dispatch_hook_on_compute(
                 app_name=job['app'],
                 method_name='preprocess',
-                resource_launcher=mpi_commands['PBX_RESOURCE_LAUNCHER'],
+                single_rank_launcher=mpi_commands['PBX_SINGLE_RANK_LAUNCHER'],
                 env_file=job.get('env_file'),
+                gpu_env_vars=hook_gpu_env_vars,
                 # method kwargs (forwarded to preprocess)
                 job_id=job_id,
                 job_path=job_path,
@@ -187,18 +191,19 @@ def create_parsl_future(job, app_instance, app_config, mpi_config, config_name, 
             stderr=(str(job_path / f"pbx_job_{job_id}.err"), 'w')
         )
         
-        # Add to futures list. Stash resource_launcher and env_file so the
-        # postprocess wrap below can dispatch to the same assigned compute
-        # node — by the time the future completes, the local mpi_commands
-        # dict here is out of scope.
+        # Add to futures list. Stash single_rank_launcher, env_file, and
+        # gpu_env_vars so the postprocess wrap below can dispatch to the same
+        # assigned compute node — by the time the future completes, the local
+        # mpi_commands dict here is out of scope.
         futures.append({
             'future': fut,
             'job': job,
             'app_instance': app_instance,
             'assignment': assignment,
             'resource_manager': resource_manager,
-            'resource_launcher': mpi_commands.get('PBX_RESOURCE_LAUNCHER'),
+            'single_rank_launcher': mpi_commands.get('PBX_SINGLE_RANK_LAUNCHER'),
             'env_file': job.get('env_file'),
+            'gpu_env_vars': hook_gpu_env_vars,
         })
         
         logger.info(f"Job {job_id}: Successfully created Parsl future")
@@ -816,8 +821,9 @@ def run(
                             final_status = dispatch_hook_on_compute(
                                 app_name=job['app'],
                                 method_name='postprocess',
-                                resource_launcher=item['resource_launcher'],
+                                single_rank_launcher=item['single_rank_launcher'],
                                 env_file=item['env_file'],
+                                gpu_env_vars=item['gpu_env_vars'],
                                 # method kwargs (forwarded to postprocess)
                                 job_id=job_id,
                                 job_path=job_path,

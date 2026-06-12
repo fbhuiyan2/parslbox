@@ -683,104 +683,56 @@ def build_mpi_command(
     }
 
 
-def build_resource_launcher(
+def build_single_rank_launcher(
     mpi_config: MPIConfig,
-    system_config: 'SystemConfig',
     assignment: 'ResourceAssignment',
-    job_spec: 'JobResourceSpec',
-    job_path: Optional[str] = None
 ) -> str:
     """
-    Build a single-process MPI launcher used to land hook subprocesses on
-    the assigned compute node (gated by an app's RUN_HOOKS_ON_COMPUTE flag).
+    Build a minimal 1-rank launcher that lands a subprocess on the FIRST
+    assigned compute node. No rankfile, no CPU binding, no GPU wrapper.
 
-    The launcher's only role is to place a single process on the assigned
-    node with the assigned CPU/GPU resources. The hook (or any future caller)
-    handles its own logic.
+    Used by dispatch_hook_on_compute() to run preprocess/postprocess hooks
+    on the assigned node. The hook has access to the whole node's CPUs;
+    GPU isolation is the caller's responsibility (handled in hook_dispatch.py
+    via explicit `unset` + `export` of CUDA_VISIBLE_DEVICES / ZE_AFFINITY_MASK
+    in the bash inner command). Hooks are assumed to be light (file staging,
+    validation, post-analysis) — full-node CPU access is acceptable.
 
-    This function reuses MPICommandBuilder.build_command() with modified inputs:
-    - A synthetic JobResourceSpec that forces -n 1 --ppn 1 output, regardless
-      of the actual job's resource spec (which can be multi-node, multi-GPU, etc.)
-    - A modified ResourceAssignment preserving ALL node IDs/hostnames (for
-      hostlist) but with CPU cores consolidated into rank 0 on node 0
-    - No GPU wrapper — GPU binding is via CUDA_VISIBLE_DEVICES env var
-      (already exported in the bash engine via _format_env_vars())
-
-    All user MPI config settings are respected (use_hostlist, cpu_bind_method,
-    use_short_hostnames, disable/add overrides). Nothing is forced or overridden.
+    Per-backend command shape:
+      MPICH   : mpiexec -n 1 --ppn 1 -hosts <host>
+      OpenMPI : mpirun -np 1 -H <host>
+      SRUN    : srun --overlap --cpu-bind=none -N 1 -n 1 -w <host>
+                  --overlap: required so this inner srun coexists with the
+                    bash_app's own srun step on the same allocation/node.
+                  --cpu-bind=none: explicitly disable per-CPU binding so
+                    slurm.conf defaults don't try to acquire specific cores
+                    and conflict with the bash_app's mask_cpu binding.
 
     Args:
-        mpi_config: MPI configuration (used for backend type and options)
-        system_config: System configuration
-        assignment: Resource assignment from the resource manager
-        job_spec: Original job resource specification
-        job_path: Optional job directory for generated files
+        mpi_config: MPI configuration (backend + use_short_hostnames consulted).
+        assignment: Resource assignment from the resource manager (only the
+            first hostname is used).
 
     Returns:
-        Resource launcher command string
+        Launcher command string (no trailing space; caller composes with the
+        rest of the bash inner command).
     """
-    from parslbox.resource_manager.models import JobResourceSpec, ResourceAssignment
+    hostnames = list(assignment.hostnames)
+    if mpi_config.use_short_hostnames:
+        hostnames = [h.split('.')[0] for h in hostnames]
+    first_host = hostnames[0]
+    mpi_cmd = mpi_config.get_mpi_command()
 
-    excluded_cores = getattr(system_config, "EXCLUDE_CORES", None) or []
-    effective_cores = system_config.CORES_PER_NODE - len(excluded_cores)
-
-    # Synthetic spec to make MPICommandBuilder produce -n 1 --ppn 1.
-    # The actual job can be any size — PBX always launches 1 process
-    # for the launcher since the caller handles its own logic.
-    # node_occupancy starts at 1.0 and is recalculated below from the
-    # actual core assignment, so the srun step is scoped to exactly the
-    # resources the resource manager allocated (not the original request,
-    # which may differ due to excluded cores or rounding).
-    single_spec = JobResourceSpec(
-        job_id=job_spec.job_id,
-        num_nodes=1,
-        ngpus=0,  # No GPU handling via MPI — use env vars instead
-        node_occupancy=1.0,
-        ranks_per_node=1,
-    )
-
-    # Consolidate all CPU cores from all ranks on node 0 → rank 0
-    all_cores = []
-    if assignment.cpu_assignments and assignment.cpu_assignments[0]:
-        for rank, cores in assignment.cpu_assignments[0].items():
-            all_cores.extend(cores)
-    all_cores = sorted(set(all_cores))
-
-    # Recalculate occupancy from actual assigned cores so that
-    # _should_add_srun_exact correctly identifies sub-node jobs.
-    if len(assignment.node_ids) == 1 and all_cores and effective_cores > 0:
-        single_spec.node_occupancy = min(1.0, len(all_cores) / effective_cores)
-
-    # Preserve ALL nodes/hostnames for the hostlist,
-    # but only rank 0 on node 0 has CPU assignments
-    n_nodes = len(assignment.node_ids)
-    launcher_assignment = ResourceAssignment(
-        job_id=assignment.job_id,
-        node_ids=assignment.node_ids,
-        hostnames=assignment.hostnames,
-        gpu_assignments=[{} for _ in range(n_nodes)],
-        cpu_assignments=(
-            [{0: all_cores}] + [{} for _ in range(n_nodes - 1)]
-            if all_cores
-            else [{} for _ in range(n_nodes)]
-        ),
-        node_occupancy=assignment.node_occupancy,
-    )
-
-    # For srun multi-node single-rank launchers: add --nodes=N and remove
-    # --ntasks-per-node so srun reserves all assigned nodes but
-    # launches only 1 process.
-    launcher_config = mpi_config
-    if mpi_config.backend == MPIBackend.SRUN and n_nodes > 1:
-        from dataclasses import replace
-        launcher_config = replace(
-            mpi_config,
-            add=list(mpi_config.add) + [f"--nodes={n_nodes}"],
-            disable=list(mpi_config.disable) + ["--ntasks-per-node"],
+    if mpi_config.backend == MPIBackend.SRUN:
+        prefix = f"{mpi_cmd} --overlap --cpu-bind=none -N 1 -n 1 -w {first_host}"
+    elif mpi_config.backend == MPIBackend.MPICH:
+        prefix = f"{mpi_cmd} -n 1 --ppn 1 -hosts {first_host}"
+    elif mpi_config.backend == MPIBackend.OPENMPI:
+        prefix = f"{mpi_cmd} -np 1 -H {first_host}"
+    else:
+        raise ValueError(
+            f"Unsupported MPI backend for single-rank launcher: {mpi_config.backend}"
         )
 
-    builder = MPICommandBuilder(launcher_config, system_config)
-    prefix = builder.build_command(launcher_assignment, single_spec, job_path)
-
-    logger.info(f"Job {assignment.job_id}: Resource launcher: {prefix}")
+    logger.info(f"Job {assignment.job_id}: Single-rank launcher: {prefix}")
     return prefix
