@@ -131,9 +131,9 @@ def dispatch_hook_on_compute(
         logger.info(
             f"Job {job_id}: hook {method_name} returned rc={proc.returncode}"
         )
-        # SMOKE-TEST DEBUG: temporarily INFO so the hook_runner host+env
-        # log line is visible without enabling DEBUG. Revert to .debug
-        # after the Aurora smoke test confirms compute-side execution.
+        # INFO (not DEBUG) so the hook_runner's one-line confirmation
+        # (host + GPU env) is visible by default — proves the hook landed
+        # on the right compute node with the right GPU visibility.
         if proc.stdout:
             logger.info(f"Job {job_id}: hook {method_name} stdout:\n{proc.stdout}")
         if proc.stderr:

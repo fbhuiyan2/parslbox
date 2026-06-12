@@ -71,13 +71,10 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 2
 
-        logger.info(f"hook_runner: app={app_name} method={method_name}")
-        # SMOKE-TEST DEBUG (temporary — remove after confirming compute-side
-        # execution + env propagation work on Aurora).
         logger.info(
-            f"hook_runner: host={os.uname().nodename} "
-            f"CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES', '<unset>')!r} "
-            f"ZE_AFFINITY_MASK={os.environ.get('ZE_AFFINITY_MASK', '<unset>')!r}"
+            f"hook_runner: {method_name} app={app_name} host={os.uname().nodename} "
+            f"CUDA={os.environ.get('CUDA_VISIBLE_DEVICES', '<unset>')} "
+            f"ZE={os.environ.get('ZE_AFFINITY_MASK', '<unset>')}"
         )
         app = get_app_instance(app_name)
         method = getattr(app, method_name)
@@ -85,7 +82,6 @@ def main(argv: list[str] | None = None) -> int:
 
         return_file = job_path / PBX_HOOK_RETURN_FILE
         return_file.write_text(str(result) if result is not None else "")
-        logger.info(f"hook_runner: wrote {return_file}")
         return 0
 
     except Exception:
