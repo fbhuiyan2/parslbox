@@ -15,6 +15,7 @@ PBX_JOB_STATUS_REPORT idiom in parslbox/apps/utils.py + parslbox/apps/python.py)
 
 import json
 import logging
+import os
 import sys
 import traceback
 from pathlib import Path
@@ -71,6 +72,13 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
         logger.info(f"hook_runner: app={app_name} method={method_name}")
+        # SMOKE-TEST DEBUG (temporary — remove after confirming compute-side
+        # execution + env propagation work on Aurora).
+        logger.info(
+            f"hook_runner: host={os.uname().nodename} "
+            f"CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES', '<unset>')!r} "
+            f"ZE_AFFINITY_MASK={os.environ.get('ZE_AFFINITY_MASK', '<unset>')!r}"
+        )
         app = get_app_instance(app_name)
         method = getattr(app, method_name)
         result = method(**kwargs)

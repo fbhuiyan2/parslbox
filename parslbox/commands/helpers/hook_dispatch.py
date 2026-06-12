@@ -131,10 +131,13 @@ def dispatch_hook_on_compute(
         logger.info(
             f"Job {job_id}: hook {method_name} returned rc={proc.returncode}"
         )
+        # SMOKE-TEST DEBUG: temporarily INFO so the hook_runner host+env
+        # log line is visible without enabling DEBUG. Revert to .debug
+        # after the Aurora smoke test confirms compute-side execution.
         if proc.stdout:
-            logger.debug(f"Job {job_id}: hook {method_name} stdout:\n{proc.stdout}")
+            logger.info(f"Job {job_id}: hook {method_name} stdout:\n{proc.stdout}")
         if proc.stderr:
-            logger.debug(f"Job {job_id}: hook {method_name} stderr:\n{proc.stderr}")
+            logger.info(f"Job {job_id}: hook {method_name} stderr:\n{proc.stderr}")
         if return_file.is_file():
             return return_file.read_text().strip() or None
         return None
