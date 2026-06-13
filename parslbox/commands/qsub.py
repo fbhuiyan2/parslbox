@@ -29,8 +29,7 @@ def submit_to_scheduler(
     config_path: Optional[Path] = None,
     sched_opts: Optional[List[str]] = None,
     dynamic: bool = True,
-    restart: bool = False,
-    max_restarts: Optional[int] = None,
+    respawn: Optional[int] = None,
 ):
     """
     Submit a PBS job via qsub. Thin wrapper around submit_job().
@@ -52,8 +51,7 @@ def submit_to_scheduler(
         scheduler_type="pbs",
         submit_command="qsub",
         dynamic=dynamic,
-        restart=restart,
-        max_restarts=max_restarts,
+        respawn=respawn,
     )
 
 
@@ -113,13 +111,9 @@ def qsub(
         bool,
         typer.Option("--dynamic/--static", help="Dynamically discover new jobs during run (default: dynamic).")
     ] = True,
-    restart: Annotated[
-        bool,
-        typer.Option("--restart", help="Enable self-restart: at walltime, mark in-flight jobs as Restart and resubmit a new allocation automatically. Requires --max-restarts.")
-    ] = False,
-    max_restarts: Annotated[
+    respawn: Annotated[
         Optional[int],
-        typer.Option("--max-restarts", help="Number of automatic resubmissions to perform (required with --restart).")
+        typer.Option("--respawn", help="Enable the self-respawn chain: at walltime, mark in-flight jobs Restart and auto-submit the next link. The integer is the number of remaining auto-resubmissions in the chain (decremented per link; 0 = no resubmit, chain ends after this run).")
     ] = None,
 ):
     """
@@ -150,8 +144,7 @@ def qsub(
             loglevel=loglevel,
             sched_opts=sched_opts,
             dynamic=dynamic,
-            restart=restart,
-            max_restarts=max_restarts,
+            respawn=respawn,
         )
 
         # CLI-specific output formatting
@@ -171,13 +164,13 @@ def qsub(
         typer.secho(f"\U0001f4dd Generated submit script: {result['submit_file']}", fg=typer.colors.GREEN)
         console.print(render_submit_script_panel(result['submit_file']))
 
-        if result.get('restart_template_file'):
+        if result.get('respawn_template_file'):
             typer.secho(
-                f"\U0001f501 Generated restart template: {result['restart_template_file']}",
+                f"\U0001f501 Generated respawn template: {result['respawn_template_file']}",
                 fg=typer.colors.GREEN,
             )
             console.print(render_submit_script_panel(
-                result['restart_template_file'], title="Restart Template"
+                result['respawn_template_file'], title="Respawn Template"
             ))
             typer.secho(
                 "ℹ️  Placeholders <<PBX_AUTO_SELECT>> / <<PBX_AUTO_NODES>> "

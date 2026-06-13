@@ -109,7 +109,7 @@ class AppBase(ABC):
         Restart hook called at `pbx run` startup for every job in `Restart`
         status, before the run loop touches it. Fires whether the Restart
         status came from the previous link's walltime kill (under
-        `--restart-mode`) or was set manually by the user via
+        `--respawn`) or was set manually by the user via
         `pbx update --status Restart`.
 
         Three scenes, encoded by whether the subclass overrides this method:

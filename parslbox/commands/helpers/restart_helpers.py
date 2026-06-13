@@ -1,10 +1,9 @@
 """
-Helpers for `pbx run --restart-mode`: the startup hook that calls each app's
-`restart()` for `Restart`-status jobs, and the walltime-time resubmit logic
-that generates the next per-link script from `restart_template.sh` and
-hands it to qsub/sbatch.
-
-See docs/restart.md for the end-to-end design.
+Helpers for `pbx run` Restart-status handling and the `--respawn` chain:
+the startup hook that calls each app's `restart()` for `Restart`-status jobs
+(always on, regardless of --respawn), and the walltime-time resubmit logic
+that generates the next per-link script from `respawn_template.sh` and
+hands it to qsub/sbatch (gated on --respawn).
 """
 
 import os
@@ -23,9 +22,9 @@ _PATCHABLE_FIELDS = {
     "ranks_per_node", "mpi_opts", "tag",
 }
 
-# Required args that MUST be present in a restart_template.sh's `pbx run` line.
+# Required args that MUST be present in a respawn_template.sh's `pbx run` line.
 # If any of these are missing, the chain stops with a clear error.
-_REQUIRED_RUN_ARGS = ("--restart-mode", "--max-restarts", "--config", "--run-dir")
+_REQUIRED_RUN_ARGS = ("--respawn", "--config", "--run-dir")
 
 
 # ============================================================
@@ -149,20 +148,20 @@ def validate_pbx_run_line(template_text: str) -> str:
     """
     run_lines = [
         line for line in template_text.splitlines()
-        if "pbx run" in line and "--restart-mode" in line
+        if "pbx run" in line and "--respawn" in line
     ]
     if not run_lines:
         raise ValueError(
-            "restart_template.sh has no `pbx run --restart-mode ...` line. "
+            "respawn_template.sh has no `pbx run --respawn ...` line. "
             "Restore the line or regenerate the template via a fresh "
-            "`pbx qsub --restart`."
+            "`pbx qsub --respawn N`."
         )
     # If the template has multiple, pick the last (matches the template structure).
     run_line = run_lines[-1]
     missing = [arg for arg in _REQUIRED_RUN_ARGS if arg not in run_line]
     if missing:
         raise ValueError(
-            f"restart_template.sh's `pbx run` line is missing required arg(s): "
+            f"respawn_template.sh's `pbx run` line is missing required arg(s): "
             f"{', '.join(missing)}. Chain stopped."
         )
     return run_line
@@ -207,36 +206,36 @@ def _substitute_resource_placeholders(
     return out
 
 
-def _decrement_max_restarts(text: str, new_value: int) -> str:
-    """Rewrite `--max-restarts <anything>` to `--max-restarts <new_value>`."""
+def _decrement_respawn(text: str, new_value: int) -> str:
+    """Rewrite `--respawn <anything>` to `--respawn <new_value>`."""
     return re.sub(
-        r"(--max-restarts)\s+\S+",
-        f"--max-restarts {new_value}",
+        r"(--respawn)\s+\S+",
+        f"--respawn {new_value}",
         text,
     )
 
 
 def _next_link_index(run_dir: Path) -> int:
     """Return next per-link index (1, 2, 3, ...) based on existing files."""
-    existing = list(run_dir.glob("restart_link_*.sh"))
+    existing = list(run_dir.glob("respawn_link_*.sh"))
     return len(existing) + 1
 
 
-def build_restart_link_script(
+def build_respawn_link_script(
     template_path: Path,
     run_dir: Path,
-    current_max_restarts: int,
+    current_respawn: int,
     scheduler_type: str,
     computed_nodes: int,
     submit_file_path: Path,
 ) -> Path:
     """
-    Generate the next chain link's submit script from `restart_template.sh`.
+    Generate the next chain link's submit script from `respawn_template.sh`.
 
     Reads the template, validates its `pbx run` line, substitutes resource
     placeholders (capped at the original allocation), rewrites the
-    `--max-restarts` value to `current_max_restarts - 1`, and writes the
-    result to `restart_link_<idx>.sh` in `run_dir`.
+    `--respawn` value to `current_respawn - 1`, and writes the result to
+    `respawn_link_<idx>.sh` in `run_dir`.
 
     Returns the path to the new link script.
 
@@ -247,7 +246,7 @@ def build_restart_link_script(
     """
     if not template_path.exists():
         raise FileNotFoundError(
-            f"restart_template.sh not found at {template_path}. "
+            f"respawn_template.sh not found at {template_path}. "
             "Cannot resubmit."
         )
     text = template_path.read_text()
@@ -255,15 +254,15 @@ def build_restart_link_script(
 
     original_cap = extract_original_allocation(submit_file_path, scheduler_type)
     text = _substitute_resource_placeholders(text, computed_nodes, original_cap)
-    text = _decrement_max_restarts(text, current_max_restarts - 1)
+    text = _decrement_respawn(text, current_respawn - 1)
 
     idx = _next_link_index(run_dir)
-    link_path = run_dir / f"restart_link_{idx}.sh"
+    link_path = run_dir / f"respawn_link_{idx}.sh"
     link_path.write_text(text)
     return link_path
 
 
-def submit_restart_link(
+def submit_respawn_link(
     link_path: Path, scheduler_command: str, run_dir: Path, logger
 ) -> bool:
     """

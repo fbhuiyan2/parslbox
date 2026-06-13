@@ -3,13 +3,13 @@ Phase 4 tests: orchestrator restart-mode behavior.
 
 Covers:
 - The three-scene `apply_restart_hook` contract (dict / None / raise).
-- restart_helpers utilities (placeholder substitution, counter decrement,
+- restart_helpers utilities (placeholder substitution, respawn-count decrement,
   template validation, original-cap extraction, link script generation,
   resubmit subprocess wrapper).
 - `compute_required_nodes` extracted helper (Phase 5).
-- `perform_shutdown` branching: walltime + restart-mode-on (Restart vs
-  Failed), walltime + restart-mode-off (Killed), signal path (always
-  Killed regardless of restart_ctx).
+- `perform_shutdown` branching: walltime + respawn-on (Restart vs Failed),
+  walltime + respawn-off (Killed), signal path (always Killed regardless of
+  respawn_ctx).
 """
 
 import os
@@ -162,34 +162,32 @@ class TestApplyRestartHook:
 
 
 # ============================================================
-# Regression: apply_restart_hook must NOT be gated on restart_mode
+# Regression: apply_restart_hook must NOT be gated on the respawn flag
 #
 # A user may manually mark a job Restart (via `pbx update --status Restart`)
-# in a non-restart-mode run — e.g., on clusters that don't allow qsub from
+# in a non-respawn run — e.g., on clusters that don't allow qsub from
 # compute nodes, when debugging interactively, or when one job dies while
 # the rest of the run continues. The app's restart() hook should still fire
 # so checkpoint-resume logic works in that scenario. Previously gated by
-# `if restart_mode:` in run.py; now must be unconditional.
+# `if restart_mode:` in run.py; now must be unconditional, regardless of
+# whether --respawn is set.
 # ============================================================
 
 
-class TestRestartHookDecoupledFromRestartMode:
+class TestRestartHookDecoupledFromRespawn:
     def test_run_py_calls_apply_restart_hook_unconditionally(self):
-        """Source-level guard: `apply_restart_hook` must NOT be inside an
-        `if restart_mode:` block in run.py. The hook fires for every
-        Restart-status job, regardless of orchestrator mode.
+        """Source-level guard: `apply_restart_hook` must NOT be inside any
+        `if respawn ...:` / `if restart_mode:` block in run.py. The hook
+        fires for every Restart-status job, regardless of orchestrator mode.
 
-        Pattern-based test (mirrors test_run_py_does_not_read_job_app_name
-        in test_hooks_on_compute.py): cheaper than spinning up the full
-        typer command and locks in the contract against silent re-gating.
+        Pattern-based test: cheaper than spinning up the full typer command
+        and locks in the contract against silent re-gating.
         """
         import re
         from pathlib import Path
         import parslbox.commands.run as run_mod
 
         src = Path(run_mod.__file__).read_text()
-        # Find the apply_restart_hook call site, then walk backwards looking
-        # for the nearest enclosing `if restart_mode:` within ~40 lines.
         lines = src.splitlines()
         hook_call_lines = [
             i for i, line in enumerate(lines)
@@ -198,18 +196,17 @@ class TestRestartHookDecoupledFromRestartMode:
         assert hook_call_lines, (
             "apply_restart_hook call site not found in run.py — test stale"
         )
+        # Match `if respawn ...:` (any expression involving the respawn var)
+        # and also the legacy `if restart_mode:` form.
+        gate_re = re.compile(r"\s*if\s+(respawn|restart_mode)\b")
         for hook_line in hook_call_lines:
-            # Look backwards up to 40 lines for an `if restart_mode:` gate
             window = lines[max(0, hook_line - 40):hook_line]
-            gating = [
-                ln for ln in window
-                if re.match(r"\s*if\s+restart_mode\s*:", ln)
-            ]
+            gating = [ln for ln in window if gate_re.match(ln)]
             assert not gating, (
                 f"apply_restart_hook at line {hook_line + 1} is gated by "
-                f"`if restart_mode:` ({gating[0].strip()!r}). The hook must "
-                f"fire for any Restart-status job, regardless of "
-                f"--restart-mode. See test docstring for rationale."
+                f"{gating[0].strip()!r}. The hook must fire for any "
+                f"Restart-status job, regardless of --respawn. See test "
+                f"docstring for rationale."
             )
 
 
@@ -288,17 +285,17 @@ class TestPlaceholderSubstitution:
         assert "select=1" in out
 
 
-class TestDecrementMaxRestarts:
+class TestDecrementRespawn:
     def test_simple_replace(self):
-        out = restart_helpers._decrement_max_restarts(
-            "pbx run --restart-mode --max-restarts 5 --config polaris", 4
+        out = restart_helpers._decrement_respawn(
+            "pbx run --respawn 5 --config polaris", 4
         )
-        assert "--max-restarts 4" in out
-        assert "--max-restarts 5" not in out
+        assert "--respawn 4" in out
+        assert "--respawn 5" not in out
 
     def test_preserves_other_args(self):
-        line = "pbx run --restart-mode --max-restarts 3 --config polaris --apps lammps-kk"
-        out = restart_helpers._decrement_max_restarts(line, 2)
+        line = "pbx run --respawn 3 --config polaris --apps lammps-kk"
+        out = restart_helpers._decrement_respawn(line, 2)
         assert "--apps lammps-kk" in out
         assert "--config polaris" in out
 
@@ -306,8 +303,7 @@ class TestDecrementMaxRestarts:
 class TestValidatePbxRunLine:
     def _line(self, **overrides):
         defaults = {
-            "restart-mode": True,
-            "max-restarts": 3,
+            "respawn": 3,
             "config": "polaris",
             "run-dir": "./",
         }
@@ -325,13 +321,14 @@ class TestValidatePbxRunLine:
     def test_all_args_present(self):
         assert restart_helpers.validate_pbx_run_line(self._line())
 
-    def test_missing_max_restarts_raises(self):
-        line = "exec pbx run --restart-mode --config polaris --run-dir ./"
-        with pytest.raises(ValueError, match="max-restarts"):
+    def test_missing_respawn_raises(self):
+        # No --respawn at all → not even recognized as a respawn line
+        line = "exec pbx run --config polaris --run-dir ./"
+        with pytest.raises(ValueError, match="no `pbx run"):
             restart_helpers.validate_pbx_run_line(line)
 
     def test_missing_config_raises(self):
-        line = "exec pbx run --restart-mode --max-restarts 3 --run-dir ./"
+        line = "exec pbx run --respawn 3 --run-dir ./"
         with pytest.raises(ValueError, match="config"):
             restart_helpers.validate_pbx_run_line(line)
 
@@ -380,61 +377,59 @@ class TestDetectSchedulerCommand:
 
 
 # ============================================================
-# build_restart_link_script — full integration
+# build_respawn_link_script — full integration
 # ============================================================
 
 
-class TestBuildRestartLinkScript:
+class TestBuildRespawnLinkScript:
     def _make_template(self, run_dir):
         (run_dir / "submit.sh").write_text(
             "#!/bin/bash\n#PBS -l select=4\n"
-            "exec pbx run --restart-mode --max-restarts 3 "
-            "--config polaris --run-dir ./\n"
+            "exec pbx run --respawn 3 --config polaris --run-dir ./\n"
         )
-        (run_dir / "restart_template.sh").write_text(
+        (run_dir / "respawn_template.sh").write_text(
             "#!/bin/bash\n#PBS -l select=<<PBX_AUTO_SELECT>>\n"
-            "exec pbx run --restart-mode --max-restarts 3 "
-            "--config polaris --run-dir ./\n"
+            "exec pbx run --respawn 3 --config polaris --run-dir ./\n"
         )
 
     def test_generates_link_1_with_substitutions(self, tmp_path):
         self._make_template(tmp_path)
-        link = restart_helpers.build_restart_link_script(
-            template_path=tmp_path / "restart_template.sh",
+        link = restart_helpers.build_respawn_link_script(
+            template_path=tmp_path / "respawn_template.sh",
             run_dir=tmp_path,
-            current_max_restarts=3,
+            current_respawn=3,
             scheduler_type="pbs",
             computed_nodes=2,
             submit_file_path=tmp_path / "submit.sh",
         )
-        assert link == tmp_path / "restart_link_1.sh"
+        assert link == tmp_path / "respawn_link_1.sh"
         text = link.read_text()
         # placeholder replaced
         assert "select=2" in text
         assert "<<PBX_AUTO_SELECT>>" not in text
         # counter decremented
-        assert "--max-restarts 2" in text
-        assert "--max-restarts 3" not in text
+        assert "--respawn 2" in text
+        assert "--respawn 3" not in text
 
     def test_increments_link_index_across_calls(self, tmp_path):
         self._make_template(tmp_path)
         for expected_idx in (1, 2, 3):
-            link = restart_helpers.build_restart_link_script(
-                template_path=tmp_path / "restart_template.sh",
+            link = restart_helpers.build_respawn_link_script(
+                template_path=tmp_path / "respawn_template.sh",
                 run_dir=tmp_path,
-                current_max_restarts=3,
+                current_respawn=3,
                 scheduler_type="pbs",
                 computed_nodes=1,
                 submit_file_path=tmp_path / "submit.sh",
             )
-            assert link == tmp_path / f"restart_link_{expected_idx}.sh"
+            assert link == tmp_path / f"respawn_link_{expected_idx}.sh"
 
     def test_cap_applied(self, tmp_path):
         self._make_template(tmp_path)
-        link = restart_helpers.build_restart_link_script(
-            template_path=tmp_path / "restart_template.sh",
+        link = restart_helpers.build_respawn_link_script(
+            template_path=tmp_path / "respawn_template.sh",
             run_dir=tmp_path,
-            current_max_restarts=3,
+            current_respawn=3,
             scheduler_type="pbs",
             computed_nodes=100,  # huge
             submit_file_path=tmp_path / "submit.sh",  # original = 4
@@ -443,24 +438,24 @@ class TestBuildRestartLinkScript:
 
     def test_missing_template_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
-            restart_helpers.build_restart_link_script(
+            restart_helpers.build_respawn_link_script(
                 template_path=tmp_path / "absent.sh",
                 run_dir=tmp_path,
-                current_max_restarts=2,
+                current_respawn=2,
                 scheduler_type="pbs",
                 computed_nodes=1,
                 submit_file_path=tmp_path / "submit.sh",
             )
 
     def test_broken_template_raises(self, tmp_path):
-        (tmp_path / "restart_template.sh").write_text(
+        (tmp_path / "respawn_template.sh").write_text(
             "#!/bin/bash\necho missing run line\n"
         )
         with pytest.raises(ValueError, match="no `pbx run"):
-            restart_helpers.build_restart_link_script(
-                template_path=tmp_path / "restart_template.sh",
+            restart_helpers.build_respawn_link_script(
+                template_path=tmp_path / "respawn_template.sh",
                 run_dir=tmp_path,
-                current_max_restarts=2,
+                current_respawn=2,
                 scheduler_type="pbs",
                 computed_nodes=1,
                 submit_file_path=tmp_path / "submit.sh",
@@ -468,46 +463,46 @@ class TestBuildRestartLinkScript:
 
 
 # ============================================================
-# submit_restart_link — subprocess success / failure
+# submit_respawn_link — subprocess success / failure
 # ============================================================
 
 
-class TestSubmitRestartLink:
+class TestSubmitRespawnLink:
     def test_success_logs_ok(self, tmp_path):
-        link = tmp_path / "restart_link_1.sh"
+        link = tmp_path / "respawn_link_1.sh"
         link.write_text("#!/bin/bash\n")
         logger = MagicMock()
         with patch(
             "parslbox.commands.helpers.restart_helpers.subprocess.run"
         ) as m:
             m.return_value = MagicMock(returncode=0, stdout="12346.x", stderr="")
-            ok = restart_helpers.submit_restart_link(link, "qsub", tmp_path, logger)
+            ok = restart_helpers.submit_respawn_link(link, "qsub", tmp_path, logger)
         assert ok is True
         logger.info.assert_called()
 
     def test_nonzero_returncode_returns_false(self, tmp_path):
-        link = tmp_path / "restart_link_1.sh"
+        link = tmp_path / "respawn_link_1.sh"
         link.write_text("#!/bin/bash\n")
         logger = MagicMock()
         with patch(
             "parslbox.commands.helpers.restart_helpers.subprocess.run"
         ) as m:
             m.return_value = MagicMock(returncode=1, stdout="", stderr="quota exceeded")
-            ok = restart_helpers.submit_restart_link(link, "qsub", tmp_path, logger)
+            ok = restart_helpers.submit_respawn_link(link, "qsub", tmp_path, logger)
         assert ok is False
         err_text = " ".join(str(c) for c in logger.error.call_args_list)
         assert "quota exceeded" in err_text
         assert "Chain stopped" in err_text
 
     def test_command_not_found(self, tmp_path):
-        link = tmp_path / "restart_link_1.sh"
+        link = tmp_path / "respawn_link_1.sh"
         link.write_text("#!/bin/bash\n")
         logger = MagicMock()
         with patch(
             "parslbox.commands.helpers.restart_helpers.subprocess.run",
             side_effect=FileNotFoundError(),
         ):
-            ok = restart_helpers.submit_restart_link(link, "qsub", tmp_path, logger)
+            ok = restart_helpers.submit_respawn_link(link, "qsub", tmp_path, logger)
         assert ok is False
         err_text = " ".join(str(c) for c in logger.error.call_args_list)
         assert "not found" in err_text
@@ -531,30 +526,29 @@ def _shutdown_fixtures(db_path, active_ids):
 
 
 class TestPerformShutdownBranching:
-    def test_walltime_no_restart_marks_killed(self, db):
+    def test_walltime_no_respawn_marks_killed(self, db):
         jid = _insert_job(db, status="Running")
         sb, jt, pfl = _shutdown_fixtures(db, [jid])
         perform_shutdown(
             status_buffer=sb, job_tracker=jt, parsl_loaded_flag=pfl,
             logger=MagicMock(), reason="walltime", cleanup_parsl=False,
-            restart_ctx=None,
+            respawn_ctx=None,
         )
         assert database.get_jobs_by_ids(db, [jid])[0]["status"] == "Killed"
 
-    def test_walltime_restart_mode_n_gt_0_marks_restart_and_resubmits(self, db, tmp_path):
+    def test_walltime_respawn_gt_0_marks_restart_and_resubmits(self, db, tmp_path):
         jid = _insert_job(db, status="Running")
         sb, jt, pfl = _shutdown_fixtures(db, [jid])
         sb.db_path = db
         system_config = SimpleNamespace(GPUS_PER_NODE=4)
         # Need a template + submit for the resubmit step to succeed.
         (tmp_path / "submit.sh").write_text("#PBS -l select=4\n")
-        (tmp_path / "restart_template.sh").write_text(
+        (tmp_path / "respawn_template.sh").write_text(
             "#!/bin/bash\n#PBS -l select=<<PBX_AUTO_SELECT>>\n"
-            "exec pbx run --restart-mode --max-restarts 3 "
-            "--config polaris --run-dir ./\n"
+            "exec pbx run --respawn 3 --config polaris --run-dir ./\n"
         )
         ctx = {
-            "max_restarts": 3, "run_dir": tmp_path, "system_config": system_config,
+            "respawn": 3, "run_dir": tmp_path, "system_config": system_config,
             "db_path": db, "app_filter": None, "tag_filter": None,
         }
         with patch(
@@ -567,22 +561,22 @@ class TestPerformShutdownBranching:
             perform_shutdown(
                 status_buffer=sb, job_tracker=jt, parsl_loaded_flag=pfl,
                 logger=MagicMock(), reason="walltime", cleanup_parsl=False,
-                restart_ctx=ctx,
+                respawn_ctx=ctx,
             )
         assert database.get_jobs_by_ids(db, [jid])[0]["status"] == "Restart"
         # Resubmit was attempted
         m_sub.assert_called_once()
         # Link script was created with decremented counter
-        link = tmp_path / "restart_link_1.sh"
+        link = tmp_path / "respawn_link_1.sh"
         assert link.exists()
-        assert "--max-restarts 2" in link.read_text()
+        assert "--respawn 2" in link.read_text()
 
-    def test_walltime_restart_mode_n_eq_0_marks_failed_no_resubmit(self, db, tmp_path):
+    def test_walltime_respawn_eq_0_marks_failed_no_resubmit(self, db, tmp_path):
         jid = _insert_job(db, status="Running")
         sb, jt, pfl = _shutdown_fixtures(db, [jid])
         sb.db_path = db
         ctx = {
-            "max_restarts": 0, "run_dir": tmp_path,
+            "respawn": 0, "run_dir": tmp_path,
             "system_config": SimpleNamespace(GPUS_PER_NODE=4),
             "db_path": db, "app_filter": None, "tag_filter": None,
         }
@@ -592,18 +586,18 @@ class TestPerformShutdownBranching:
             perform_shutdown(
                 status_buffer=sb, job_tracker=jt, parsl_loaded_flag=pfl,
                 logger=MagicMock(), reason="walltime", cleanup_parsl=False,
-                restart_ctx=ctx,
+                respawn_ctx=ctx,
             )
         assert database.get_jobs_by_ids(db, [jid])[0]["status"] == "Failed"
         m_sub.assert_not_called()
 
-    def test_signal_path_always_killed_even_with_restart_ctx(self, db, tmp_path):
-        """External SIGTERM must NOT trigger restart-mode resubmit."""
+    def test_signal_path_always_killed_even_with_respawn_ctx(self, db, tmp_path):
+        """External SIGTERM must NOT trigger respawn resubmit."""
         jid = _insert_job(db, status="Running")
         sb, jt, pfl = _shutdown_fixtures(db, [jid])
         sb.db_path = db
         ctx = {
-            "max_restarts": 3, "run_dir": tmp_path,
+            "respawn": 3, "run_dir": tmp_path,
             "system_config": SimpleNamespace(GPUS_PER_NODE=4),
             "db_path": db, "app_filter": None, "tag_filter": None,
         }
@@ -613,7 +607,7 @@ class TestPerformShutdownBranching:
             perform_shutdown(
                 status_buffer=sb, job_tracker=jt, parsl_loaded_flag=pfl,
                 logger=MagicMock(), reason="signal SIGTERM", cleanup_parsl=False,
-                restart_ctx=ctx,
+                respawn_ctx=ctx,
             )
         assert database.get_jobs_by_ids(db, [jid])[0]["status"] == "Killed"
         m_sub.assert_not_called()

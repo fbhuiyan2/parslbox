@@ -267,35 +267,25 @@ def run(
             help=(
                 "Batch job walltime in seconds. Required. The orchestrator triggers "
                 "graceful shutdown before this elapses so in-flight jobs can be "
-                "marked Killed cleanly (30s grace, or 90s under --restart-mode). "
+                "marked Killed cleanly (30s grace, or 90s under --respawn). "
                 "Set automatically by `pbx qsub`/`pbx sbatch`."
             ),
         )
     ] = ...,
-    restart_mode: Annotated[
-        bool,
+    respawn: Annotated[
+        Optional[int],
         typer.Option(
-            "--restart-mode",
+            "--respawn",
             help=(
-                "Internal: enable the self-restart chain. Set automatically by "
-                "`pbx qsub --restart` / `pbx sbatch --restart`. At walltime, "
-                "in-flight jobs are marked Restart and a new allocation is "
-                "auto-submitted (if --max-restarts > 0). On startup, jobs in "
-                "Restart status get app.restart() called before the run loop."
+                "Internal: enable the self-respawn chain. Set automatically by "
+                "`pbx qsub --respawn N` / `pbx sbatch --respawn N`. The integer "
+                "is the number of remaining auto-resubmissions; decremented at "
+                "every link by the orchestrator. At walltime, in-flight jobs are "
+                "marked Restart and the next link is auto-submitted (when > 0); "
+                "when 0, the chain ends and walltime-killed jobs go Failed."
             ),
         )
-    ] = False,
-    max_restarts: Annotated[
-        int,
-        typer.Option(
-            "--max-restarts",
-            help=(
-                "Internal: remaining auto-resubmissions in the chain. "
-                "Decremented at every link by the orchestrator. When 0, the "
-                "chain ends and walltime-killed jobs go Failed instead of Restart."
-            ),
-        )
-    ] = 0,
+    ] = None,
 ):
     """
     Run Parsl workflows by discovering and executing application plugins.
@@ -338,10 +328,10 @@ def run(
     logger.info(f"Job submission delay: {os.getenv('PBX_RUN_DELAY', '0.2')}s (PBX_RUN_DELAY)")
 
     # Walltime-aware graceful shutdown: trigger before walltime so the main
-    # loop can flush state and mark in-flight jobs Killed cleanly. Restart-mode
+    # loop can flush state and mark in-flight jobs Killed cleanly. Respawn-mode
     # needs more runway (mark Restart + generate next-link script + qsub/sbatch
     # from the compute node), so we widen the grace from 30s to 90s.
-    SHUTDOWN_GRACE_SECONDS = 90 if restart_mode else 30
+    SHUTDOWN_GRACE_SECONDS = 90 if respawn is not None else 30
     process_start = time.time()
     shutdown_at = process_start + walltime_seconds - SHUTDOWN_GRACE_SECONDS
     logger.info(
@@ -356,10 +346,10 @@ def run(
 
     # --- Restart-status startup hook ---
     # Every job currently in Restart status — whether marked by the previous
-    # link's walltime kill (under --restart-mode) or set manually by the user
+    # link's walltime kill (under --respawn) or set manually by the user
     # via `pbx update --status Restart` — gets its app.restart() called per
     # the three-scene contract before the run loop touches them. This runs
-    # regardless of --restart-mode so apps with checkpoint-resume logic can
+    # regardless of --respawn so apps with checkpoint-resume logic can
     # always pick up where they left off. No-op when no Restart jobs exist
     # (the common case on the very first link / a fresh run).
     from parslbox.commands.helpers.restart_helpers import apply_restart_hook
@@ -443,12 +433,12 @@ def run(
     status_buffer = StatusBuffer(db_path)
     logger.info("Initialized StatusBuffer for batching database updates")
 
-    # Build restart-mode context (consumed by perform_shutdown at walltime).
-    # None when --restart-mode is off → existing Killed-and-exit behavior.
-    restart_ctx = None
-    if restart_mode:
-        restart_ctx = {
-            "max_restarts": max_restarts,
+    # Build respawn-mode context (consumed by perform_shutdown at walltime).
+    # None when --respawn is unset → existing Killed-and-exit behavior.
+    respawn_ctx = None
+    if respawn is not None:
+        respawn_ctx = {
+            "respawn": respawn,
             "run_dir": run_dir,
             "system_config": system_config,
             "db_path": db_path,
@@ -456,9 +446,9 @@ def run(
             "tag_filter": tag_filter,
         }
         logger.info(
-            f"Restart-mode active: max_restarts={max_restarts}. "
+            f"Respawn chain active: respawn={respawn}. "
             f"At walltime, in-flight jobs will be marked "
-            f"{'Restart and chain will resubmit' if max_restarts > 0 else 'Failed (chain end)'}."
+            f"{'Restart and chain will resubmit' if respawn > 0 else 'Failed (chain end)'}."
         )
 
     # Register signal handlers for graceful shutdown on walltime exceeded
@@ -751,7 +741,7 @@ def run(
                     logger=logger,
                     reason="walltime",
                     cleanup_parsl=True,
-                    restart_ctx=restart_ctx,
+                    respawn_ctx=respawn_ctx,
                 )
                 sys.exit(0)
 

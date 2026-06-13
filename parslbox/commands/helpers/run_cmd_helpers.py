@@ -65,7 +65,7 @@ def parse_parents(parents_str):
 
 
 def create_shutdown_handler(status_buffer, logger, parsl_loaded_flag, job_tracker=None,
-                            restart_ctx=None):
+                            respawn_ctx=None):
     """
     Create a signal handler that flushes the status buffer on termination.
 
@@ -76,15 +76,15 @@ def create_shutdown_handler(status_buffer, logger, parsl_loaded_flag, job_tracke
     Includes timeout protection via signal.alarm() to force exit if cleanup hangs.
 
     External-SIGTERM path always marks active jobs `Killed` and does NOT
-    auto-resubmit, regardless of restart-mode. (Restart-mode auto-resubmit is
-    only triggered by the walltime path in the main loop.)
+    auto-resubmit, regardless of respawn mode. (Respawn auto-resubmit is only
+    triggered by the walltime path in the main loop.)
 
     Args:
         status_buffer: StatusBuffer instance to flush
         logger: Logger instance for logging
         parsl_loaded_flag: Dict with 'loaded' key tracking Parsl state
         job_tracker: JobTracker instance (source of active job IDs)
-        restart_ctx: Ignored on the signal path — kept for symmetry with
+        respawn_ctx: Ignored on the signal path — kept for symmetry with
             the walltime call; this path always marks Killed without resubmit.
 
     Returns:
@@ -103,7 +103,7 @@ def create_shutdown_handler(status_buffer, logger, parsl_loaded_flag, job_tracke
             logger=logger,
             reason=f"signal {signal_name}",
             cleanup_parsl=False,
-            restart_ctx=None,  # signal path never auto-resubmits
+            respawn_ctx=None,  # signal path never auto-resubmits
         )
         sys.exit(130)
 
@@ -111,7 +111,7 @@ def create_shutdown_handler(status_buffer, logger, parsl_loaded_flag, job_tracke
 
 
 def perform_shutdown(status_buffer, job_tracker, parsl_loaded_flag, logger,
-                     reason: str, cleanup_parsl: bool, restart_ctx=None):
+                     reason: str, cleanup_parsl: bool, respawn_ctx=None):
     """
     Shared shutdown sequence used by both the signal handler and the
     walltime-triggered check in the main loop.
@@ -120,16 +120,16 @@ def perform_shutdown(status_buffer, job_tracker, parsl_loaded_flag, logger,
       STEP 0: snapshot active job IDs from in-memory JobTracker.
       STEP 1: flush the status buffer (writes any pending Done/Failed).
       STEP 2: mark active jobs.
-              - restart_ctx with max_restarts > 0 and reason=="walltime"
+              - respawn_ctx with respawn > 0 and reason=="walltime"
                 → mark `Restart` (chain continues).
-              - restart_ctx with max_restarts == 0 and reason=="walltime"
-                → mark `Failed` ("chain exhausted: max restarts reached").
+              - respawn_ctx with respawn == 0 and reason=="walltime"
+                → mark `Failed` ("chain exhausted: respawn count reached 0").
               - otherwise → mark `Killed` (existing behavior).
       STEP 3: Parsl cleanup — only when cleanup_parsl=True (walltime path).
               Skipped for the signal path because the scheduler will tear
               down the cgroup anyway and HTE shutdown can be slow.
-      STEP 4: Restart-mode auto-resubmit — only when restart_ctx with
-              max_restarts > 0 and we just marked >= 1 job as Restart.
+      STEP 4: Respawn auto-resubmit — only when respawn_ctx with respawn > 0
+              and we just marked >= 1 job as Restart.
 
     Args:
         status_buffer: StatusBuffer instance.
@@ -138,10 +138,10 @@ def perform_shutdown(status_buffer, job_tracker, parsl_loaded_flag, logger,
         logger: Logger instance.
         reason: Human-readable trigger (e.g. "signal SIGTERM", "walltime").
         cleanup_parsl: If True, call parsl.dfk().cleanup().
-        restart_ctx: Optional dict with keys: max_restarts (int), run_dir (Path),
+        respawn_ctx: Optional dict with keys: respawn (int), run_dir (Path),
             system_config (object), db_path (Path), app_filter (set or None),
             tag_filter (set or None). When present AND reason == "walltime",
-            triggers the restart-mode branching for Step 2 / Step 4.
+            triggers the respawn branching for Step 2 / Step 4.
     """
     import time
 
@@ -181,11 +181,11 @@ def perform_shutdown(status_buffer, job_tracker, parsl_loaded_flag, logger,
         logger.error(f"Shutdown: Step 1 - Status buffer flush FAILED: {e}")
 
     # STEP 2: mark active jobs (Killed by default; Restart or Failed under
-    # restart-mode + walltime).
+    # respawn + walltime).
     restart_marked = 0
     if active_ids:
-        if restart_ctx is not None and reason == "walltime":
-            if restart_ctx["max_restarts"] > 0:
+        if respawn_ctx is not None and reason == "walltime":
+            if respawn_ctx["respawn"] > 0:
                 target_status = "Restart"
             else:
                 target_status = "Failed"
@@ -198,9 +198,9 @@ def perform_shutdown(status_buffer, job_tracker, parsl_loaded_flag, logger,
                         f"active jobs as {target_status}")
             if target_status == "Restart":
                 restart_marked = len(active_ids)
-            elif target_status == "Failed" and restart_ctx is not None:
+            elif target_status == "Failed" and respawn_ctx is not None:
                 logger.warning(
-                    "Shutdown: Step 2 - chain exhausted (max_restarts reached); "
+                    "Shutdown: Step 2 - chain exhausted (respawn reached 0); "
                     "these jobs were marked Failed. Manually flip them to Restart "
                     "and resubmit if you want to continue."
                 )
@@ -222,13 +222,13 @@ def perform_shutdown(status_buffer, job_tracker, parsl_loaded_flag, logger,
     else:
         logger.info("Shutdown: Step 3 - skipping Parsl cleanup (signal path)")
 
-    # STEP 4: Restart-mode auto-resubmit.
-    if (restart_ctx is not None and reason == "walltime"
-            and restart_ctx["max_restarts"] > 0 and restart_marked > 0):
-        # Cancel the alarm before subprocess.run; restart submission can take a
+    # STEP 4: Respawn auto-resubmit.
+    if (respawn_ctx is not None and reason == "walltime"
+            and respawn_ctx["respawn"] > 0 and restart_marked > 0):
+        # Cancel the alarm before subprocess.run; respawn submission can take a
         # few seconds and we don't want to be force-killed mid-submission.
         signal.alarm(0)
-        _auto_resubmit(restart_ctx, restart_marked, logger)
+        _auto_resubmit(respawn_ctx, restart_marked, logger)
     else:
         signal.alarm(0)
 
@@ -238,24 +238,24 @@ def perform_shutdown(status_buffer, job_tracker, parsl_loaded_flag, logger,
     logger.warning(f"=" * 80)
 
 
-def _auto_resubmit(restart_ctx, restart_marked: int, logger):
-    """Build the next per-link script from restart_template.sh and submit it.
+def _auto_resubmit(respawn_ctx, restart_marked: int, logger):
+    """Build the next per-link script from respawn_template.sh and submit it.
 
     Lives inside run_cmd_helpers (not restart_helpers) only so perform_shutdown
     can call it without growing its arg list — the heavy logic is in
-    `restart_helpers.build_restart_link_script` / `submit_restart_link`.
+    `restart_helpers.build_respawn_link_script` / `submit_respawn_link`.
     """
     from parslbox.commands.helpers import restart_helpers
     from parslbox.commands.helpers.resource_estimate import compute_required_nodes
 
-    run_dir = restart_ctx["run_dir"]
-    db_path = restart_ctx["db_path"]
-    system_config = restart_ctx["system_config"]
-    current_max_restarts = restart_ctx["max_restarts"]
-    app_filter = restart_ctx.get("app_filter")
-    tag_filter = restart_ctx.get("tag_filter")
+    run_dir = respawn_ctx["run_dir"]
+    db_path = respawn_ctx["db_path"]
+    system_config = respawn_ctx["system_config"]
+    current_respawn = respawn_ctx["respawn"]
+    app_filter = respawn_ctx.get("app_filter")
+    tag_filter = respawn_ctx.get("tag_filter")
 
-    template_path = run_dir / "restart_template.sh"
+    template_path = run_dir / "respawn_template.sh"
     submit_path = run_dir / "submit.sh"
 
     scheduler_command = restart_helpers.detect_scheduler_command()
@@ -278,23 +278,23 @@ def _auto_resubmit(restart_ctx, restart_marked: int, logger):
     computed_nodes = compute_required_nodes(remaining, system_config)
     if computed_nodes <= 0:
         logger.info(
-            f"Restart-mode: no remaining runnable jobs after filters. "
+            f"Respawn: no remaining runnable jobs after filters. "
             f"Skipping resubmission (chain ends cleanly)."
         )
         return
 
     logger.info(
-        f"Restart-mode: marked {restart_marked} jobs as Restart, "
+        f"Respawn: marked {restart_marked} jobs as Restart, "
         f"{len(remaining)} total runnable; "
         f"computed optimal nodes = {computed_nodes}; "
-        f"current max-restarts = {current_max_restarts}."
+        f"current respawn count = {current_respawn}."
     )
 
     try:
-        link_path = restart_helpers.build_restart_link_script(
+        link_path = restart_helpers.build_respawn_link_script(
             template_path=template_path,
             run_dir=run_dir,
-            current_max_restarts=current_max_restarts,
+            current_respawn=current_respawn,
             scheduler_type=scheduler_type,
             computed_nodes=computed_nodes,
             submit_file_path=submit_path,
@@ -304,7 +304,7 @@ def _auto_resubmit(restart_ctx, restart_marked: int, logger):
         return
 
     logger.info(f"Auto-resubmission: wrote {link_path.name}, submitting via {scheduler_command}.")
-    restart_helpers.submit_restart_link(link_path, scheduler_command, run_dir, logger)
+    restart_helpers.submit_respawn_link(link_path, scheduler_command, run_dir, logger)
 
 
 def create_alarm_handler(logger):

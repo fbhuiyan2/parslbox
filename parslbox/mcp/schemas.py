@@ -212,22 +212,15 @@ class QSubSchema(BaseModel):
         ),
     )
 
-    restart: bool = Field(
-        default=False,
-        description=(
-            "Enable self-restart chain. When True, at walltime the orchestrator "
-            "marks in-flight jobs as Restart and auto-resubmits a new allocation, "
-            "continuing until all jobs reach Done/Failed or max_restarts is exhausted. "
-            "Requires max_restarts."
-        ),
-    )
-
-    max_restarts: Optional[int] = Field(
+    respawn: Optional[int] = Field(
         default=None,
         ge=0,
         description=(
-            "Required when restart=True; number of automatic resubmissions to perform "
-            "after the initial run (>= 0)."
+            "Enable the self-respawn chain. The integer is the number of remaining "
+            "auto-resubmissions; decremented each link. At walltime the orchestrator "
+            "marks in-flight jobs Restart and auto-submits the next link, continuing "
+            "until all jobs reach Done/Failed or respawn reaches 0. Pass None "
+            "(default) to disable the chain entirely."
         ),
     )
 
@@ -294,22 +287,15 @@ class SBatchSchema(BaseModel):
         ),
     )
 
-    restart: bool = Field(
-        default=False,
-        description=(
-            "Enable self-restart chain. When True, at walltime the orchestrator "
-            "marks in-flight jobs as Restart and auto-resubmits a new allocation, "
-            "continuing until all jobs reach Done/Failed or max_restarts is exhausted. "
-            "Requires max_restarts."
-        ),
-    )
-
-    max_restarts: Optional[int] = Field(
+    respawn: Optional[int] = Field(
         default=None,
         ge=0,
         description=(
-            "Required when restart=True; number of automatic resubmissions to perform "
-            "after the initial run (>= 0)."
+            "Enable the self-respawn chain. The integer is the number of remaining "
+            "auto-resubmissions; decremented each link. At walltime the orchestrator "
+            "marks in-flight jobs Restart and auto-submits the next link, continuing "
+            "until all jobs reach Done/Failed or respawn reaches 0. Pass None "
+            "(default) to disable the chain entirely."
         ),
     )
 

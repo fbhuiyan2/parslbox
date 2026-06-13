@@ -106,9 +106,9 @@ def add_jobs(params: AddJobSchema) -> str:
         "Takes configuration (system config name, job name, queue, select, walltime, project) "
         "plus optional run directory, apps, tags, retries, and sched_opts for extra PBS directives. "
         "Walltime defaults to minutes; supports h/d suffixes (e.g., 90, 4.25h, 3.5d). "
-        "Set restart=True with max_restarts=N to enable a self-restart chain: at walltime, "
-        "in-flight jobs are marked Restart and a new allocation is auto-submitted, up to N times. "
-        "Returns a short message describing whether submission succeeded."
+        "Set respawn=N to enable a self-respawn chain: at walltime, in-flight jobs are "
+        "marked Restart and the next link is auto-submitted, until all jobs finish or "
+        "respawn reaches 0. Returns a short message describing whether submission succeeded."
     ),
 )
 def submit_pbs_job(params: QSubSchema) -> str:
@@ -124,7 +124,7 @@ def submit_pbs_job(params: QSubSchema) -> str:
         run_dir = status.get("run_dir", "UNKNOWN")
         matched = status.get("matched_jobs")
         resolved = status.get("resolved_tags")
-        restart_template = status.get("restart_template_file")
+        respawn_template = status.get("respawn_template_file")
         lines = [
             f"Job was submitted successfully.",
             f"PBS job ID: {job_id}",
@@ -134,8 +134,8 @@ def submit_pbs_job(params: QSubSchema) -> str:
             lines.append(f"Matched {matched} runnable job(s) in DB.")
         if resolved:
             lines.append(f"Resolved tags: {', '.join(resolved)}")
-        if restart_template:
-            lines.append(f"Restart template: {restart_template} (chain auto-resubmits at walltime)")
+        if respawn_template:
+            lines.append(f"Respawn template: {respawn_template} (chain auto-resubmits at walltime)")
         return "\n".join(lines)
     else:
         error_msg = status.get("error", "Unknown error")
@@ -154,9 +154,9 @@ def submit_pbs_job(params: QSubSchema) -> str:
         "Takes configuration (system config name, job name, partition, nodes, walltime, project) "
         "plus optional run directory, apps, tags, retries, and sched_opts for extra SLURM directives. "
         "Walltime defaults to minutes; supports h/d suffixes (e.g., 90, 4.25h, 3.5d). "
-        "Set restart=True with max_restarts=N to enable a self-restart chain: at walltime, "
-        "in-flight jobs are marked Restart and a new allocation is auto-submitted, up to N times. "
-        "Returns a short message describing whether submission succeeded."
+        "Set respawn=N to enable a self-respawn chain: at walltime, in-flight jobs are "
+        "marked Restart and the next link is auto-submitted, until all jobs finish or "
+        "respawn reaches 0. Returns a short message describing whether submission succeeded."
     ),
 )
 def submit_slurm_job(params: SBatchSchema) -> str:
@@ -172,7 +172,7 @@ def submit_slurm_job(params: SBatchSchema) -> str:
         run_dir = status.get("run_dir", "UNKNOWN")
         matched = status.get("matched_jobs")
         resolved = status.get("resolved_tags")
-        restart_template = status.get("restart_template_file")
+        respawn_template = status.get("respawn_template_file")
         lines = [
             f"SLURM job was submitted successfully.",
             f"SLURM job ID: {job_id}",
@@ -182,8 +182,8 @@ def submit_slurm_job(params: SBatchSchema) -> str:
             lines.append(f"Matched {matched} runnable job(s) in DB.")
         if resolved:
             lines.append(f"Resolved tags: {', '.join(resolved)}")
-        if restart_template:
-            lines.append(f"Restart template: {restart_template} (chain auto-resubmits at walltime)")
+        if respawn_template:
+            lines.append(f"Respawn template: {respawn_template} (chain auto-resubmits at walltime)")
         return "\n".join(lines)
     else:
         error_msg = status.get("error", "Unknown error")
