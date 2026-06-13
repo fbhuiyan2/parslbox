@@ -106,8 +106,11 @@ class AppBase(ABC):
 
     def restart(self, job_dict: dict) -> dict | None:
         """
-        Restart hook called by `pbx run --restart-mode` for jobs in `Restart` status
-        before they re-enter the run loop.
+        Restart hook called at `pbx run` startup for every job in `Restart`
+        status, before the run loop touches it. Fires whether the Restart
+        status came from the previous link's walltime kill (under
+        `--restart-mode`) or was set manually by the user via
+        `pbx update --status Restart`.
 
         Three scenes, encoded by whether the subclass overrides this method:
 
@@ -132,7 +135,7 @@ class AppBase(ABC):
         """
         raise NotImplementedError(
             f"{type(self).__name__} does not support restart. "
-            f"Override restart() to enable --restart for jobs of this app."
+            f"Override restart() to enable Restart-status job handling for this app."
         )
 
     def parsl_app(self, job_id: int, job_path: Path, db_path: Path, assignment, mpi_commands: dict,

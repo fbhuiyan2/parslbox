@@ -354,43 +354,42 @@ def run(
     app_filter = set(apps.split(',')) if apps else None
     tag_filter = set(tags.split(',')) if tags else None
 
-    # --- Restart-mode startup hook ---
-    # When the orchestrator is launched under --restart-mode, every job currently
-    # in Restart status came from the previous link's walltime kill. Hand each
-    # one to its app's restart() per the three-scene contract before the run
-    # loop touches them. This is a no-op on the very first link (no Restart
-    # jobs exist yet).
-    if restart_mode:
-        from parslbox.commands.helpers.restart_helpers import apply_restart_hook
-        from parslbox.apps.app_registry import get_app_instance
+    # --- Restart-status startup hook ---
+    # Every job currently in Restart status — whether marked by the previous
+    # link's walltime kill (under --restart-mode) or set manually by the user
+    # via `pbx update --status Restart` — gets its app.restart() called per
+    # the three-scene contract before the run loop touches them. This runs
+    # regardless of --restart-mode so apps with checkpoint-resume logic can
+    # always pick up where they left off. No-op when no Restart jobs exist
+    # (the common case on the very first link / a fresh run).
+    from parslbox.commands.helpers.restart_helpers import apply_restart_hook
+    from parslbox.apps.app_registry import get_app_instance
 
-        restart_jobs = database.get_jobs(db_path, status='Restart')
-        # Same filter the rest of the orchestrator uses.
-        restart_jobs = [
-            j for j in restart_jobs
-            if (not app_filter or j['app'] in app_filter)
-            and (not tag_filter or j['tag'] in tag_filter)
-        ]
-        if restart_jobs:
-            # Load app instances just for those apps (fast; no MPI config needed
-            # for the restart() call itself).
-            restart_app_instances = {}
-            for app_name in set(j['app'] for j in restart_jobs):
-                try:
-                    restart_app_instances[app_name] = get_app_instance(app_name)
-                except Exception as e:
-                    logger.warning(
-                        f"Restart hook: could not load app '{app_name}' ({e}); "
-                        f"jobs of this app will be marked Failed."
-                    )
-            apply_restart_hook(
-                restart_jobs=restart_jobs,
-                app_instances=restart_app_instances,
-                db_path=db_path,
-                logger=logger,
-            )
-        else:
-            logger.info("Restart-mode: no Restart-status jobs to process.")
+    restart_jobs = database.get_jobs(db_path, status='Restart')
+    # Same filter the rest of the orchestrator uses.
+    restart_jobs = [
+        j for j in restart_jobs
+        if (not app_filter or j['app'] in app_filter)
+        and (not tag_filter or j['tag'] in tag_filter)
+    ]
+    if restart_jobs:
+        # Load app instances just for those apps (fast; no MPI config needed
+        # for the restart() call itself).
+        restart_app_instances = {}
+        for app_name in set(j['app'] for j in restart_jobs):
+            try:
+                restart_app_instances[app_name] = get_app_instance(app_name)
+            except Exception as e:
+                logger.warning(
+                    f"Restart hook: could not load app '{app_name}' ({e}); "
+                    f"jobs of this app will be marked Failed."
+                )
+        apply_restart_hook(
+            restart_jobs=restart_jobs,
+            app_instances=restart_app_instances,
+            db_path=db_path,
+            logger=logger,
+        )
 
     # Restart jobs get priority over Ready jobs — they've already consumed
     # resources once and are mid-workflow; we want to clear them before

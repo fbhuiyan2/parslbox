@@ -19,16 +19,18 @@ Reference for every scenario the in-allocation engine handles: normal runs, wall
 | `Restart` | Two distinct meanings — see below. **Important.** |
 | `Warning` | App returned an invalid/unknown status string. |
 
-### `Restart` has two meanings — read carefully
+### `Restart` semantics
 
-`Restart` is the **only** status whose semantics depend on whether the current `pbx run` was invoked with `--restart-mode` (which `pbx qsub --restart` / `pbx sbatch --restart` set internally).
+`Restart` jobs always get their app's `restart()` hook called at the next `pbx run` startup — regardless of whether the row was set by the user manually (`pbx update <id> --status Restart`) or by the orchestrator at walltime under `--restart-mode`.
 
-| Set by | Semantics | What happens at the next `pbx run` startup |
-| --- | --- | --- |
-| **User** (`pbx update <id> --status Restart`) | "I want this job to run again — just re-execute it." | Treated identically to `Ready`. The app's `restart()` hook is **not** called (the orchestrator is not in restart-mode). |
-| **Orchestrator** (in-flight at walltime under `--restart-mode`, when `--max-restarts > 0`) | "This job was preempted mid-execution by walltime expiry. The app must decide how to resume it." | The next link's startup invokes `app.restart(job_dict)` for every `Restart` job before the run loop. See [Three-scene contract](#the-three-scene-restart-contract) below. |
+| Set by | Why it ended up as Restart |
+| --- | --- |
+| **User** (`pbx update <id> --status Restart`) | "I want this job to resume — use the app's checkpoint logic if it has one, or just re-execute if it doesn't." |
+| **Orchestrator** (in-flight at walltime under `--restart-mode`, when `--max-restarts > 0`) | "This job was preempted mid-execution by walltime expiry. The next chain link picks it up." |
 
-The status field is the same in both cases. The disambiguator is `--restart-mode` on the *consuming* `pbx run`, not on the row itself. If you set `Restart` manually and then submit a chain with `pbx qsub --restart`, those manually-flipped jobs **will** be put through `app.restart()` at startup — which is usually what you want, but worth knowing.
+In both cases the next `pbx run` startup invokes `app.restart(job_dict)` for every Restart-status job before the run loop. See [Three-scene contract](#the-three-scene-restart-contract) below. Apps that don't override `restart()` raise `NotImplementedError` and the job is marked `Failed` with "app does not support restart" — so manually marking a job Restart only makes sense for apps that actually implement the hook.
+
+`--restart-mode` does **not** gate `restart()`. It controls only the walltime auto-resubmit chain (next-link script generation + qsub from compute) and the wider 90 s shutdown grace.
 
 ---
 
@@ -40,7 +42,7 @@ What `pbx qsub` / `pbx sbatch` produce when `--restart` is **not** passed. The s
 
 1. Parsl loads the system config.
 2. The orchestrator queries the DB for jobs matching `--apps` / `--tags` filters and status `Ready` or `Restart`.
-3. Those jobs go into the dispatch loop — `Restart` is treated identically to `Ready` (no hook is called).
+3. Any `Restart`-status jobs run through `app.restart()` first (per the [three-scene contract](#the-three-scene-restart-contract)), then enter the dispatch loop as `Ready`. This happens in non-restart-mode runs too — only the chain auto-resubmit is gated on `--restart-mode`.
 4. The walltime timer arms itself ~30 s before the scheduler's stated walltime.
 
 ### Walltime expiry (internal timer fires)
@@ -98,9 +100,9 @@ Link 3:  restart_link_3.sh                      →   pbx run --max-restarts 0  
 
 #### Link 0 (initial submission)
 
-**Startup.** Same as a non-restart-mode run. No jobs have status `Restart` yet (unless the user pre-set some), so `app.restart()` is **not** called for anything. Ready/Restart jobs flow into the dispatch loop.
+**Startup.** Same as a non-restart-mode run. If no jobs have status `Restart` yet (the typical case on link 0), the startup hook is a no-op. Ready/Restart jobs flow into the dispatch loop.
 
-> If the user *did* manually flip some jobs to `Restart` before submitting, the orchestrator's startup hook will treat them as Scene B / C (whichever the app returns) and re-queue them as `Ready`. The hook does not care whether a row was flipped by the user or by a prior link.
+> If the user *did* manually flip some jobs to `Restart` before submitting, the orchestrator's startup hook treats them like any other Restart job — runs them through `app.restart()` (Scene A/B/C depending on the app's return value). The hook does not care whether a row was flipped by the user or by a prior link.
 
 **Walltime expiry.** The internal timer fires ~90 s before the scheduler's stated walltime (restart-mode uses a wider grace than the non-restart 30 s — the resubmit path needs the extra runway):
 

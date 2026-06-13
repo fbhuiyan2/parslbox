@@ -162,6 +162,58 @@ class TestApplyRestartHook:
 
 
 # ============================================================
+# Regression: apply_restart_hook must NOT be gated on restart_mode
+#
+# A user may manually mark a job Restart (via `pbx update --status Restart`)
+# in a non-restart-mode run — e.g., on clusters that don't allow qsub from
+# compute nodes, when debugging interactively, or when one job dies while
+# the rest of the run continues. The app's restart() hook should still fire
+# so checkpoint-resume logic works in that scenario. Previously gated by
+# `if restart_mode:` in run.py; now must be unconditional.
+# ============================================================
+
+
+class TestRestartHookDecoupledFromRestartMode:
+    def test_run_py_calls_apply_restart_hook_unconditionally(self):
+        """Source-level guard: `apply_restart_hook` must NOT be inside an
+        `if restart_mode:` block in run.py. The hook fires for every
+        Restart-status job, regardless of orchestrator mode.
+
+        Pattern-based test (mirrors test_run_py_does_not_read_job_app_name
+        in test_hooks_on_compute.py): cheaper than spinning up the full
+        typer command and locks in the contract against silent re-gating.
+        """
+        import re
+        from pathlib import Path
+        import parslbox.commands.run as run_mod
+
+        src = Path(run_mod.__file__).read_text()
+        # Find the apply_restart_hook call site, then walk backwards looking
+        # for the nearest enclosing `if restart_mode:` within ~40 lines.
+        lines = src.splitlines()
+        hook_call_lines = [
+            i for i, line in enumerate(lines)
+            if re.match(r"\s*apply_restart_hook\s*\(", line)
+        ]
+        assert hook_call_lines, (
+            "apply_restart_hook call site not found in run.py — test stale"
+        )
+        for hook_line in hook_call_lines:
+            # Look backwards up to 40 lines for an `if restart_mode:` gate
+            window = lines[max(0, hook_line - 40):hook_line]
+            gating = [
+                ln for ln in window
+                if re.match(r"\s*if\s+restart_mode\s*:", ln)
+            ]
+            assert not gating, (
+                f"apply_restart_hook at line {hook_line + 1} is gated by "
+                f"`if restart_mode:` ({gating[0].strip()!r}). The hook must "
+                f"fire for any Restart-status job, regardless of "
+                f"--restart-mode. See test docstring for rationale."
+            )
+
+
+# ============================================================
 # Resource recalc (Phase 5 helper)
 # ============================================================
 
