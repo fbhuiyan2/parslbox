@@ -298,6 +298,14 @@ def submit_job(
     # Merge directives: template → system+config → CLI
     submit_script = merge_sched_opts(rendered, combined_config_opts, sched_opts)
 
+    # When --respawn is set, the scheduler log rolls per chain link instead of
+    # being overwritten each cycle. Link 0 uses pbx_scheduler_link-0.out;
+    # build_respawn_link_script bumps the digit for subsequent links.
+    if respawn is not None:
+        submit_script = submit_script.replace(
+            "pbx_scheduler.out", "pbx_scheduler_link-0.out"
+        )
+
     # Write submit script
     submit_file = run_dir / "submit.sh"
     with open(submit_file, 'w') as f:
@@ -320,6 +328,9 @@ def submit_job(
             )
         respawn_script = merge_sched_opts(respawn_rendered, combined_config_opts, sched_opts)
         respawn_script = _prepend_respawn_header(respawn_script)
+        respawn_script = respawn_script.replace(
+            "pbx_scheduler.out", "pbx_scheduler_link-0.out"
+        )
         respawn_template_file = run_dir / "respawn_template.sh"
         with open(respawn_template_file, 'w') as f:
             f.write(respawn_script)

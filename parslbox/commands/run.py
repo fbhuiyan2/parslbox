@@ -34,6 +34,7 @@ from parslbox.commands.helpers.run_cmd_helpers import (
     create_alarm_handler,
     create_atexit_handler,
     perform_shutdown,
+    choose_output_mode,
 )
 from parslbox.commands.helpers.hook_dispatch import dispatch_hook_on_compute
 from parslbox.database.status_buffer import StatusBuffer
@@ -54,10 +55,10 @@ def get_scheduler_job_id(scheduler):
         return f'local_{int(time.time())}'
 
 
-def create_parsl_future(job, app_instance, app_config, mpi_config, config_name, db_path, scheduler, resource_manager, futures, system_config, status_buffer):
+def create_parsl_future(job, app_instance, app_config, mpi_config, config_name, db_path, scheduler, resource_manager, futures, system_config, status_buffer, restarting_job_ids):
     """
     Create a Parsl future for a job with proper preprocessing and error handling.
-    
+
     Args:
         job: Job dictionary from database
         app_instance: Application instance
@@ -69,7 +70,11 @@ def create_parsl_future(job, app_instance, app_config, mpi_config, config_name, 
         resource_manager: Resource manager instance
         futures: List to append the future to
         system_config: System configuration object
-    
+        restarting_job_ids: Set of job IDs that are restart-continuations in this
+            `pbx run` invocation (populated by apply_restart_hook calls at
+            startup and during dynamic discovery). Decides whether per-job
+            stdout/stderr open in 'a'+banner mode (continuation) or 'w' (fresh).
+
     Returns:
         bool: True if successful, False if failed
     """
@@ -175,6 +180,17 @@ def create_parsl_future(job, app_instance, app_config, mpi_config, config_name, 
             )
         
         
+        # Decide per-job stdout/stderr file mode. Restart-continuation runs
+        # (status was Restart at startup or arrived as Restart and went through
+        # apply_restart_hook) append + write a banner so the boundary between
+        # links / retries is visible; fresh Ready runs clobber prior content.
+        stdout_path = job_path / f"pbx_job_{job_id}.out"
+        stderr_path = job_path / f"pbx_job_{job_id}.err"
+        file_mode = choose_output_mode(
+            job_id, current_status, restarting_job_ids,
+            stdout_path, stderr_path,
+        )
+
         # Create Parsl future
         fut = app_instance.parsl_app(
             job_id=job_id,
@@ -187,8 +203,8 @@ def create_parsl_future(job, app_instance, app_config, mpi_config, config_name, 
             in_file=job['in_file'],
             mpi_opts=job['mpi_opts'],
             env_file=job.get('env_file'),
-            stdout=(str(job_path / f"pbx_job_{job_id}.out"), 'w'),
-            stderr=(str(job_path / f"pbx_job_{job_id}.err"), 'w')
+            stdout=(str(stdout_path), file_mode),
+            stderr=(str(stderr_path), file_mode)
         )
         
         # Add to futures list. Stash single_rank_launcher, env_file, and
@@ -344,6 +360,15 @@ def run(
     app_filter = set(apps.split(',')) if apps else None
     tag_filter = set(tags.split(',')) if tags else None
 
+    # Tracks every job that this `pbx run` invocation considers a
+    # restart-continuation — populated by apply_restart_hook calls (at startup
+    # and during dynamic discovery) with Scene A "patched" + Scene B "rerun"
+    # outcomes. Used to drive per-job stdout/stderr file mode in
+    # create_parsl_future (continuation → 'a'+banner; fresh → 'w'). Cleared
+    # for any job that reaches a terminal status (Done/Failed/Warning) so a
+    # Failed→Ready re-discovery within the same invocation gets a fresh write.
+    restarting_job_ids: set[int] = set()
+
     # --- Restart-status startup hook ---
     # Every job currently in Restart status — whether marked by the previous
     # link's walltime kill (under --respawn) or set manually by the user
@@ -374,12 +399,17 @@ def run(
                     f"Restart hook: could not load app '{app_name}' ({e}); "
                     f"jobs of this app will be marked Failed."
                 )
-        apply_restart_hook(
+        buckets = apply_restart_hook(
             restart_jobs=restart_jobs,
             app_instances=restart_app_instances,
             db_path=db_path,
             logger=logger,
         )
+        # Jobs the hook accepted (Scene A patched + Scene B rerun) are
+        # restart-continuations this invocation. Scene C ("failed" bucket)
+        # is intentionally excluded — those jobs are now Failed in the DB
+        # and won't reach create_parsl_future.
+        restarting_job_ids |= set(buckets["patched"]) | set(buckets["rerun"])
 
     # Restart jobs get priority over Ready jobs — they've already consumed
     # resources once and are mid-workflow; we want to clear them before
@@ -557,7 +587,8 @@ def run(
             # Create Parsl future with pre-loaded contexts
             success = create_parsl_future(
                 job, app_instances[app_name], app_configs[app_name], mpi_configs[app_name],
-                config_name, db_path, scheduler, resource_manager, futures, system_config, status_buffer
+                config_name, db_path, scheduler, resource_manager, futures, system_config, status_buffer,
+                restarting_job_ids,
             )
             
             # Future created successfully - no additional tracking needed
@@ -695,6 +726,10 @@ def run(
                 job_tracker.update_job_status(jid, "Ready")
             for jid in buckets["failed"]:
                 job_tracker.update_job_status(jid, "Failed")
+            # Track restart-continuations so create_parsl_future opens their
+            # stdout/stderr in append mode (with banner) instead of clobbering.
+            restarting_job_ids.update(buckets["patched"])
+            restarting_job_ids.update(buckets["rerun"])
             # Refresh local dicts so resource allocation sees any Scene A patches
             # (ngpus / num_nodes / node_occupancy / ranks_per_node / ...).
             restart_ids = [j['job_id'] for j in restart_subset]
@@ -734,7 +769,8 @@ def run(
 
                 create_parsl_future(
                     job, app_instances[app_name], app_configs[app_name], mpi_configs[app_name],
-                    config_name, db_path, scheduler, resource_manager, new_futures, system_config, status_buffer
+                    config_name, db_path, scheduler, resource_manager, new_futures, system_config, status_buffer,
+                    restarting_job_ids,
                 )
             except InsufficientResources as e:
                 logger.info(f"Job {job_id}: Resources unavailable, added to backlog: {e}")
@@ -874,6 +910,12 @@ def run(
                 status_buffer.add_status_update(job_id, status=job_status)
                 logger.info(f"Job {job_id}: Final status set to '{job_status}' (buffered).")
 
+                # Clear restart-continuation membership now that this job has
+                # reached a terminal status, so a Failed→Ready re-discovery
+                # within the same `pbx run` invocation gets a fresh write.
+                if job_status in ('Done', 'Failed', 'Warning'):
+                    restarting_job_ids.discard(job_id)
+
                 # Free resources with health tracking based on job outcome
                 try:
                     job_succeeded = (job_status == "Done")
@@ -940,7 +982,8 @@ def run(
                     app_configs[rescheduled_app_name],
                     mpi_configs[rescheduled_app_name],
                     config_name, db_path, scheduler, resource_manager,
-                    new_futures, system_config, status_buffer
+                    new_futures, system_config, status_buffer,
+                    restarting_job_ids,
                 )
 
                 # Add each new future to tracking dict

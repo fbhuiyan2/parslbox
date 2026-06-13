@@ -163,7 +163,12 @@ class TestMcpSchemasRespawnFields:
 
 
 def _minimal_config(scheduler_type="pbs", system_name="polaris"):
-    """Build a minimal config dict for submit_job script-generation tests."""
+    """Build a minimal config dict for submit_job script-generation tests.
+
+    Templates intentionally include `pbx_scheduler.out` (matching the real
+    PBS_TEMPLATE / SLURM_TEMPLATE in pbx_config_template.py) so the
+    respawn-mode scheduler-log rolling substitution has something to hit.
+    """
     if scheduler_type == "pbs":
         template = (
             "#!/bin/bash\n"
@@ -172,8 +177,10 @@ def _minimal_config(scheduler_type="pbs", system_name="polaris"):
             "#PBS -l select={select}\n"
             "#PBS -l walltime={walltime}\n"
             "#PBS -A {project}\n"
+            "#PBS -o pbx_scheduler.out\n"
             "{sched_opts}\n"
             "\n"
+            "> pbx_scheduler.out\n"
             "{pbx_python_env_setup}\n"
             "{pbx_env_vars}\n"
             "exec pbx run --config {config} --run-dir {run_dir} {run_options}\n"
@@ -186,8 +193,11 @@ def _minimal_config(scheduler_type="pbs", system_name="polaris"):
             "#SBATCH --nodes={select}\n"
             "#SBATCH --time={walltime}\n"
             "#SBATCH --account={project}\n"
+            "#SBATCH --output=pbx_scheduler.out\n"
+            "#SBATCH --error=pbx_scheduler.out\n"
             "{sched_opts}\n"
             "\n"
+            "> pbx_scheduler.out\n"
             "{pbx_python_env_setup}\n"
             "{pbx_env_vars}\n"
             "exec pbx run --config {config} --run-dir {run_dir} {run_options}\n"
@@ -285,3 +295,55 @@ class TestRespawnScriptGeneration:
         assert (tmp_path / "respawn_template.sh").exists()
         script = (tmp_path / "submit.sh").read_text()
         assert "--respawn 0" in script
+
+
+# ============================================================
+# Scheduler log rolling (pbx_scheduler.out → pbx_scheduler_link-0.out)
+# Only activates when --respawn is set so each chain link writes its own log.
+# ============================================================
+
+
+class TestSchedulerLogRolling:
+    def test_no_respawn_keeps_original_scheduler_log_name(self, tmp_path):
+        """Without --respawn, the scheduler log name is the unrolled
+        pbx_scheduler.out (no chain semantics → no need to roll)."""
+        _run_submit(tmp_path, "pbs")
+        script = (tmp_path / "submit.sh").read_text()
+        assert "pbx_scheduler.out" in script
+        assert "pbx_scheduler_link-" not in script
+
+    def test_pbs_respawn_submit_sh_rolls_scheduler_log_to_link_0(self, tmp_path):
+        _run_submit(tmp_path, "pbs", respawn=3)
+        script = (tmp_path / "submit.sh").read_text()
+        # The link-0 form must appear …
+        assert "pbx_scheduler_link-0.out" in script
+        # … and the unrolled form must NOT (would risk being overwritten by
+        # link 1's batch job if both ended up in the same dir).
+        # Match only `pbx_scheduler.out` exactly (not its `_link-N.out` cousin).
+        import re
+        bare_hits = re.findall(r"\bpbx_scheduler\.out\b", script)
+        assert bare_hits == [], (
+            f"Found unrolled pbx_scheduler.out in respawn submit.sh: {bare_hits}"
+        )
+
+    def test_pbs_respawn_template_rolls_scheduler_log_to_link_0(self, tmp_path):
+        _run_submit(tmp_path, "pbs", respawn=3)
+        template = (tmp_path / "respawn_template.sh").read_text()
+        assert "pbx_scheduler_link-0.out" in template
+        import re
+        bare_hits = re.findall(r"\bpbx_scheduler\.out\b", template)
+        assert bare_hits == []
+
+    def test_slurm_respawn_submit_sh_rolls_both_output_and_error(self, tmp_path):
+        """SLURM has both --output= and --error= directives — both must roll."""
+        _run_submit(tmp_path, "slurm", respawn=2)
+        script = (tmp_path / "submit.sh").read_text()
+        assert "#SBATCH --output=pbx_scheduler_link-0.out" in script
+        assert "#SBATCH --error=pbx_scheduler_link-0.out" in script
+
+    def test_pbs_respawn_rolls_truncation_line_too(self, tmp_path):
+        """The `> pbx_scheduler.out` truncation line must also roll — otherwise
+        it would zero out a stale unrelated file."""
+        _run_submit(tmp_path, "pbs", respawn=1)
+        script = (tmp_path / "submit.sh").read_text()
+        assert "> pbx_scheduler_link-0.out" in script

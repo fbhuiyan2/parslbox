@@ -174,6 +174,53 @@ class TestApplyRestartHook:
 # ============================================================
 
 
+class TestRestartingJobIdsPlumbing:
+    """Source-level guards for the restart-continuation tracking that drives
+    per-job stdout/stderr file mode in create_parsl_future.
+
+    The set is populated by apply_restart_hook calls (startup + dynamic
+    discovery) with patched + rerun bucket IDs, threaded into
+    create_parsl_future, and cleared on terminal status. Each piece is
+    asserted here so silent removal of any one of them shows up in CI.
+    """
+
+    def test_create_parsl_future_accepts_restarting_job_ids_param(self):
+        """Signature must include the parameter so all 3 call sites in run.py
+        can pass the set through."""
+        import inspect
+        from parslbox.commands.run import create_parsl_future
+        sig = inspect.signature(create_parsl_future)
+        assert "restarting_job_ids" in sig.parameters, (
+            "create_parsl_future is missing the `restarting_job_ids` "
+            "parameter — file-mode logic needs it to decide 'a' vs 'w'."
+        )
+
+    def test_create_parsl_future_uses_choose_output_mode(self):
+        """The body must call `choose_output_mode` to set the stdout/stderr
+        mode, not hardcode 'w' as before."""
+        import inspect
+        from parslbox.commands.run import create_parsl_future
+        src = inspect.getsource(create_parsl_future)
+        assert "choose_output_mode(" in src, (
+            "create_parsl_future no longer calls choose_output_mode — "
+            "per-job restart-continuation append mode would be silently broken."
+        )
+
+    def test_run_py_discards_from_set_on_terminal_status(self):
+        """The result-handling loop must clear set entries on Done/Failed/
+        Warning so a Failed→Ready re-discovery (same pbx run invocation)
+        opens in 'w' mode instead of stale 'a'+banner."""
+        import re
+        from pathlib import Path
+        import parslbox.commands.run as run_mod
+        src = Path(run_mod.__file__).read_text()
+        # Look for restarting_job_ids.discard(...) call somewhere in the file.
+        assert re.search(r"restarting_job_ids\.discard\s*\(", src), (
+            "run.py never calls restarting_job_ids.discard — stale set "
+            "entries would survive across same-invocation re-dispatches."
+        )
+
+
 class TestApplyRestartHookOnDynamicDiscovery:
     def test_discover_new_jobs_invokes_apply_restart_hook(self):
         """Source-level guard: `discover_new_jobs` must call `apply_restart_hook`
@@ -234,9 +281,12 @@ class TestRestartHookDecoupledFromRespawn:
 
         src = Path(run_mod.__file__).read_text()
         lines = src.splitlines()
+        # Match any call to apply_restart_hook( on a line — including the
+        # `buckets = apply_restart_hook(...)` capture form added when the
+        # restart-continuation set was introduced.
         hook_call_lines = [
             i for i, line in enumerate(lines)
-            if re.match(r"\s*apply_restart_hook\s*\(", line)
+            if re.search(r"\bapply_restart_hook\s*\(", line)
         ]
         assert hook_call_lines, (
             "apply_restart_hook call site not found in run.py — test stale"
@@ -429,11 +479,12 @@ class TestDetectSchedulerCommand:
 class TestBuildRespawnLinkScript:
     def _make_template(self, run_dir):
         (run_dir / "submit.sh").write_text(
-            "#!/bin/bash\n#PBS -l select=4\n"
+            "#!/bin/bash\n#PBS -l select=4\n#PBS -o pbx_scheduler_link-0.out\n"
             "exec pbx run --respawn 3 --config polaris --run-dir ./\n"
         )
         (run_dir / "respawn_template.sh").write_text(
             "#!/bin/bash\n#PBS -l select=<<PBX_AUTO_SELECT>>\n"
+            "#PBS -o pbx_scheduler_link-0.out\n"
             "exec pbx run --respawn 3 --config polaris --run-dir ./\n"
         )
 
@@ -468,6 +519,24 @@ class TestBuildRespawnLinkScript:
                 submit_file_path=tmp_path / "submit.sh",
             )
             assert link == tmp_path / f"respawn_link_{expected_idx}.sh"
+
+    def test_rolls_scheduler_log_name_per_link(self, tmp_path):
+        """Each generated link script gets its own pbx_scheduler_link-<N>.out
+        so the scheduler log isn't overwritten cycle to cycle."""
+        self._make_template(tmp_path)
+        for expected_idx in (1, 2, 3):
+            link = restart_helpers.build_respawn_link_script(
+                template_path=tmp_path / "respawn_template.sh",
+                run_dir=tmp_path,
+                current_respawn=3,
+                scheduler_type="pbs",
+                computed_nodes=1,
+                submit_file_path=tmp_path / "submit.sh",
+            )
+            text = link.read_text()
+            assert f"pbx_scheduler_link-{expected_idx}.out" in text
+            # The template's link-0 form must have been rewritten.
+            assert "pbx_scheduler_link-0.out" not in text
 
     def test_cap_applied(self, tmp_path):
         self._make_template(tmp_path)

@@ -257,6 +257,12 @@ def build_respawn_link_script(
     text = _decrement_respawn(text, current_respawn - 1)
 
     idx = _next_link_index(run_dir)
+    # Roll the scheduler log to a per-link filename so it isn't overwritten.
+    text = re.sub(
+        r"pbx_scheduler_link-\d+\.out",
+        f"pbx_scheduler_link-{idx}.out",
+        text,
+    )
     link_path = run_dir / f"respawn_link_{idx}.sh"
     link_path.write_text(text)
     return link_path

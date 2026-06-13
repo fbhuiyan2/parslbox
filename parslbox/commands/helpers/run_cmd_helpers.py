@@ -4,12 +4,60 @@ import signal
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Iterable, Set
 
 import parsl
 from parslbox.database import database
 
 # Valid job status values (stored in lowercase for comparison)
 VALID_JOB_STATUSES = ["ready", "done", "failed", "killed", "restart", "running", "submitted", "warning"]
+
+
+_RESTART_BANNER_TEMPLATE = (
+    "\n{bar}\n=== Restart {ts}\n{bar}\n\n"
+)
+
+
+def choose_output_mode(
+    job_id: int,
+    current_status: str,
+    restarting_job_ids: Set[int],
+    *paths: Path,
+) -> str:
+    """Decide 'a' vs 'w' for a job's stdout/stderr file mode.
+
+    A run is a restart-continuation when EITHER:
+      - the job is in `restarting_job_ids` (placed there by apply_restart_hook
+        when the job was Restart-status at this `pbx run`'s startup or at a
+        mid-run dynamic-discovery event), OR
+      - the DB still shows status='Restart' at the moment we open the file
+        (covers the tiny race between apply_restart_hook and dispatch, and any
+        future code path that puts a Restart-status job into create_parsl_future
+        without routing through the hook).
+
+    For restart-continuations: returns 'a'. For each path that already exists
+    and has content, appends a banner line so the boundary between runs is
+    obvious when reading the file.
+
+    For fresh runs (Ready / not in the set): returns 'w'. Any stale content
+    from a prior life (e.g., the user reset a Failed job to Ready) is
+    intentionally clobbered.
+    """
+    is_restart_continuation = (
+        job_id in restarting_job_ids
+        or current_status == 'Restart'
+    )
+    if not is_restart_continuation:
+        return 'w'
+    bar = "=" * 70
+    banner = _RESTART_BANNER_TEMPLATE.format(
+        bar=bar, ts=datetime.now().isoformat()
+    )
+    for p in paths:
+        if p.exists() and p.stat().st_size > 0:
+            with open(p, 'a') as f:
+                f.write(banner)
+    return 'a'
 
 
 def get_default_run_dir() -> Path:
