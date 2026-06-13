@@ -174,6 +174,51 @@ class TestApplyRestartHook:
 # ============================================================
 
 
+class TestApplyRestartHookOnDynamicDiscovery:
+    def test_discover_new_jobs_invokes_apply_restart_hook(self):
+        """Source-level guard: `discover_new_jobs` must call `apply_restart_hook`
+        on the Restart-status subset of newly-discovered jobs.
+
+        Rationale: a job that goes Done/Failed/Killed/Ready → Restart during a
+        running pbx run invocation (e.g., via `pbx update --status Restart`
+        from another terminal) gets picked up by the discovery polling. Without
+        this call, those jobs would dispatch with status='Restart' but their
+        app's `restart()` hook would never fire — defeating checkpoint-resume
+        logic. Closes the only mid-run gap left by the startup-time hook.
+        """
+        import re
+        from pathlib import Path
+        import parslbox.commands.run as run_mod
+
+        src = Path(run_mod.__file__).read_text()
+        lines = src.splitlines()
+        # Find the `def discover_new_jobs(` line, then scan its body (until
+        # dedent to <= def's indent column) for an apply_restart_hook( call.
+        def_idx = None
+        for i, line in enumerate(lines):
+            if re.match(r"\s*def\s+discover_new_jobs\s*\(", line):
+                def_idx = i
+                break
+        assert def_idx is not None, (
+            "discover_new_jobs definition not found in run.py — test stale"
+        )
+        def_col = len(lines[def_idx]) - len(lines[def_idx].lstrip())
+        found = False
+        for j in range(def_idx + 1, len(lines)):
+            ln = lines[j]
+            if ln.strip() and (len(ln) - len(ln.lstrip())) <= def_col:
+                break  # left the function body
+            if re.search(r"\bapply_restart_hook\s*\(", ln):
+                found = True
+                break
+        assert found, (
+            "discover_new_jobs does not invoke apply_restart_hook(). "
+            "Dynamically-discovered Restart jobs must go through the "
+            "per-job restart() hook just like startup-time Restart jobs. "
+            "See test docstring for rationale."
+        )
+
+
 class TestRestartHookDecoupledFromRespawn:
     def test_run_py_calls_apply_restart_hook_unconditionally(self):
         """Source-level guard: `apply_restart_hook` must NOT be inside any

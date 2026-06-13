@@ -672,6 +672,40 @@ def run(
                         database.update_jobs(db_path, job_ids=[job['job_id']], status="Failed")
                 new_jobs = [j for j in new_jobs if j['app'] != app_name]
 
+        # Call restart() hook for any newly-discovered Restart-status jobs so
+        # checkpoint-resume logic fires for them too, not just for jobs that
+        # were Restart at orchestrator startup. Mirrors the startup hook at
+        # the top of run().
+        restart_subset = [j for j in new_jobs if j['status'] == 'Restart']
+        if restart_subset:
+            restart_apps = {
+                a: app_instances[a]
+                for a in set(j['app'] for j in restart_subset)
+                if a in app_instances
+            }
+            buckets = apply_restart_hook(
+                restart_jobs=restart_subset,
+                app_instances=restart_apps,
+                db_path=db_path,
+                logger=logger,
+            )
+            # Sync the in-memory JobTracker — register_jobs above inserted
+            # these as status='Restart'; the hook just flipped them in the DB.
+            for jid in buckets["patched"] + buckets["rerun"]:
+                job_tracker.update_job_status(jid, "Ready")
+            for jid in buckets["failed"]:
+                job_tracker.update_job_status(jid, "Failed")
+            # Refresh local dicts so resource allocation sees any Scene A patches
+            # (ngpus / num_nodes / node_occupancy / ranks_per_node / ...).
+            restart_ids = [j['job_id'] for j in restart_subset]
+            refreshed = {
+                j['job_id']: j
+                for j in database.get_jobs_by_ids(db_path, restart_ids)
+            }
+            new_jobs = [refreshed.get(j['job_id'], j) for j in new_jobs]
+            # Drop Scene C (hook marked Failed) — they shouldn't dispatch.
+            new_jobs = [j for j in new_jobs if j['status'] != 'Failed']
+
         # Process new jobs: dependency check -> resource allocation -> submit/backlog
         new_futures = []
         for job in new_jobs:
