@@ -138,6 +138,29 @@ class AppBase(ABC):
             f"Override restart() to enable Restart-status job handling for this app."
         )
 
+    def min_remaining_walltime(self, job_dict: dict) -> int:
+        """Minimum remaining batch walltime (seconds) required to dispatch a
+        fresh job for this app. When `remaining < this value`, the orchestrator
+        skips the job at every dispatch site (initial, backlog, dynamic-discovery);
+        the job stays in DB as Ready/Restart and is picked up by the next pbx run.
+
+        Default 0 = no gate (preserves existing behavior). Restart-continuations
+        (jobs already in `restarting_job_ids`) are exempt regardless of this
+        value — they have checkpoint state and brief runtime still advances them.
+
+        Override for apps where a fresh job needs meaningful runtime to be useful
+        (long MD runs, etc.).
+
+        Args:
+            job_dict (dict): Full job row from the DB. Available so subclasses
+                can scale the floor by input size, GPU count, etc. if desired.
+
+        Returns:
+            int: Minimum remaining walltime in seconds. 0 (default) disables
+            the gate for this app.
+        """
+        return 0
+
     def parsl_app(self, job_id: int, job_path: Path, db_path: Path, assignment, mpi_commands: dict,
                   app_config: dict, config_name: str, in_file: str, mpi_opts: str, env_file: str, 
                   stdout: str, stderr: str):

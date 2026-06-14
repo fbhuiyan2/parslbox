@@ -60,6 +60,34 @@ def choose_output_mode(
     return 'a'
 
 
+def should_gate_dispatch(
+    app,
+    job_dict: dict,
+    remaining_walltime_s: float,
+    restarting_job_ids: Set[int],
+) -> bool:
+    """Decide whether a job should be SKIPPED at dispatch time because the
+    batch's remaining walltime is below the app's declared floor.
+
+    Returns True (skip dispatch — leave job in DB Ready/Restart) when ALL hold:
+      - job is NOT a restart-continuation (those are exempt — checkpoint state
+        means even brief runtime advances the simulation)
+      - app declares a positive floor via min_remaining_walltime(job_dict)
+      - remaining_walltime_s < that floor
+
+    Universal: applies whether --respawn is on or off. Under --respawn, if
+    all remaining work gets gated and futures drain, pbx run exits via the
+    existing exit-check path; chain continuation depends on the walltime
+    trigger, which this gate does not affect.
+    """
+    if job_dict['job_id'] in restarting_job_ids:
+        return False
+    floor = app.min_remaining_walltime(job_dict)
+    if floor <= 0:
+        return False
+    return remaining_walltime_s < floor
+
+
 def should_re_dispatch_known_job(tracker_status: str, db_status: str) -> bool:
     """Decide whether a job already in the dispatch loop's `known_job_ids`
     should be re-dispatched when dynamic discovery sees it back in a

@@ -69,6 +69,12 @@ The grace window is the reason you should always prefer `pbx qdel` over raw `qde
 
 When the dispatch queue is exhausted and all in-flight work has finished, the orchestrator exits cleanly. Each job ends in `Done`, `Failed`, or `Warning` based on what its app reported.
 
+### Per-app minimum-remaining-walltime floor
+
+Apps may override `min_remaining_walltime(job_dict) -> int` on their `AppBase` subclass to declare a minimum remaining batch walltime (seconds) required for a fresh dispatch. The orchestrator checks this floor at every dispatch site — initial dispatch, mid-run dynamic-discovery, and backlog reschedule. Jobs failing the floor are skipped, stay in DB at their current `Ready`/`Restart` status, and get picked up by the next `pbx run`. The default is `0` (no gate). Restart-continuations (jobs the current run already loaded via `app.restart()`) are exempt — they have checkpoint state and brief runtime still advances the simulation.
+
+Use this for apps where a short runtime is wasted compute — e.g. long MD simulations that need at least an hour to write a meaningful checkpoint. `LammpsKkRestart` ships with a 1-hour floor.
+
 ---
 
 ## Respawn-chain runs (`pbx qsub --respawn N`)

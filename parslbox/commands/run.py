@@ -36,6 +36,7 @@ from parslbox.commands.helpers.run_cmd_helpers import (
     perform_shutdown,
     choose_output_mode,
     should_re_dispatch_known_job,
+    should_gate_dispatch,
 )
 from parslbox.commands.helpers.hook_dispatch import dispatch_hook_on_compute
 from parslbox.database.status_buffer import StatusBuffer
@@ -558,13 +559,25 @@ def run(
     for job in filtered_jobs:
         job_id = job['job_id']
         app_name = job['app']
-        
+
         # Skip if app failed to load (already marked as failed above)
         if app_name not in app_instances:
             continue
-            
+
+        if should_gate_dispatch(
+            app_instances[app_name], job,
+            shutdown_at - time.time(), restarting_job_ids,
+        ):
+            floor = app_instances[app_name].min_remaining_walltime(job)
+            logger.info(
+                f"Job {job_id}: skipping dispatch — remaining walltime "
+                f"below {app_name} floor ({int(shutdown_at - time.time())}s "
+                f"< {floor}s); will be picked up by next pbx run."
+            )
+            continue
+
         logger.info(f"Submitting Job ID {job_id}...")
-        
+
         # Check dependencies first using JobTracker
         try:
             parents_done = job_tracker.are_parents_done(job_id)
@@ -765,6 +778,19 @@ def run(
             app_name = job['app']
 
             if app_name not in app_instances:
+                continue
+
+            if should_gate_dispatch(
+                app_instances[app_name], job,
+                shutdown_at - time.time(), restarting_job_ids,
+            ):
+                floor = app_instances[app_name].min_remaining_walltime(job)
+                logger.info(
+                    f"Job {job_id}: skipping dispatch (dynamic discovery) — "
+                    f"remaining walltime below {app_name} floor "
+                    f"({int(shutdown_at - time.time())}s < {floor}s); "
+                    f"will be picked up by next pbx run."
+                )
                 continue
 
             # Check dependencies
@@ -979,7 +1005,25 @@ def run(
         # Schedule dependency-ready backlog jobs (runs every iteration)
         try:
             dependency_ready_jobs = resource_manager.get_dependency_ready_jobs_from_backlog()
-            rescheduled_jobs = resource_manager.schedule_backlog(dependency_ready_jobs)
+            remaining_s = shutdown_at - time.time()
+            eligible = []
+            gated_ids = []
+            for j in dependency_ready_jobs:
+                app_obj = app_instances.get(j['app'])
+                if app_obj is None:
+                    eligible.append(j)
+                    continue
+                if should_gate_dispatch(app_obj, j, remaining_s, restarting_job_ids):
+                    gated_ids.append(j['job_id'])
+                else:
+                    eligible.append(j)
+            if gated_ids:
+                logger.info(
+                    f"Walltime-floor gate: holding {len(gated_ids)} backlog "
+                    f"job(s) {gated_ids} — remaining={int(remaining_s)}s "
+                    f"< app floor; will be picked up by next pbx run."
+                )
+            rescheduled_jobs = resource_manager.schedule_backlog(eligible)
         except Exception as e:
             logger.error(f"Error during backlog scheduling: {e}")
             dependency_ready_jobs = []
