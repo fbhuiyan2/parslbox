@@ -198,8 +198,17 @@ def perform_shutdown(status_buffer, job_tracker, parsl_loaded_flag, logger,
     logger.warning(f"Shutdown ({reason}) - initiating sequence at {start_time}")
     logger.warning(f"=" * 80)
 
-    # 10s alarm guards against any single step hanging the whole sequence.
-    signal.alarm(10)
+    # Hard deadline so a single hung step (typically the status-buffer flush
+    # over a slow shared filesystem) can't sit forever. Sized to give Lustre/
+    # NFS-backed SQLite room to drain pending writes — 10s was tight enough
+    # that real campaigns regularly tripped it and left jobs stuck in
+    # Running/Submitted. 25s comfortably fits under both the `pbx qdel`
+    # default `--grace 30` and typical scheduler kill_delay settings.
+    #
+    # The post-cancel DB reconciliation in cancel_helpers is still the
+    # authoritative backstop — this alarm just reduces how often that
+    # backstop needs to fire.
+    signal.alarm(25)
 
     # STEP 0: snapshot active job IDs.
     active_ids = []

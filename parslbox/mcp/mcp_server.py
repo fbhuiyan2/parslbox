@@ -213,11 +213,18 @@ def cancel_pbs_job(params: CancelJobSchema) -> str:
     except Exception as e:
         return f"Exception occurred when cancelling PBS job. Exception: {e}"
 
+    reconciled = result.get("reconciled_count", 0)
+    recon_suffix = (
+        f" Reconciled {reconciled} job(s) left in Running/Submitted (flipped to Killed)."
+        if reconciled else ""
+    )
+
     if result.get("success"):
         return (f"PBS job {result['jobid']} cancelled cleanly "
-                f"(grace: {result.get('grace', '?')}s).")
+                f"(grace: {result.get('grace', '?')}s).{recon_suffix}")
     return (f"Failed to cancel PBS job {result.get('jobid', '?')} "
-            f"at stage '{result.get('stage', '?')}': {result.get('error', 'unknown')}")
+            f"at stage '{result.get('stage', '?')}': {result.get('error', 'unknown')}."
+            f"{recon_suffix}")
 
 
 @mcp.tool(
@@ -238,11 +245,18 @@ def cancel_slurm_job(params: CancelJobSchema) -> str:
     except Exception as e:
         return f"Exception occurred when cancelling SLURM job. Exception: {e}"
 
+    reconciled = result.get("reconciled_count", 0)
+    recon_suffix = (
+        f" Reconciled {reconciled} job(s) left in Running/Submitted (flipped to Killed)."
+        if reconciled else ""
+    )
+
     if result.get("success"):
         return (f"SLURM job {result['jobid']} cancelled cleanly "
-                f"(grace: {result.get('grace', '?')}s).")
+                f"(grace: {result.get('grace', '?')}s).{recon_suffix}")
     return (f"Failed to cancel SLURM job {result.get('jobid', '?')} "
-            f"at stage '{result.get('stage', '?')}': {result.get('error', 'unknown')}")
+            f"at stage '{result.get('stage', '?')}': {result.get('error', 'unknown')}."
+            f"{recon_suffix}")
 
 
 @mcp.tool(

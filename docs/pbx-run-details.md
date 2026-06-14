@@ -59,8 +59,11 @@ The user must manually re-queue (`pbx update <ids> --status Ready` or `--status 
 1. The CLI sends SIGTERM to the orchestrator (not directly to the scheduler).
 2. The SIGTERM handler marks all in-flight jobs **`Killed`** in the DB and triggers a graceful Parsl shutdown.
 3. After `--grace` seconds (default 30 s), the hard `qdel`/`scancel` runs.
+4. After the hard kill (success or failure), pbx reconciles the DB: any jobs left in `Running`/`Submitted` whose `sched_job_id` matches the killed batch are force-flipped to `Killed`. Scoped by `sched_job_id`, so concurrent batch jobs are unaffected.
 
-The grace window is the reason you should always prefer `pbx qdel` over raw `qdel` — without it, in-flight rows can remain stuck in `Running`/`Submitted`.
+The grace window is the reason you should always prefer `pbx qdel` over raw `qdel` — without it, in-flight rows can remain stuck in `Running`/`Submitted`. The reconciliation in step 4 is a safety net for the (rare) cases where the signal handler couldn't complete its DB cleanup before the process exited (DB contention, alarm timeout, exception). Without it, those jobs would stay stuck in `Running` indefinitely until a manual `pbx update`.
+
+`pbx qdel`/`pbx scancel` **always** mark `Killed`, regardless of `--respawn` mode. If you want to pause-and-resume a respawn chain rather than terminate it, flip the jobs back to `Restart` manually after the cancel and run `pbx qsub --respawn N` again.
 
 ### Normal completion
 

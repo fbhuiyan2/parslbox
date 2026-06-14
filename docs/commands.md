@@ -272,6 +272,8 @@ Gracefully cancel a running ParslBox batch job. **Always prefer these over raw `
 - `--grace/-g N` — seconds between SIGTERM and the hard kill (default `30`).
 - Sends SIGTERM first so the orchestrator can mark in-flight jobs as `Killed` in the database, then runs the scheduler's kill command.
 - Raw `qdel`/`scancel` give only the site's default kill grace (often ~2s), which can leave jobs stuck in `Running` state.
+- **Always marks `Killed`, even under `--respawn`.** If you want to pause-and-resume a respawn chain rather than terminate it, flip the jobs back to `Restart` manually after the cancel (`pbx update --status Restart <ids>`) and run `pbx qsub --respawn N` again.
+- **DB reconciliation.** After the scheduler kill (whether it succeeded or not), pbx queries the DB for any jobs still in `Running`/`Submitted` under this batch (`sched_job_id` match) and force-flips them to `Killed`. This catches cases where the orchestrator's signal handler couldn't complete its cleanup before the process exited (DB contention, alarm timeout, etc.). Scoped by `sched_job_id` so concurrent batch jobs are unaffected. If the hard-kill step returned an error but reconciliation cleaned up stuck jobs, the command exits `0` with a warning — the batch is dead and the DB is consistent, which was the user intent.
 
 ```bash
 pbx qdel    1234567        # 30s default grace

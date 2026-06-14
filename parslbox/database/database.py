@@ -232,6 +232,39 @@ def get_jobs_by_ids(db_path: Path, job_ids: List[int]) -> List[Dict[str, Any]]:
         results = cur.execute(query, job_ids).fetchall()
         return [dict(row) for row in results]
 
+def get_jobs_by_sched_id(
+    db_path: Path,
+    sched_job_id: str,
+    statuses: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """Fetch jobs whose `sched_job_id` matches, optionally filtered by status.
+
+    Used by `pbx qdel` / `pbx scancel` reconciliation: after killing a batch
+    job, any jobs the orchestrator's signal handler didn't manage to flip to
+    `Killed` (Step 2 of perform_shutdown) are still sitting in `Running` or
+    `Submitted`. They are uniquely identifiable by their `sched_job_id`
+    (overwritten on every claim, so only stuck jobs from the killed batch
+    still carry its id in a non-terminal status).
+    """
+    if not sched_job_id:
+        return []
+    with get_configured_connection(db_path) as con:
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        if statuses:
+            placeholders = ','.join('?' for _ in statuses)
+            query = (
+                f"SELECT * FROM jobs WHERE sched_job_id = ? "
+                f"AND status IN ({placeholders}) ORDER BY job_id ASC"
+            )
+            params = [sched_job_id, *statuses]
+        else:
+            query = "SELECT * FROM jobs WHERE sched_job_id = ? ORDER BY job_id ASC"
+            params = [sched_job_id]
+        results = cur.execute(query, params).fetchall()
+        return [dict(row) for row in results]
+
+
 def parse_existing_parents(parents_str: Optional[str]) -> List[int]:
     """
     Parse existing parents from JSON string to list of integers.
