@@ -60,6 +60,36 @@ def choose_output_mode(
     return 'a'
 
 
+def should_re_dispatch_known_job(tracker_status: str, db_status: str) -> bool:
+    """Decide whether a job already in the dispatch loop's `known_job_ids`
+    should be re-dispatched when dynamic discovery sees it back in a
+    runnable status in the DB.
+
+    Re-dispatch when ALL three hold:
+      - tracker shows a settled state (Done / Failed / Warning / Killed / Ready) —
+        no live Parsl future for this job
+      - DB shows it back in a runnable status (Ready / Restart) — the user
+        (or an external script) set it to be run again
+      - NOT in flight (Submitted / Running) — a live future exists; let it
+        finish on its own path, the DB flip is a no-op for this link
+
+    Re-discovery routes the job into `new_jobs`, which is exactly what makes
+    the downstream `apply_restart_hook` call fire for `Restart`-status entries
+    (so they get added to `restarting_job_ids` and their stdout/stderr opens
+    in 'a'+banner mode).
+
+    Background: the previous implementation only handled the single combo
+    (tracker=Failed AND db=Ready), silently dropping every other valid
+    re-dispatch intent — including the common case where the user flips a
+    Ready/Done/Killed job back to Restart mid-run to resume from a
+    checkpoint. See test_run_dynamic_rediscovery.py for the full table.
+    """
+    tracker_settled = tracker_status in ('Done', 'Failed', 'Warning', 'Killed', 'Ready')
+    db_runnable = db_status in ('Ready', 'Restart')
+    in_flight = tracker_status in ('Submitted', 'Running')
+    return tracker_settled and db_runnable and not in_flight
+
+
 def get_default_run_dir() -> Path:
     """Generate default run directory with current time and date in hhmmss_ddmmyy format."""
     now = datetime.now()

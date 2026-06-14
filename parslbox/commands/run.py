@@ -35,6 +35,7 @@ from parslbox.commands.helpers.run_cmd_helpers import (
     create_atexit_handler,
     perform_shutdown,
     choose_output_mode,
+    should_re_dispatch_known_job,
 )
 from parslbox.commands.helpers.hook_dispatch import dispatch_hook_on_compute
 from parslbox.database.status_buffer import StatusBuffer
@@ -660,14 +661,30 @@ def run(
         for job in new_runnable:
             job_id = job['job_id']
             if job_id in known_job_ids:
-                # Check if user reset a failed job back to Ready from outside the batch job
+                # Job was already in this invocation's filtered set. Re-dispatch
+                # whenever the tracker considers it settled (Done/Failed/Warning/
+                # Killed/Ready-but-not-running) AND the DB now shows it back in a
+                # runnable status (Ready/Restart) — that's the user (or an
+                # external script) saying "run this again." A job whose tracker
+                # status is Submitted/Running has a live future; the DB flip is
+                # a no-op for this link, leave the future alone and let the
+                # walltime/result path settle it.
+                #
+                # Routing re-discovered Restart-status jobs through new_jobs is
+                # what lets the downstream apply_restart_hook call (below) fire
+                # on them and add them to restarting_job_ids, so their
+                # stdout/stderr opens in 'a'+banner mode.
                 tracked = job_tracker.get_job(job_id)
                 if not tracked:
                     logger.warning(f"Job {job_id} in known_job_ids but missing from JobTracker — data inconsistency")
-                elif tracked['status'] == 'Failed' and job['status'] == 'Ready':
-                    job_tracker.update_job_status(job_id, 'Ready')
+                    continue
+                if should_re_dispatch_known_job(tracked['status'], job['status']):
+                    job_tracker.update_job_status(job_id, job['status'])
                     new_jobs.append(job)
-                    logger.info(f"Dynamic discovery: Re-discovered job {job_id} (user reset from Failed to Ready)")
+                    logger.info(
+                        f"Dynamic discovery: Re-discovered job {job_id} "
+                        f"(tracker={tracked['status']} → DB={job['status']})"
+                    )
                 continue
             passes_app = not app_filter or job['app'] in app_filter
             passes_tag = not tag_filter or job['tag'] in tag_filter
