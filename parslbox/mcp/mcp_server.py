@@ -201,9 +201,12 @@ def submit_slurm_job(params: SBatchSchema) -> str:
         "Gracefully cancel a running ParslBox PBS batch job.\n\n"
         "Sends SIGTERM via qsig, waits `grace` seconds (default 30) so the orchestrator "
         "can mark in-flight jobs as Killed in the database, then runs qdel to terminate. "
+        "After the scheduler kill, pbx reconciles the DB: any jobs still in Running/Submitted "
+        "under this batch (matched by sched_job_id) are force-flipped to Killed, so the DB "
+        "ends up consistent even when the orchestrator's signal handler doesn't complete "
+        "cleanly. Scoped by sched_job_id, so concurrent batch jobs are unaffected. "
         "Always prefer this over a raw qdel for ParslBox jobs — raw qdel only gives the "
-        "orchestrator the cluster's default kill grace (often ~2s), which may leave jobs "
-        "stuck in 'Running' state in the database."
+        "orchestrator the cluster's default kill grace (often ~2s) and does no DB cleanup."
     ),
 )
 def cancel_pbs_job(params: CancelJobSchema) -> str:
@@ -233,9 +236,12 @@ def cancel_pbs_job(params: CancelJobSchema) -> str:
         "Gracefully cancel a running ParslBox SLURM batch job.\n\n"
         "Sends SIGTERM to the batch script via `scancel --signal=TERM --batch`, waits "
         "`grace` seconds (default 30) so the orchestrator can mark in-flight jobs as Killed "
-        "in the database, then runs scancel to terminate. Always prefer this over a raw "
-        "scancel for ParslBox jobs — raw scancel only gives the orchestrator the cluster's "
-        "default kill grace, which may leave jobs stuck in 'Running' state in the database."
+        "in the database, then runs scancel to terminate. After the scheduler kill, pbx "
+        "reconciles the DB: any jobs still in Running/Submitted under this batch (matched "
+        "by sched_job_id) are force-flipped to Killed, so the DB ends up consistent even "
+        "when the orchestrator's signal handler doesn't complete cleanly. Scoped by "
+        "sched_job_id, so concurrent batch jobs are unaffected. Always prefer this over "
+        "a raw scancel for ParslBox jobs — raw scancel does no DB cleanup."
     ),
 )
 def cancel_slurm_job(params: CancelJobSchema) -> str:
