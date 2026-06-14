@@ -25,7 +25,7 @@ ParslBox provides a CLI (`pbx`), a Python API, and an MCP server for AI-agent in
   - MPI backends: MPICH, OpenMPI, srun
 - **Scheduler support:** PBS (`pbx qsub`) and SLURM (`pbx sbatch`) with configurable `--sched-opts`
 - **Pre-configured HPC systems:** Polaris, Aurora (GPU & Tile modes), Sophia, Crux, LCRC Swing, LCRC Improv, Pinnacles-CenvalArc, Perlmutter (GPU & CPU), plus `*-mpi`/`*-srun` launcher variants for large-scale (>10k worker) runs
-- **Dynamic job discovery:** `--dynamic` (default) polls for newly added jobs during a run session. New jobs matching the same `--apps`/`--tags` filters are picked up every 60s. Failed jobs reset to Ready by the user (via `pbx update --status Ready` from another terminal) are also re-discovered and re-run. Use `--static` for collect-once behavior
+- **Dynamic job discovery:** `--dynamic` (default) polls for newly added jobs during a run session. New jobs matching the same `--apps`/`--tags` filters are picked up every 60s. Any tracker-settled job (Done/Failed/Warning/Killed/Ready) whose DB status the user flips back to `Ready` or `Restart` (via `pbx update --status … <ids>` from another terminal) is also re-discovered and re-dispatched — re-discoveries via `Restart` go through the app's `restart()` hook just like startup. Use `--static` for collect-once behavior
 - **Self-respawn chain:** `pbx qsub --respawn N` produces a self-perpetuating submission chain that auto-resubmits at every walltime boundary. Jobs preempted mid-run are marked `Restart`; each next link calls each app's `restart()` hook at startup so apps can decide how to resume. See [`docs/pbx-run-details.md`](docs/pbx-run-details.md)
 - **Fault tolerance:** Node health tracking, quarantine, and auto-recovery
 - **Script-driven status reporting:** Python/Julia scripts report success/failure via `report_status()` utility
@@ -221,7 +221,7 @@ Details: [`parslbox/resource_manager/README.md`](parslbox/resource_manager/READM
 Statuses:
 - Ready → Submitted → Running → Done | Failed | Killed
 - Warning — if an app returns an invalid/unknown status
-- Killed — when walltime is exceeded **in a no-respawn run**, or whenever the user runs `pbx qdel`/`pbx scancel` (SIGTERM handler marks active jobs before the hard kill)
+- Killed — when walltime is exceeded **in a no-respawn run**, or whenever the user runs `pbx qdel`/`pbx scancel` (SIGTERM handler marks active jobs before the hard kill; if the handler doesn't complete its DB writes in time, a post-kill reconciliation step in `pbx qdel`/`scancel` cleans up any jobs left in `Running`/`Submitted` under the killed batch)
 - Restart — set by either the user (`pbx update --status Restart`) or by the orchestrator in a `--respawn` chain at walltime. Either way, the next `pbx run` startup calls the app's `restart()` hook for every `Restart` row (patch fields and re-run / re-run as-is / mark Failed) before the dispatch loop.
 
 Full state-transition table and end-to-end chain walkthrough: [`docs/pbx-run-details.md`](docs/pbx-run-details.md).
