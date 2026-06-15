@@ -2,7 +2,9 @@
 Phase 4 tests: orchestrator restart-mode behavior.
 
 Covers:
-- The three-scene `apply_restart_hook` contract (dict / None / raise).
+- The three-scene `apply_restart_for_job` contract (dict / None / raise) +
+  the strict no-resource-fields rule (returning ngpus/num_nodes/etc. fails
+  the job with a clear error).
 - restart_helpers utilities (placeholder substitution, respawn-count decrement,
   template validation, original-cap extraction, link script generation,
   resubmit subprocess wrapper).
@@ -52,125 +54,134 @@ def _insert_job(db_path, **kwargs):
 
 
 # ============================================================
-# Scene A/B/C — apply_restart_hook
+# Scene A/B/C — apply_restart_for_job (per-job, lazy)
+#
+# The lazy per-job helper returns (bucket, patch, err) and does NOT touch
+# the DB — the caller (create_parsl_future) is responsible for the buffered
+# Running/Failed write. This matches the new "one DB call per dispatch"
+# contract: patches ride along on the Running buffer write; failures get
+# a Failed buffer write.
 # ============================================================
 
 
-class TestApplyRestartHook:
-    def test_scene_a_dict_patches_and_flips_to_ready(self, db):
-        jid = _insert_job(db, in_file="in.original")
+def _job(**kwargs):
+    """Build a minimal job dict for apply_restart_for_job tests."""
+    defaults = {"job_id": 1, "app": "lammps-kk", "path": "/x", "in_file": "in"}
+    defaults.update(kwargs)
+    return defaults
+
+
+class TestApplyRestartForJob:
+    def test_scene_a_dict_returns_patched_bucket(self):
         app = MagicMock()
         app.restart.return_value = {"in_file": "in.restart"}
-        logger = MagicMock()
-
-        buckets = restart_helpers.apply_restart_hook(
-            restart_jobs=database.get_jobs(db, status="Restart"),
-            app_instances={"lammps-kk": app},
-            db_path=db,
-            logger=logger,
+        bucket, patch, err = restart_helpers.apply_restart_for_job(
+            _job(in_file="in.original"), app, MagicMock()
         )
-        assert buckets == {"patched": [jid], "rerun": [], "failed": []}
-        job = database.get_jobs_by_ids(db, [jid])[0]
-        assert job["status"] == "Ready"
-        assert job["in_file"] == "in.restart"
+        assert bucket == "patched"
+        assert patch == {"in_file": "in.restart"}
+        assert err is None
 
-    def test_scene_b_none_keeps_fields_flips_to_ready(self, db):
-        jid = _insert_job(db, in_file="in.original")
+    def test_scene_b_none_returns_rerun_bucket(self):
         app = MagicMock()
         app.restart.return_value = None
-        logger = MagicMock()
-
-        buckets = restart_helpers.apply_restart_hook(
-            restart_jobs=database.get_jobs(db, status="Restart"),
-            app_instances={"lammps-kk": app},
-            db_path=db,
-            logger=logger,
+        bucket, patch, err = restart_helpers.apply_restart_for_job(
+            _job(), app, MagicMock()
         )
-        assert buckets == {"patched": [], "rerun": [jid], "failed": []}
-        job = database.get_jobs_by_ids(db, [jid])[0]
-        assert job["status"] == "Ready"
-        assert job["in_file"] == "in.original"
+        assert bucket == "rerun"
+        assert patch is None
+        assert err is None
 
-    def test_scene_b_empty_dict_also_rerun(self, db):
-        jid = _insert_job(db)
+    def test_scene_b_empty_dict_also_rerun(self):
         app = MagicMock()
         app.restart.return_value = {}
-        buckets = restart_helpers.apply_restart_hook(
-            restart_jobs=database.get_jobs(db, status="Restart"),
-            app_instances={"lammps-kk": app},
-            db_path=db,
-            logger=MagicMock(),
+        bucket, _, _ = restart_helpers.apply_restart_for_job(
+            _job(), app, MagicMock()
         )
-        assert buckets["rerun"] == [jid]
-        assert database.get_jobs_by_ids(db, [jid])[0]["status"] == "Ready"
+        assert bucket == "rerun"
 
-    def test_scene_c_notimplemented_marks_failed(self, db):
-        jid = _insert_job(db)
+    def test_scene_c_notimplemented_returns_failed_with_reason(self):
         app = MagicMock()
         app.restart.side_effect = NotImplementedError("no restart support")
-        buckets = restart_helpers.apply_restart_hook(
-            restart_jobs=database.get_jobs(db, status="Restart"),
-            app_instances={"lammps-kk": app},
-            db_path=db,
-            logger=MagicMock(),
+        bucket, patch, err = restart_helpers.apply_restart_for_job(
+            _job(), app, MagicMock()
         )
-        assert buckets == {"patched": [], "rerun": [], "failed": [jid]}
-        assert database.get_jobs_by_ids(db, [jid])[0]["status"] == "Failed"
+        assert bucket == "failed"
+        assert patch is None
+        assert "does not support restart" in err
 
-    def test_missing_app_marks_failed(self, db):
-        jid = _insert_job(db, app="missing_app")
-        buckets = restart_helpers.apply_restart_hook(
-            restart_jobs=database.get_jobs(db, status="Restart"),
-            app_instances={},  # no app loaded
-            db_path=db,
-            logger=MagicMock(),
+    def test_generic_exception_returns_failed_with_class_name(self):
+        app = MagicMock()
+        app.restart.side_effect = RuntimeError("disk full")
+        bucket, _, err = restart_helpers.apply_restart_for_job(
+            _job(), app, MagicMock()
         )
-        assert buckets["failed"] == [jid]
-        assert database.get_jobs_by_ids(db, [jid])[0]["status"] == "Failed"
+        assert bucket == "failed"
+        assert "RuntimeError" in err and "disk full" in err
 
-    def test_unknown_patch_fields_dropped_with_warning(self, db):
-        jid = _insert_job(db)
+    def test_missing_app_returns_failed(self):
+        bucket, _, err = restart_helpers.apply_restart_for_job(
+            _job(app="missing"), None, MagicMock()
+        )
+        assert bucket == "failed"
+        assert "missing" in err and "not loaded" in err
+
+    def test_unknown_non_resource_field_warns_and_drops(self):
         app = MagicMock()
         app.restart.return_value = {"in_file": "ok", "bogus_field": 42}
         logger = MagicMock()
-        restart_helpers.apply_restart_hook(
-            restart_jobs=database.get_jobs(db, status="Restart"),
-            app_instances={"lammps-kk": app},
-            db_path=db,
-            logger=logger,
+        bucket, patch, err = restart_helpers.apply_restart_for_job(
+            _job(), app, logger
         )
-        # Warning logged about the bogus field.
+        assert bucket == "patched"
+        assert patch == {"in_file": "ok"}  # bogus dropped
+        # Warning emitted about the unknown field.
         warn_calls = [c for c in logger.warning.call_args_list if "bogus_field" in str(c)]
-        assert warn_calls
-        # in_file applied; bogus_field harmlessly ignored.
-        assert database.get_jobs_by_ids(db, [jid])[0]["in_file"] == "ok"
+        assert warn_calls, "expected a warning about the unknown field"
 
-    def test_mixed_buckets_all_three_in_one_call(self, db):
-        jid_a = _insert_job(db, app="lammps-kk", path="/a")
-        jid_b = _insert_job(db, app="vasp", path="/b")
-        jid_c = _insert_job(db, app="python", path="/c")
-        app_a = MagicMock(); app_a.restart.return_value = {"in_file": "x"}
-        app_b = MagicMock(); app_b.restart.return_value = None
-        app_c = MagicMock(); app_c.restart.side_effect = NotImplementedError()
-        buckets = restart_helpers.apply_restart_hook(
-            restart_jobs=database.get_jobs(db, status="Restart"),
-            app_instances={"lammps-kk": app_a, "vasp": app_b, "python": app_c},
-            db_path=db,
-            logger=MagicMock(),
+    def test_only_unknown_fields_collapses_to_rerun(self):
+        """If every returned key is unknown (none are patchable), there's
+        nothing to apply — treat as a no-op rerun rather than an empty patch."""
+        app = MagicMock()
+        app.restart.return_value = {"bogus_field": 42}
+        bucket, patch, err = restart_helpers.apply_restart_for_job(
+            _job(), app, MagicMock()
         )
-        assert buckets == {"patched": [jid_a], "rerun": [jid_b], "failed": [jid_c]}
+        assert bucket == "rerun"
+        assert patch is None
+
+
+class TestApplyRestartForJobForbidsResourceFields:
+    """Strict contract: restart() may not change resource fields. Resources
+    are allocated BEFORE restart() runs in the lazy design, so patching
+    them after would be silently ignored. Fail loud instead."""
+
+    @pytest.mark.parametrize("forbidden", [
+        "ngpus", "num_nodes", "node_occupancy", "ranks_per_node", "mpi_opts",
+    ])
+    def test_returning_any_resource_field_is_a_contract_violation(self, forbidden):
+        app = MagicMock()
+        app.restart.return_value = {"in_file": "ok", forbidden: 7}
+        bucket, patch, err = restart_helpers.apply_restart_for_job(
+            _job(), app, MagicMock()
+        )
+        assert bucket == "failed"
+        assert patch is None
+        assert "forbidden" in err
+        assert forbidden in err
+
+    def test_multiple_forbidden_fields_all_reported(self):
+        app = MagicMock()
+        app.restart.return_value = {"ngpus": 4, "num_nodes": 2}
+        bucket, _, err = restart_helpers.apply_restart_for_job(
+            _job(), app, MagicMock()
+        )
+        assert bucket == "failed"
+        assert "ngpus" in err and "num_nodes" in err
 
 
 # ============================================================
-# Regression: apply_restart_hook must NOT be gated on the respawn flag
-#
-# A user may manually mark a job Restart (via `pbx update --status Restart`)
-# in a non-respawn run — e.g., on clusters that don't allow qsub from
-# compute nodes, when debugging interactively, or when one job dies while
-# the rest of the run continues. The app's restart() hook should still fire
-# so checkpoint-resume logic works in that scenario. Previously gated by
-# `if restart_mode:` in run.py; now must be unconditional, regardless of
-# whether --respawn is set.
+# Source-pattern guards: lazy restart wiring must stay intact
 # ============================================================
 
 
@@ -221,88 +232,56 @@ class TestRestartingJobIdsPlumbing:
         )
 
 
-class TestApplyRestartHookOnDynamicDiscovery:
-    def test_discover_new_jobs_invokes_apply_restart_hook(self):
-        """Source-level guard: `discover_new_jobs` must call `apply_restart_hook`
-        on the Restart-status subset of newly-discovered jobs.
+class TestLazyRestartWiring:
+    """Source-pattern guards locking in the lazy per-job restart design.
 
-        Rationale: a job that goes Done/Failed/Killed/Ready → Restart during a
-        running pbx run invocation (e.g., via `pbx update --status Restart`
-        from another terminal) gets picked up by the discovery polling. Without
-        this call, those jobs would dispatch with status='Restart' but their
-        app's `restart()` hook would never fire — defeating checkpoint-resume
-        logic. Closes the only mid-run gap left by the startup-time hook.
-        """
-        import re
+    Three invariants:
+      1. The bulk `apply_restart_hook` (eager startup + dynamic-discovery
+         calls) MUST be gone — any remaining call would restore the eager
+         design and reintroduce the wasted-work bug it replaced.
+      2. `apply_restart_for_job` must be CALLED inside `create_parsl_future`
+         so per-job restart actually fires.
+      3. The bulk `apply_restart_hook` function itself must be REMOVED from
+         restart_helpers — keeping it around invites future re-introduction.
+    """
+
+    def _run_py_source(self) -> str:
         from pathlib import Path
         import parslbox.commands.run as run_mod
+        return Path(run_mod.__file__).read_text()
 
-        src = Path(run_mod.__file__).read_text()
-        lines = src.splitlines()
-        # Find the `def discover_new_jobs(` line, then scan its body (until
-        # dedent to <= def's indent column) for an apply_restart_hook( call.
-        def_idx = None
-        for i, line in enumerate(lines):
-            if re.match(r"\s*def\s+discover_new_jobs\s*\(", line):
-                def_idx = i
-                break
-        assert def_idx is not None, (
-            "discover_new_jobs definition not found in run.py — test stale"
-        )
-        def_col = len(lines[def_idx]) - len(lines[def_idx].lstrip())
-        found = False
-        for j in range(def_idx + 1, len(lines)):
-            ln = lines[j]
-            if ln.strip() and (len(ln) - len(ln.lstrip())) <= def_col:
-                break  # left the function body
-            if re.search(r"\bapply_restart_hook\s*\(", ln):
-                found = True
-                break
-        assert found, (
-            "discover_new_jobs does not invoke apply_restart_hook(). "
-            "Dynamically-discovered Restart jobs must go through the "
-            "per-job restart() hook just like startup-time Restart jobs. "
-            "See test docstring for rationale."
-        )
-
-
-class TestRestartHookDecoupledFromRespawn:
-    def test_run_py_calls_apply_restart_hook_unconditionally(self):
-        """Source-level guard: `apply_restart_hook` must NOT be inside any
-        `if respawn ...:` / `if restart_mode:` block in run.py. The hook
-        fires for every Restart-status job, regardless of orchestrator mode.
-
-        Pattern-based test: cheaper than spinning up the full typer command
-        and locks in the contract against silent re-gating.
-        """
+    def test_run_py_does_not_call_eager_apply_restart_hook(self):
         import re
-        from pathlib import Path
-        import parslbox.commands.run as run_mod
-
-        src = Path(run_mod.__file__).read_text()
-        lines = src.splitlines()
-        # Match any call to apply_restart_hook( on a line — including the
-        # `buckets = apply_restart_hook(...)` capture form added when the
-        # restart-continuation set was introduced.
-        hook_call_lines = [
-            i for i, line in enumerate(lines)
-            if re.search(r"\bapply_restart_hook\s*\(", line)
-        ]
-        assert hook_call_lines, (
-            "apply_restart_hook call site not found in run.py — test stale"
+        src = self._run_py_source()
+        # Match any callable form: `apply_restart_hook(`. Comments referencing
+        # the old name in prose are fine — those don't have `(`.
+        callsites = re.findall(r"\bapply_restart_hook\s*\(", src)
+        assert not callsites, (
+            f"run.py still contains {len(callsites)} eager apply_restart_hook() "
+            f"call(s). The lazy design replaces these with per-job "
+            f"apply_restart_for_job calls inside create_parsl_future. "
+            f"Re-introducing them brings back the wasted-work bug "
+            f"(restart() side effects on jobs that get backlogged/gated)."
         )
-        # Match `if respawn ...:` (any expression involving the respawn var)
-        # and also the legacy `if restart_mode:` form.
-        gate_re = re.compile(r"\s*if\s+(respawn|restart_mode)\b")
-        for hook_line in hook_call_lines:
-            window = lines[max(0, hook_line - 40):hook_line]
-            gating = [ln for ln in window if gate_re.match(ln)]
-            assert not gating, (
-                f"apply_restart_hook at line {hook_line + 1} is gated by "
-                f"{gating[0].strip()!r}. The hook must fire for any "
-                f"Restart-status job, regardless of --respawn. See test "
-                f"docstring for rationale."
-            )
+
+    def test_create_parsl_future_calls_apply_restart_for_job(self):
+        import inspect
+        from parslbox.commands.run import create_parsl_future
+        src = inspect.getsource(create_parsl_future)
+        assert "apply_restart_for_job(" in src, (
+            "create_parsl_future does not call apply_restart_for_job. "
+            "Restart-status jobs would dispatch without their app's "
+            "restart() hook running — checkpoint-resume would silently break."
+        )
+
+    def test_restart_helpers_does_not_export_bulk_apply_restart_hook(self):
+        # The bulk function must be deleted, not just unused. Keeping it
+        # around invites silent re-introduction.
+        assert not hasattr(restart_helpers, "apply_restart_hook"), (
+            "restart_helpers.apply_restart_hook still exists. The lazy design "
+            "deletes the bulk eager helper entirely — see apply_restart_for_job "
+            "for the per-job replacement."
+        )
 
 
 # ============================================================

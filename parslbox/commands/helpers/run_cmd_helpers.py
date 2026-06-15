@@ -27,13 +27,12 @@ def choose_output_mode(
     """Decide 'a' vs 'w' for a job's stdout/stderr file mode.
 
     A run is a restart-continuation when EITHER:
-      - the job is in `restarting_job_ids` (placed there by apply_restart_hook
-        when the job was Restart-status at this `pbx run`'s startup or at a
-        mid-run dynamic-discovery event), OR
+      - the job is in `restarting_job_ids` (added by `apply_restart_for_job`
+        inside create_parsl_future when the job's `restart()` hook returned
+        a successful bucket), OR
       - the DB still shows status='Restart' at the moment we open the file
-        (covers the tiny race between apply_restart_hook and dispatch, and any
-        future code path that puts a Restart-status job into create_parsl_future
-        without routing through the hook).
+        (covers any future code path that puts a Restart-status job into
+        create_parsl_future without routing through the per-job hook).
 
     For restart-continuations: returns 'a'. For each path that already exists
     and has content, appends a banner line so the boundary between runs is
@@ -64,24 +63,22 @@ def should_gate_dispatch(
     app,
     job_dict: dict,
     remaining_walltime_s: float,
-    restarting_job_ids: Set[int],
 ) -> bool:
     """Decide whether a job should be SKIPPED at dispatch time because the
     batch's remaining walltime is below the app's declared floor.
 
-    Returns True (skip dispatch — leave job in DB Ready/Restart) when ALL hold:
-      - job is NOT a restart-continuation (those are exempt — checkpoint state
-        means even brief runtime advances the simulation)
+    Returns True (skip dispatch — leave job in DB Ready/Restart) when BOTH:
       - app declares a positive floor via min_remaining_walltime(job_dict)
       - remaining_walltime_s < that floor
 
-    Universal: applies whether --respawn is on or off. Under --respawn, if
-    all remaining work gets gated and futures drain, pbx run exits via the
-    existing exit-check path; chain continuation depends on the walltime
-    trigger, which this gate does not affect.
+    Universal: applies whether --respawn is on or off, and regardless of
+    whether the job is a fresh Ready job or a Restart-status job (the
+    restart() hook is now called lazily AFTER this gate inside
+    create_parsl_future, so there's nothing to "protect" pre-gate). Under
+    --respawn, if all remaining work gets gated and futures drain, pbx run
+    exits via the existing exit-check path; chain continuation depends on
+    the walltime trigger, which this gate does not affect.
     """
-    if job_dict['job_id'] in restarting_job_ids:
-        return False
     floor = app.min_remaining_walltime(job_dict)
     if floor <= 0:
         return False
@@ -101,10 +98,10 @@ def should_re_dispatch_known_job(tracker_status: str, db_status: str) -> bool:
       - NOT in flight (Submitted / Running) — a live future exists; let it
         finish on its own path, the DB flip is a no-op for this link
 
-    Re-discovery routes the job into `new_jobs`, which is exactly what makes
-    the downstream `apply_restart_hook` call fire for `Restart`-status entries
-    (so they get added to `restarting_job_ids` and their stdout/stderr opens
-    in 'a'+banner mode).
+    Re-discovery routes the job into `new_jobs`, which is what makes the
+    per-job `apply_restart_for_job` call inside create_parsl_future fire on
+    `Restart`-status entries (so they get added to `restarting_job_ids` and
+    their stdout/stderr opens in 'a'+banner mode).
 
     Background: the previous implementation only handled the single combo
     (tracker=Failed AND db=Ready), silently dropping every other valid

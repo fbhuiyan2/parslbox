@@ -73,9 +73,10 @@ def create_parsl_future(job, app_instance, app_config, mpi_config, config_name, 
         futures: List to append the future to
         system_config: System configuration object
         restarting_job_ids: Set of job IDs that are restart-continuations in this
-            `pbx run` invocation (populated by apply_restart_hook calls at
-            startup and during dynamic discovery). Decides whether per-job
-            stdout/stderr open in 'a'+banner mode (continuation) or 'w' (fresh).
+            `pbx run` invocation. Populated lazily inside this function when
+            `apply_restart_for_job` returns a successful bucket. Decides
+            whether per-job stdout/stderr open in 'a'+banner mode
+            (continuation) or 'w' (fresh).
 
     Returns:
         bool: True if successful, False if failed
@@ -83,23 +84,28 @@ def create_parsl_future(job, app_instance, app_config, mpi_config, config_name, 
     job_id = job['job_id']
     job_path = Path(job['path'])
     logger = logging.getLogger(__name__)
-    
+
+    # Carries restart() patch fields (if any) into the buffered Running write
+    # at the end of this function. Empty for fresh Ready jobs and for restart
+    # jobs whose app returned None/{} (rerun-as-is).
+    pending_patch: dict = {}
+
     try:
         # Check job status and claim it immediately to prevent race conditions
         current_jobs = database.get_jobs_by_ids(db_path, [job_id])
         if not current_jobs:
             logger.warning(f"Job {job_id}: Job no longer exists in database, skipping")
             return False
-            
+
         current_status = current_jobs[0]['status']
         if current_status not in ['Ready', 'Restart']:
             logger.info(f"Job {job_id}: Status is '{current_status}', skipping (already processed by another process)")
             return False
-        
+
         # Immediately claim the job by updating status to "Submitted" and Set scheduler job ID
         sched_job_id = get_scheduler_job_id(scheduler)
         database.update_jobs(db_path, job_ids=[job_id], status="Submitted", sched_job_id=sched_job_id)
-        # Also update JobTracker 
+        # Also update JobTracker
         resource_manager.job_tracker.update_job_status(job_id, "Submitted")
         logger.info(f"Job {job_id}: Successfully claimed job for processing")
         
@@ -155,6 +161,29 @@ def create_parsl_future(job, app_instance, app_config, mpi_config, config_name, 
                 tile_mode=mpi_commands.get('PBX_GPU_TILE_MODE', False),
             )
 
+        # Lazy per-job restart() — called only after resources are assigned,
+        # only for jobs that survived the dispatch gate. Symmetric with
+        # preprocess(): runs per-job, on-demand, not eagerly at startup.
+        # Patches are buffered into the Running write below (single batched
+        # DB call); the in-memory `job` dict is the source of truth for the
+        # rest of this function (preprocess, parsl_app build).
+        if current_status == 'Restart':
+            from parslbox.commands.helpers.restart_helpers import apply_restart_for_job
+            bucket, patch, err = apply_restart_for_job(job, app_instance, logger)
+            if bucket == 'failed':
+                # Re-raise so the generic except below handles resource cleanup
+                # + buffered Failed write uniformly with other dispatch failures.
+                raise RuntimeError(f"restart() failed: {err}")
+            restarting_job_ids.add(job_id)
+            if bucket == 'patched':
+                job.update(patch)
+                pending_patch = patch
+                logger.info(
+                    f"Job {job_id}: restart() patched fields {sorted(patch)}"
+                )
+            else:
+                logger.info(f"Job {job_id}: restart() returned no patch (rerun as-is)")
+
         # Run preprocessing — either in-process on the head node (default) or
         # dispatched to the assigned compute node when the app opts in.
         logger.info(f"Running preprocessing for Job ID {job_id}...")
@@ -183,9 +212,9 @@ def create_parsl_future(job, app_instance, app_config, mpi_config, config_name, 
         
         
         # Decide per-job stdout/stderr file mode. Restart-continuation runs
-        # (status was Restart at startup or arrived as Restart and went through
-        # apply_restart_hook) append + write a banner so the boundary between
-        # links / retries is visible; fresh Ready runs clobber prior content.
+        # (DB status was 'Restart' on entry, or restart() just ran successfully
+        # above) append + write a banner so the boundary between links /
+        # retries is visible; fresh Ready runs clobber prior content.
         stdout_path = job_path / f"pbx_job_{job_id}.out"
         stderr_path = job_path / f"pbx_job_{job_id}.err"
         file_mode = choose_output_mode(
@@ -226,9 +255,12 @@ def create_parsl_future(job, app_instance, app_config, mpi_config, config_name, 
         
         logger.info(f"Job {job_id}: Successfully created Parsl future")
         
-        # Buffer the "Running" status update and update JobTracker
+        # Buffer the "Running" status update and update JobTracker.
+        # If restart() patched any fields (in_file/env_file/tag), they ride
+        # along on this same buffered write — single batched DB call covers
+        # both the status flip and the patch.
         resource_manager.job_tracker.update_job_status(job_id, 'Running')
-        status_buffer.add_status_update(job_id, status='Running')
+        status_buffer.add_status_update(job_id, status='Running', **pending_patch)
 
         return True
         
@@ -363,55 +395,14 @@ def run(
     tag_filter = set(tags.split(',')) if tags else None
 
     # Tracks every job that this `pbx run` invocation considers a
-    # restart-continuation — populated by apply_restart_hook calls (at startup
-    # and during dynamic discovery) with Scene A "patched" + Scene B "rerun"
-    # outcomes. Used to drive per-job stdout/stderr file mode in
-    # create_parsl_future (continuation → 'a'+banner; fresh → 'w'). Cleared
-    # for any job that reaches a terminal status (Done/Failed/Warning) so a
-    # Failed→Ready re-discovery within the same invocation gets a fresh write.
+    # restart-continuation — populated lazily inside `create_parsl_future`
+    # when `apply_restart_for_job` runs successfully (Scene A patched or
+    # Scene B rerun-as-is). Used by `choose_output_mode` to decide per-job
+    # stdout/stderr file mode (continuation → 'a'+banner; fresh → 'w').
+    # Cleared for any job that reaches a terminal status (Done/Failed/Warning)
+    # so a Failed→Ready re-discovery within the same invocation gets a
+    # fresh write.
     restarting_job_ids: set[int] = set()
-
-    # --- Restart-status startup hook ---
-    # Every job currently in Restart status — whether marked by the previous
-    # link's walltime kill (under --respawn) or set manually by the user
-    # via `pbx update --status Restart` — gets its app.restart() called per
-    # the three-scene contract before the run loop touches them. This runs
-    # regardless of --respawn so apps with checkpoint-resume logic can
-    # always pick up where they left off. No-op when no Restart jobs exist
-    # (the common case on the very first link / a fresh run).
-    from parslbox.commands.helpers.restart_helpers import apply_restart_hook
-    from parslbox.apps.app_registry import get_app_instance
-
-    restart_jobs = database.get_jobs(db_path, status='Restart')
-    # Same filter the rest of the orchestrator uses.
-    restart_jobs = [
-        j for j in restart_jobs
-        if (not app_filter or j['app'] in app_filter)
-        and (not tag_filter or j['tag'] in tag_filter)
-    ]
-    if restart_jobs:
-        # Load app instances just for those apps (fast; no MPI config needed
-        # for the restart() call itself).
-        restart_app_instances = {}
-        for app_name in set(j['app'] for j in restart_jobs):
-            try:
-                restart_app_instances[app_name] = get_app_instance(app_name)
-            except Exception as e:
-                logger.warning(
-                    f"Restart hook: could not load app '{app_name}' ({e}); "
-                    f"jobs of this app will be marked Failed."
-                )
-        buckets = apply_restart_hook(
-            restart_jobs=restart_jobs,
-            app_instances=restart_app_instances,
-            db_path=db_path,
-            logger=logger,
-        )
-        # Jobs the hook accepted (Scene A patched + Scene B rerun) are
-        # restart-continuations this invocation. Scene C ("failed" bucket)
-        # is intentionally excluded — those jobs are now Failed in the DB
-        # and won't reach create_parsl_future.
-        restarting_job_ids |= set(buckets["patched"]) | set(buckets["rerun"])
 
     # Restart jobs get priority over Ready jobs — they've already consumed
     # resources once and are mid-workflow; we want to clear them before
@@ -565,8 +556,7 @@ def run(
             continue
 
         if should_gate_dispatch(
-            app_instances[app_name], job,
-            shutdown_at - time.time(), restarting_job_ids,
+            app_instances[app_name], job, shutdown_at - time.time(),
         ):
             floor = app_instances[app_name].min_remaining_walltime(job)
             logger.info(
@@ -684,9 +674,10 @@ def run(
                 # walltime/result path settle it.
                 #
                 # Routing re-discovered Restart-status jobs through new_jobs is
-                # what lets the downstream apply_restart_hook call (below) fire
-                # on them and add them to restarting_job_ids, so their
-                # stdout/stderr opens in 'a'+banner mode.
+                # what lets the per-job `apply_restart_for_job` call inside
+                # create_parsl_future fire on them and add them to
+                # restarting_job_ids, so their stdout/stderr opens in
+                # 'a'+banner mode.
                 tracked = job_tracker.get_job(job_id)
                 if not tracked:
                     logger.warning(f"Job {job_id} in known_job_ids but missing from JobTracker — data inconsistency")
@@ -733,43 +724,10 @@ def run(
                         database.update_jobs(db_path, job_ids=[job['job_id']], status="Failed")
                 new_jobs = [j for j in new_jobs if j['app'] != app_name]
 
-        # Call restart() hook for any newly-discovered Restart-status jobs so
-        # checkpoint-resume logic fires for them too, not just for jobs that
-        # were Restart at orchestrator startup. Mirrors the startup hook at
-        # the top of run().
-        restart_subset = [j for j in new_jobs if j['status'] == 'Restart']
-        if restart_subset:
-            restart_apps = {
-                a: app_instances[a]
-                for a in set(j['app'] for j in restart_subset)
-                if a in app_instances
-            }
-            buckets = apply_restart_hook(
-                restart_jobs=restart_subset,
-                app_instances=restart_apps,
-                db_path=db_path,
-                logger=logger,
-            )
-            # Sync the in-memory JobTracker — register_jobs above inserted
-            # these as status='Restart'; the hook just flipped them in the DB.
-            for jid in buckets["patched"] + buckets["rerun"]:
-                job_tracker.update_job_status(jid, "Ready")
-            for jid in buckets["failed"]:
-                job_tracker.update_job_status(jid, "Failed")
-            # Track restart-continuations so create_parsl_future opens their
-            # stdout/stderr in append mode (with banner) instead of clobbering.
-            restarting_job_ids.update(buckets["patched"])
-            restarting_job_ids.update(buckets["rerun"])
-            # Refresh local dicts so resource allocation sees any Scene A patches
-            # (ngpus / num_nodes / node_occupancy / ranks_per_node / ...).
-            restart_ids = [j['job_id'] for j in restart_subset]
-            refreshed = {
-                j['job_id']: j
-                for j in database.get_jobs_by_ids(db_path, restart_ids)
-            }
-            new_jobs = [refreshed.get(j['job_id'], j) for j in new_jobs]
-            # Drop Scene C (hook marked Failed) — they shouldn't dispatch.
-            new_jobs = [j for j in new_jobs if j['status'] != 'Failed']
+        # Restart-status jobs in `new_jobs` are not flipped here — the per-job
+        # `apply_restart_for_job` call inside create_parsl_future handles them
+        # lazily, after resources are assigned. See create_parsl_future for the
+        # contract.
 
         # Process new jobs: dependency check -> resource allocation -> submit/backlog
         new_futures = []
@@ -781,8 +739,7 @@ def run(
                 continue
 
             if should_gate_dispatch(
-                app_instances[app_name], job,
-                shutdown_at - time.time(), restarting_job_ids,
+                app_instances[app_name], job, shutdown_at - time.time(),
             ):
                 floor = app_instances[app_name].min_remaining_walltime(job)
                 logger.info(
@@ -1013,7 +970,7 @@ def run(
                 if app_obj is None:
                     eligible.append(j)
                     continue
-                if should_gate_dispatch(app_obj, j, remaining_s, restarting_job_ids):
+                if should_gate_dispatch(app_obj, j, remaining_s):
                     gated_ids.append(j['job_id'])
                 else:
                     eligible.append(j)

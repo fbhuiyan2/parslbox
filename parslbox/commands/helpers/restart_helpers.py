@@ -1,25 +1,33 @@
 """
 Helpers for `pbx run` Restart-status handling and the `--respawn` chain:
-the startup hook that calls each app's `restart()` for `Restart`-status jobs
-(always on, regardless of --respawn), and the walltime-time resubmit logic
-that generates the next per-link script from `respawn_template.sh` and
-hands it to qsub/sbatch (gated on --respawn).
+the per-job `apply_restart_for_job` call (used lazily inside
+`create_parsl_future` for each Restart-status job), and the walltime-time
+resubmit logic that generates the next per-link script from
+`respawn_template.sh` and hands it to qsub/sbatch (gated on --respawn).
 """
 
 import os
 import re
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional, Tuple
 
 from parslbox.database import database
 
 
-# Fields the orchestrator allows an app's restart() to patch. Any other keys
-# returned in the dict are ignored with a logged warning.
-_PATCHABLE_FIELDS = {
-    "in_file", "env_file", "ngpus", "num_nodes", "node_occupancy",
-    "ranks_per_node", "mpi_opts", "tag",
+# Fields the orchestrator allows an app's restart() to patch. Resource fields
+# (ngpus, num_nodes, node_occupancy, ranks_per_node, mpi_opts) are intentionally
+# excluded — they affect resource allocation, which happens BEFORE restart() runs
+# in the lazy per-job design. An app returning any of those is a contract
+# violation handled in `apply_restart_for_job` (job marked Failed). Other unknown
+# keys are warned-and-dropped without failing the job.
+_PATCHABLE_FIELDS = {"in_file", "env_file", "tag"}
+
+# If restart() returns any of these, it's a contract violation — resources are
+# decided before restart() is called, so patches here would be silently ignored
+# and that would be confusing. Fail loud instead.
+_FORBIDDEN_RESTART_PATCH_FIELDS = {
+    "ngpus", "num_nodes", "node_occupancy", "ranks_per_node", "mpi_opts",
 }
 
 # Required args that MUST be present in a respawn_template.sh's `pbx run` line.
@@ -28,101 +36,69 @@ _REQUIRED_RUN_ARGS = ("--respawn", "--config", "--run-dir")
 
 
 # ============================================================
-# Startup hook: app.restart() per Restart-status job
+# Per-job restart() invocation (called lazily inside create_parsl_future)
 # ============================================================
 
 
-def apply_restart_hook(
-    restart_jobs: List[Dict[str, Any]],
-    app_instances: Dict[str, Any],
-    db_path: Path,
+def apply_restart_for_job(
+    job: Dict[str, Any],
+    app: Any,
     logger,
-) -> Dict[str, List[int]]:
-    """
-    For each job in `restart_jobs`, call `app_instances[job['app']].restart(job)`
-    and partition the outcomes into three buckets (the three-scene contract):
-
-      - "patched":     dict returned → patches applied via bulk DB update, status → Ready
-      - "rerun":       None or {} returned → status → Ready, no field changes
-      - "failed":      NotImplementedError raised (or app missing) → status → Failed
-
-    Three bulk `database.update_jobs` calls are issued (one per bucket).
+) -> Tuple[str, Optional[Dict[str, Any]], Optional[str]]:
+    """Run `app.restart(job)` for one Restart-status job and classify the result.
 
     Returns:
-        dict mapping bucket name to list of job IDs in that bucket.
+        (bucket, patch, err) where:
+          - bucket == "patched": app returned a non-empty valid patch dict.
+            `patch` is the cleaned (only `_PATCHABLE_FIELDS` keys) dict to
+            apply to the in-memory job dict + buffer with the Running write.
+          - bucket == "rerun":   app returned None or {}. `patch` is None.
+          - bucket == "failed":  restart() raised (NotImplementedError,
+            generic exception, or contract violation by returning a
+            forbidden resource field). `err` is a human-readable reason.
+
+    The caller is responsible for the DB write (Failed status, or Running +
+    patch via status_buffer) and for adding the job to `restarting_job_ids`
+    on success.
     """
-    patched_ids: List[int] = []
-    rerun_ids: List[int] = []
-    failed_ids: List[int] = []
+    job_id = job["job_id"]
+    app_name = job["app"]
 
-    # Patches need per-(job_id, patch) detail since each job may patch
-    # different fields; we group them at the end by (column_set) for batched
-    # updates. v1 keeps it simple: one update per patched job. Bulk DB
-    # update by status is still done in one call below.
-    patches_per_job: Dict[int, Dict[str, Any]] = {}
+    if app is None:
+        return ("failed", None, f"app '{app_name}' not loaded")
 
-    for job in restart_jobs:
-        job_id = job["job_id"]
-        app_name = job["app"]
-        app = app_instances.get(app_name)
-        if app is None:
-            logger.warning(
-                f"Restart hook: job {job_id} app '{app_name}' not loaded; "
-                f"marking Failed."
-            )
-            failed_ids.append(job_id)
-            continue
-        try:
-            result = app.restart(job)
-        except NotImplementedError as e:
-            logger.info(
-                f"Restart hook: job {job_id} app '{app_name}' does not support "
-                f"restart ({e}); marking Failed."
-            )
-            failed_ids.append(job_id)
-            continue
-        except Exception as e:
-            logger.error(
-                f"Restart hook: job {job_id} app '{app_name}' restart() raised "
-                f"{type(e).__name__}: {e}; marking Failed."
-            )
-            failed_ids.append(job_id)
-            continue
+    try:
+        result = app.restart(job)
+    except NotImplementedError as e:
+        return ("failed", None, f"app '{app_name}' does not support restart ({e})")
+    except Exception as e:
+        return ("failed", None, f"restart() raised {type(e).__name__}: {e}")
 
-        if not result:
-            rerun_ids.append(job_id)
-            continue
+    if not result:
+        return ("rerun", None, None)
 
-        # Scene A: filter unknown keys, warn but don't fail.
-        unknown = set(result) - _PATCHABLE_FIELDS
-        if unknown:
-            logger.warning(
-                f"Restart hook: job {job_id} restart() returned unknown "
-                f"fields {sorted(unknown)}; ignoring those."
-            )
-        clean_patch = {k: v for k, v in result.items() if k in _PATCHABLE_FIELDS}
-        patches_per_job[job_id] = clean_patch
-        patched_ids.append(job_id)
-
-    # Apply bulk DB updates per bucket.
-    if rerun_ids:
-        database.update_jobs(db_path, job_ids=rerun_ids, status="Ready")
-        logger.info(f"Restart hook: {len(rerun_ids)} job(s) flipped to Ready as-is.")
-
-    if patched_ids:
-        # Per-job update for patched ones (each patch is potentially unique).
-        for jid in patched_ids:
-            patch = patches_per_job[jid]
-            database.update_jobs(db_path, job_ids=[jid], status="Ready", **patch)
-        logger.info(
-            f"Restart hook: {len(patched_ids)} job(s) patched and flipped to Ready."
+    # Contract violation: app tried to patch a resource field. Resources are
+    # already allocated before restart() runs, so we can't honor these.
+    forbidden = set(result) & _FORBIDDEN_RESTART_PATCH_FIELDS
+    if forbidden:
+        return (
+            "failed", None,
+            f"restart() returned forbidden resource field(s) {sorted(forbidden)}; "
+            f"resources cannot be patched by restart()"
         )
 
-    if failed_ids:
-        database.update_jobs(db_path, job_ids=failed_ids, status="Failed")
-        logger.info(f"Restart hook: {len(failed_ids)} job(s) marked Failed.")
-
-    return {"patched": patched_ids, "rerun": rerun_ids, "failed": failed_ids}
+    # Unknown non-resource keys: warn and drop, but don't fail the job.
+    unknown = set(result) - _PATCHABLE_FIELDS - _FORBIDDEN_RESTART_PATCH_FIELDS
+    if unknown:
+        logger.warning(
+            f"Job {job_id}: restart() returned unknown field(s) "
+            f"{sorted(unknown)}; ignoring those."
+        )
+    clean_patch = {k: v for k, v in result.items() if k in _PATCHABLE_FIELDS}
+    if not clean_patch:
+        # Only unknown fields were returned — treat as rerun (nothing to patch).
+        return ("rerun", None, None)
+    return ("patched", clean_patch, None)
 
 
 # ============================================================

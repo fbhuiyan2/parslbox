@@ -21,16 +21,18 @@ Reference for every scenario the in-allocation engine handles: normal runs, wall
 
 ### `Restart` semantics
 
-`Restart` jobs always get their app's `restart()` hook called at the next `pbx run` startup — regardless of whether the row was set by the user manually (`pbx update <id> --status Restart`) or by the orchestrator at walltime under `--respawn`.
+`Restart` jobs get their app's `restart()` hook called **lazily per-job at dispatch time** — inside `create_parsl_future`, right after resources are assigned and right before `preprocess()` runs. Symmetric with `preprocess()`: on-demand, only for jobs the orchestrator is actually about to run. Jobs that get backlogged (no resources), gated (walltime floor), or filtered out for any reason never trigger `restart()`.
 
 | Set by | Why it ended up as Restart |
 | --- | --- |
 | **User** (`pbx update <id> --status Restart`) | "I want this job to resume — use the app's checkpoint logic if it has one, or just re-execute if it doesn't." |
 | **Orchestrator** (in-flight at walltime under `--respawn N` with `N > 0`) | "This job was preempted mid-execution by walltime expiry. The next chain link picks it up." |
 
-In both cases the next `pbx run` startup invokes `app.restart(job_dict)` for every Restart-status job before the run loop. See [Three-scene contract](#the-three-scene-restart-contract) below. Apps that don't override `restart()` raise `NotImplementedError` and the job is marked `Failed` with "app does not support restart" — so manually marking a job Restart only makes sense for apps that actually implement the hook.
+In both cases the next `pbx run` invokes `app.restart(job_dict)` once per Restart-status job as that job reaches dispatch. See [Three-scene contract](#the-three-scene-restart-contract) below. Apps that don't override `restart()` raise `NotImplementedError` and the job is marked `Failed` with "app does not support restart" — so manually marking a job Restart only makes sense for apps that actually implement the hook.
 
 `--respawn` does **not** gate `restart()`. It controls only the walltime auto-resubmit chain (next-link script generation + qsub from compute) and the wider 90 s shutdown grace.
+
+**Strict contract — no resource patches.** `restart()` may return a dict patching `in_file`, `env_file`, or `tag` only. Returning a resource field (`ngpus`, `num_nodes`, `node_occupancy`, `ranks_per_node`, `mpi_opts`) is a contract violation and marks the job `Failed` — because resources are allocated **before** `restart()` runs in the lazy design, so patches there would be silently ignored. If a job needs different resources for its restart-continuation, the user must `pbx update --status Restart --ngpus N ...` before submitting the next run.
 
 ---
 
@@ -41,8 +43,8 @@ What `pbx qsub` / `pbx sbatch` produce when `--respawn` is **not** passed. The s
 ### Startup
 
 1. Parsl loads the system config.
-2. The orchestrator queries the DB for jobs matching `--apps` / `--tags` filters and status `Ready` or `Restart`.
-3. Any `Restart`-status jobs run through `app.restart()` first (per the [three-scene contract](#the-three-scene-restart-contract)), then enter the dispatch loop as `Ready`. This happens here too — only the chain auto-resubmit is gated on `--respawn`.
+2. The orchestrator queries the DB for jobs matching `--apps` / `--tags` filters and status `Ready` or `Restart`. Both statuses enter the dispatch loop together (Restart first as priority).
+3. `app.restart()` is **not** called at startup — it runs lazily per-job inside `create_parsl_future` once resources are assigned (see [Restart semantics](#restart-semantics)). This is only the chain auto-resubmit that gets gated on `--respawn`; restart() itself fires regardless.
 4. The walltime timer arms itself ~30 s before the scheduler's stated walltime.
 
 ### Walltime expiry (internal timer fires)
@@ -109,9 +111,9 @@ Link 3:  respawn_link_3.sh           →   pbx run --respawn 0   (chain end)
 
 #### Link 0 (initial submission)
 
-**Startup.** Same as a no-respawn run. If no jobs have status `Restart` yet (the typical case on link 0), the startup hook is a no-op. Ready/Restart jobs flow into the dispatch loop.
+**Startup.** Same as a no-respawn run. Ready/Restart jobs flow into the dispatch loop together (Restart first as priority). `restart()` is called lazily per-job inside `create_parsl_future` once resources are assigned — see [Restart semantics](#restart-semantics).
 
-> If the user *did* manually flip some jobs to `Restart` before submitting, the orchestrator's startup hook treats them like any other Restart job — runs them through `app.restart()` (Scene A/B/C depending on the app's return value). The hook does not care whether a row was flipped by the user or by a prior link.
+> If the user *did* manually flip some jobs to `Restart` before submitting, the orchestrator treats them like any other Restart job — runs them through `app.restart()` (Scene A/B/C depending on the app's return value) when each one reaches dispatch.
 
 **Walltime expiry.** The internal timer fires ~90 s before the scheduler's stated walltime (respawn uses a wider grace than the no-respawn 30 s — the resubmit path needs the extra runway):
 
@@ -131,27 +133,23 @@ The next scheduler allocation is now queued. If qsub/sbatch is not reachable fro
 
 The scheduler eventually starts `respawn_link_1.sh`. Its `pbx run` line includes `--respawn 2`.
 
-**Startup hook runs.** This is the load-bearing difference from Link 0:
+**Per-job restart fires lazily during dispatch.** Unlike Link 0 (where most jobs are fresh Ready), Link 1 typically has a large `Restart`-status backlog from Link 0's walltime kill. The orchestrator collects both Ready and Restart jobs into the dispatch loop. For each Restart-status job that survives the dispatch gate (deps, resources, walltime floor), `app.restart(job_dict)` is called inside `create_parsl_future` once resources are assigned. The return value partitions into three buckets (see [Three-scene contract](#the-three-scene-restart-contract)):
 
-1. The orchestrator queries the DB for jobs matching `--apps`/`--tags` filters with status `Restart`.
-2. For each such job, it calls `app.restart(job_dict)` — where `app` is the application instance that owns this job's `app` field.
-3. The hook partitions outcomes into three buckets (see [Three-scene contract](#the-three-scene-restart-contract)):
-   - **Patched** (dict returned) → DB row updated with the patch fields, status flipped to `Ready`.
-   - **Re-run** (`None` or `{}` returned) → status flipped to `Ready`, no field changes.
-   - **Failed** (raised `NotImplementedError`, or app not loaded) → status flipped to `Failed`.
-4. After the hook completes, the orchestrator enters its normal dispatch loop. Only Patched + Re-run jobs are now `Ready` and pickable.
+- **Patched** (dict returned) → patch fields applied to the in-memory job dict and ride along on the buffered Running write (single batched DB call covers status + patch).
+- **Re-run** (`None` or `{}` returned) → job dispatches unchanged, just with file-mode 'a'+banner so the new run's stdout/stderr appends instead of clobbering prior content.
+- **Failed** (raised `NotImplementedError`, returned a forbidden resource field, or app not loaded) → job marked `Failed`, dispatch aborts for that job.
 
-**Normal dispatch + walltime.** From here, Link 1 behaves exactly like Link 0: jobs run; walltime expires; in-flight jobs are marked `Restart`; `respawn_link_2.sh` is generated with `--respawn 1`; the orchestrator resubmits.
+**Normal dispatch + walltime.** Link 1 behaves like Link 0: jobs run; walltime expires; in-flight jobs marked `Restart`; `respawn_link_2.sh` generated with `--respawn 1`; resubmit.
 
 #### Link 2 (second respawn)
 
-Identical to Link 1. Startup hook fires on jobs still `Restart`-marked (including any that didn't finish during Link 1). At walltime, in-flight → `Restart`, `respawn_link_3.sh` generated with `--respawn 0`, resubmitted.
+Identical to Link 1. Per-job `restart()` fires on jobs still `Restart`-marked (including any that didn't finish during Link 1). At walltime, in-flight → `Restart`, `respawn_link_3.sh` generated with `--respawn 0`, resubmitted.
 
 #### Link 3 (last link, `--respawn 0`)
 
 The final link has `--respawn 0` baked into its `pbx run` line. Two things change:
 
-**Startup hook still runs.** The hook isn't gated on the counter (or on `--respawn` itself) — it always runs for Restart-status jobs, so any leftover `Restart` jobs get their last chance through `app.restart()` and re-enter `Ready`.
+**Per-job `restart()` still fires.** It isn't gated on the counter (or on `--respawn` itself) — it always runs for Restart-status jobs that reach dispatch, so any leftover `Restart` jobs get their last chance through `app.restart()`.
 
 **Walltime expiry: in-flight → `Failed`, no resubmission.** Because `--respawn == 0`, the orchestrator marks in-flight jobs **`Failed`** (with the reason "chain exhausted: respawn reached 0") instead of `Restart`, skips the resubmit step entirely, and exits. The chain ends.
 
@@ -171,27 +169,28 @@ There is no "stop after this link, but don't kill the running work" option. Exte
 
 ## The three-scene `restart()` contract
 
-Each app subclass under `parslbox/apps/` can override the `restart(job_dict) -> dict | None` hook on its `BaseApp` subclass. The orchestrator's startup hook passes the job's full DB row in (for every Restart-status job, regardless of whether `--respawn` is set) and partitions the return value:
+Each app subclass under `parslbox/apps/` can override the `restart(job_dict) -> dict | None` hook on its `AppBase` subclass. The orchestrator calls it lazily per-job inside `create_parsl_future` for every Restart-status job that reaches dispatch (regardless of `--respawn`). The return value partitions into three scenes:
 
 ### Scene A — patch and re-run with new fields
 
-The app inspects the job's state on disk (checkpoint files, last-completed step, etc.) and returns a dict of fields to change. The orchestrator applies the patch, sets `status='Ready'`, and `preprocess()` is **skipped** when the job is re-dispatched (since the app already prepared resume state).
+The app inspects the job's state on disk (checkpoint files, last-completed step, etc.) and returns a dict of fields to change. The patch is applied to the in-memory job dict and folded into the buffered Running write — one batched DB call covers both the status flip and the patch. `preprocess()` runs after restart() in the same dispatch sequence.
 
 ```python
 # parslbox/apps/lammps.py  (sketch)
-class Lammps(BaseApp):
+class Lammps(AppBase):
     def restart(self, job_dict):
         ckpt = find_latest_checkpoint(job_dict["path"])
         if not ckpt:
             return None                       # → Scene B fallback
         return {
             "in_file": rewrite_input_for_restart(job_dict["in_file"], ckpt),
-            # any of: in_file, env_file, ngpus, num_nodes, node_occupancy,
-            # ranks_per_node, mpi_opts, tag
+            # allowed keys: in_file, env_file, tag
         }
 ```
 
-**Patchable fields:** `in_file`, `env_file`, `ngpus`, `num_nodes`, `node_occupancy`, `ranks_per_node`, `mpi_opts`, `tag`. Any other key in the returned dict is logged as a warning and ignored.
+**Patchable fields:** `in_file`, `env_file`, `tag`. Any other non-resource key is logged as a warning and dropped (job still dispatches with the valid fields).
+
+**Forbidden (contract violation → Failed):** `ngpus`, `num_nodes`, `node_occupancy`, `ranks_per_node`, `mpi_opts`. Resources are allocated **before** `restart()` runs in the lazy design, so patching them here would be silently ignored. The orchestrator marks the job `Failed` with a clear error if any of these keys appear in the returned dict.
 
 ### Scene B — re-run as-is
 
