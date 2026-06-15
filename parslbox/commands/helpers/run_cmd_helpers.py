@@ -14,14 +14,23 @@ VALID_JOB_STATUSES = ["ready", "done", "failed", "killed", "restart", "running",
 
 
 _RESTART_BANNER_TEMPLATE = (
-    "\n{bar}\n=== Restart {ts}\n{bar}\n\n"
+    "\n{bar}\n=== Restart {ts}\n=== Remaining Walltime: {wt}\n{bar}\n\n"
 )
+
+
+def _fmt_remaining_walltime(s: float) -> str:
+    """Format remaining walltime seconds as HH:MM:SS (clamped at 0)."""
+    s = max(0, int(s))
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    return f"{h:02d}:{m:02d}:{sec:02d}"
 
 
 def choose_output_mode(
     job_id: int,
     current_status: str,
     restarting_job_ids: Set[int],
+    remaining_walltime_s: float,
     *paths: Path,
 ) -> str:
     """Decide 'a' vs 'w' for a job's stdout/stderr file mode.
@@ -50,7 +59,9 @@ def choose_output_mode(
         return 'w'
     bar = "=" * 70
     banner = _RESTART_BANNER_TEMPLATE.format(
-        bar=bar, ts=datetime.now().isoformat()
+        bar=bar,
+        ts=datetime.now().isoformat(),
+        wt=_fmt_remaining_walltime(remaining_walltime_s),
     )
     for p in paths:
         if p.exists() and p.stat().st_size > 0:

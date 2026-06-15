@@ -57,7 +57,7 @@ def get_scheduler_job_id(scheduler):
         return f'local_{int(time.time())}'
 
 
-def create_parsl_future(job, app_instance, app_config, mpi_config, config_name, db_path, scheduler, resource_manager, futures, system_config, status_buffer, restarting_job_ids):
+def create_parsl_future(job, app_instance, app_config, mpi_config, config_name, db_path, scheduler, resource_manager, futures, system_config, status_buffer, restarting_job_ids, remaining_walltime_s):
     """
     Create a Parsl future for a job with proper preprocessing and error handling.
 
@@ -219,6 +219,7 @@ def create_parsl_future(job, app_instance, app_config, mpi_config, config_name, 
         stderr_path = job_path / f"pbx_job_{job_id}.err"
         file_mode = choose_output_mode(
             job_id, current_status, restarting_job_ids,
+            remaining_walltime_s,
             stdout_path, stderr_path,
         )
 
@@ -593,6 +594,7 @@ def run(
                 job, app_instances[app_name], app_configs[app_name], mpi_configs[app_name],
                 config_name, db_path, scheduler, resource_manager, futures, system_config, status_buffer,
                 restarting_job_ids,
+                shutdown_at - time.time(),
             )
             
             # Future created successfully - no additional tracking needed
@@ -771,6 +773,7 @@ def run(
                     job, app_instances[app_name], app_configs[app_name], mpi_configs[app_name],
                     config_name, db_path, scheduler, resource_manager, new_futures, system_config, status_buffer,
                     restarting_job_ids,
+                    shutdown_at - time.time(),
                 )
             except InsufficientResources as e:
                 logger.info(f"Job {job_id}: Resources unavailable, added to backlog: {e}")
@@ -1002,6 +1005,7 @@ def run(
                     config_name, db_path, scheduler, resource_manager,
                     new_futures, system_config, status_buffer,
                     restarting_job_ids,
+                    shutdown_at - time.time(),
                 )
 
                 # Add each new future to tracking dict
