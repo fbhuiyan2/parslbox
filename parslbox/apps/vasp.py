@@ -82,8 +82,6 @@ class VaspApp(AppBase):
         logger = logging.getLogger(__name__)
         
         if error_message:
-            logger.warning(f"Job {job_id}: VASP execution error occurred: {error_message}")
-            logger.info(f"Job {job_id}: Marking as Failed due to execution error.")
             return "Failed"
         else:
             logger.info(f"Job {job_id}: VASP job completed successfully based on exit code.")

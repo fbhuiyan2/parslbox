@@ -61,9 +61,6 @@ class ResourceManager:
         
         # Initialize nodes from system configuration
         self._initialize_nodes()
-        
-        logger.info(f"Initialized resource manager with {len(self.nodes)} nodes")
-        logger.info(f"Fault tolerance: max_failures={max_failures}, quarantine_duration={quarantine_duration}s")
     
     def _initialize_nodes(self) -> None:
         """Initialize node resources from system configuration."""
@@ -523,7 +520,6 @@ class ResourceManager:
         """
         if job_id not in self._backlogged_jobs_set:
             self._backlogged_jobs_set.add(job_id)
-            logger.info(f"Job {job_id} added to backlog")
 
     
     def free_resources(self, job_id: int) -> None:

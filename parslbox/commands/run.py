@@ -446,7 +446,6 @@ def run(
 
     # Initialize JobTracker with filtered jobs and database path
     job_tracker = JobTracker(filtered_jobs, db_path)
-    logger.info(f"Initialized JobTracker with {job_tracker.get_job_count()} jobs")
 
     # Initialize Resource Manager with JobTracker
     system_config = get_system_config(config_name)
@@ -587,8 +586,7 @@ def run(
         # Allocate resources
         try:
             assignment = resource_manager.assign_resources(job)
-            logger.info(f"Job {job_id}: Allocated resources - {assignment.get_summary()}")
-            
+
             # Create Parsl future with pre-loaded contexts
             success = create_parsl_future(
                 job, app_instances[app_name], app_configs[app_name], mpi_configs[app_name],
@@ -663,6 +661,8 @@ def run(
         new_runnable += database.get_jobs(db_path, status='Ready')
 
         new_jobs = []
+        rediscovered_count = 0
+        newly_added_count = 0
         for job in new_runnable:
             job_id = job['job_id']
             if job_id in known_job_ids:
@@ -687,6 +687,7 @@ def run(
                 if should_re_dispatch_known_job(tracked['status'], job['status']):
                     job_tracker.update_job_status(job_id, job['status'])
                     new_jobs.append(job)
+                    rediscovered_count += 1
                     logger.info(
                         f"Dynamic discovery: Re-discovered job {job_id} "
                         f"(tracker={tracked['status']} → DB={job['status']})"
@@ -697,11 +698,15 @@ def run(
             if passes_app and passes_tag:
                 new_jobs.append(job)
                 known_job_ids.add(job_id)
+                newly_added_count += 1
 
         if not new_jobs:
             return 0
 
-        logger.info(f"Dynamic discovery: Found {len(new_jobs)} new jobs")
+        logger.info(
+            f"Dynamic discovery: {rediscovered_count} re-discovered, "
+            f"{newly_added_count} newly added"
+        )
 
         # Register new jobs with JobTracker
         job_tracker.register_jobs(new_jobs)
@@ -767,7 +772,6 @@ def run(
             # Allocate resources
             try:
                 assignment = resource_manager.assign_resources(job)
-                logger.info(f"Job {job_id}: Allocated resources - {assignment.get_summary()}")
 
                 create_parsl_future(
                     job, app_instances[app_name], app_configs[app_name], mpi_configs[app_name],
@@ -905,13 +909,11 @@ def run(
                     except Exception as e:
                         logger.error(f"Job {job_id}: Post-processing failed: {e}")
                         job_status = "Failed"
-                else:
-                    logger.info(f"Job {job_id}: Success check failed. Skipping post-processing.")
 
                 # Update JobTracker and buffer final status update
                 job_tracker.update_job_status(job_id, job_status)
                 status_buffer.add_status_update(job_id, status=job_status)
-                logger.info(f"Job {job_id}: Final status set to '{job_status}' (buffered).")
+                logger.info(f"Job {job_id}: Final status = {job_status} (buffered)")
 
                 # Clear restart-continuation membership now that this job has
                 # reached a terminal status, so a Failed→Ready re-discovery
@@ -937,20 +939,20 @@ def run(
                         except Exception as e:
                             logger.debug(f"Job {job_id}: Could not read stderr file: {e}")
 
-                        logger.info(f"Job {job_id}: Checking stderr for node health classification")
-
                     resource_manager.free_resources_with_health_check(
                         job_id=job_id,
                         job_succeeded=job_succeeded,
                         error_message=stderr_error
                     )
-                    logger.info(f"Job {job_id}: Finished running. Freed allocated resources.")
 
                     # Log status after freeing resources
                     status = resource_manager.get_resource_status()
-                    logger.info(f"Run Status: jobs running {len(fut_to_item)}, jobs backlogged {status['backlogged_jobs']}")
-                    available_cores_percnt = status['available_cpu_capacity'] / status['available_nodes'] if status['available_nodes'] > 0 else 0
-                    logger.info(f"Resource Status: Total {status['available_gpus']} GPUs and {available_cores_percnt:.2f} % of all cores available on {status['available_nodes']} nodes")
+                    cpu_frac = status['available_cpu_capacity'] / status['available_nodes'] if status['available_nodes'] > 0 else 0
+                    logger.info(
+                        f"Status: running={len(fut_to_item)}, backlog={status['backlogged_jobs']} | "
+                        f"free: {status['available_nodes']} nodes, {status['available_gpus']} GPUs, "
+                        f"{cpu_frac:.0%} CPU"
+                    )
 
                 except Exception as e:
                     logger.error(f"Job {job_id}: Failed to free resources: {e}")
@@ -1023,9 +1025,12 @@ def run(
             status = resource_manager.get_resource_status()
             # Recount dep-ready jobs — scheduled jobs were removed from backlog
             dependency_ready_count = len(resource_manager.get_dependency_ready_jobs_from_backlog())
-            logger.info(f"Run Status: jobs running {len(fut_to_item)}, jobs backlogged {status['backlogged_jobs']}, dependency ready jobs {dependency_ready_count}")
-            available_cores_percnt = status['available_cpu_capacity'] / status['available_nodes'] if status['available_nodes'] > 0 else 0
-            logger.info(f"Resource Status: Total {status['available_gpus']} GPUs and {available_cores_percnt:.2f} % of all cores available on {status['available_nodes']} nodes")
+            cpu_frac = status['available_cpu_capacity'] / status['available_nodes'] if status['available_nodes'] > 0 else 0
+            logger.info(
+                f"Status: running={len(fut_to_item)}, backlog={status['backlogged_jobs']}, "
+                f"dep_ready={dependency_ready_count} | free: {status['available_nodes']} nodes, "
+                f"{status['available_gpus']} GPUs, {cpu_frac:.0%} CPU"
+            )
 
         # Flush status buffer (runs every iteration as safety net)
         updated_count = status_buffer.flush_all()
