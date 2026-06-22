@@ -1038,24 +1038,52 @@ def run(
                 n.health_tracker.health_status == NodeHealth.QUARANTINED
                 for n in resource_manager.nodes
             )
-            # Recount dep-ready jobs (fresh after scheduling may have consumed some)
             dep_ready_jobs = resource_manager.get_dependency_ready_jobs_from_backlog()
+            backlogged = resource_manager.get_resource_status()['backlogged_jobs']
 
-            if dynamic:
-                # Dynamic mode: check for new jobs first
+            # Dynamic discovery on its cadence. Previously this branch
+            # called discover_new_jobs() unconditionally on every iteration,
+            # which combined with a spurious-rediscovery bug in
+            # should_re_dispatch_known_job spun the loop thousands of times
+            # per second. Gating on discovery_interval is the structural fix.
+            if dynamic and time.time() - last_discovery_time >= discovery_interval:
                 new_count = discover_new_jobs()
+                last_discovery_time = time.time()
                 if new_count > 0:
                     continue
+                # Discovery may have added work — refresh state.
+                dep_ready_jobs = resource_manager.get_dependency_ready_jobs_from_backlog()
+                backlogged = resource_manager.get_resource_status()['backlogged_jobs']
 
+            # Truly idle → exit. Applies in both modes.
+            if not backlogged and not dep_ready_jobs and not has_quarantined:
+                logger.info("No active futures and no recoverable work remaining — run complete.")
+                break
+
+            # Dep-ready jobs waiting on quarantined node recovery — keep looping.
             if dep_ready_jobs and has_quarantined:
-                # Jobs waiting + sick nodes — keep looping for recovery
-                logger.debug(f"No active futures but {len(dep_ready_jobs)} dep-ready jobs waiting on quarantined node recovery")
+                logger.debug(
+                    f"No active futures but {len(dep_ready_jobs)} dep-ready jobs "
+                    f"waiting on quarantined node recovery"
+                )
                 time.sleep(10)
                 continue
 
-            # No dep-ready jobs or no quarantined nodes — done
-            logger.info("No active futures and no recoverable work remaining — run complete.")
-            break
+            # Non-dynamic mode: any remaining state (e.g., orphan backlog with
+            # never-to-resolve dependencies) → exit. Matches prior behavior.
+            if not dynamic:
+                logger.info("No active futures and no recoverable work remaining — run complete.")
+                break
+
+            # Dynamic mode with pending work but no futures — sleep until the
+            # next discovery tick instead of busy-looping. Cap at 10s so the
+            # other periodic ticks (recovery, flush) stay responsive.
+            sleep_for = min(
+                10.0,
+                max(0.5, discovery_interval - (time.time() - last_discovery_time)),
+            )
+            time.sleep(sleep_for)
+            continue
 
     logger.info("All jobs completed, including rescheduled ones")
     

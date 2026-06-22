@@ -101,29 +101,34 @@ def should_re_dispatch_known_job(tracker_status: str, db_status: str) -> bool:
     should be re-dispatched when dynamic discovery sees it back in a
     runnable status in the DB.
 
-    Re-dispatch when ALL three hold:
-      - tracker shows a settled state (Done / Failed / Warning / Killed / Ready) —
-        no live Parsl future for this job
-      - DB shows it back in a runnable status (Ready / Restart) — the user
-        (or an external script) set it to be run again
-      - NOT in flight (Submitted / Running) — a live future exists; let it
-        finish on its own path, the DB flip is a no-op for this link
+    Re-dispatch only on a real state transition:
+      - tracker terminal (Done / Failed / Warning / Killed) AND
+        DB runnable (Ready / Restart) — user/script is replaying it.
+      - tracker == Ready AND DB == Restart — user flipped a
+        never-dispatched Ready job to Restart to force
+        checkpoint-resume semantics.
+
+    Explicitly NOT re-dispatched:
+      - tracker == Ready AND DB == Ready — no transition. Tracker stays
+        Ready when the job sat in the backlog the whole time without
+        ever being dispatched; re-routing it through new_jobs would just
+        bounce it back to the backlog and busy-loop on every discovery
+        pass. (This was the bug behind the dynamic-discovery tight-loop
+        observed in production.)
+      - tracker Submitted/Running — live future, DB flip is a no-op this
+        link; let the future settle on its own path.
 
     Re-discovery routes the job into `new_jobs`, which is what makes the
-    per-job `apply_restart_for_job` call inside create_parsl_future fire on
-    `Restart`-status entries (so they get added to `restarting_job_ids` and
-    their stdout/stderr opens in 'a'+banner mode).
-
-    Background: the previous implementation only handled the single combo
-    (tracker=Failed AND db=Ready), silently dropping every other valid
-    re-dispatch intent — including the common case where the user flips a
-    Ready/Done/Killed job back to Restart mid-run to resume from a
-    checkpoint. See test_run_dynamic_rediscovery.py for the full table.
+    per-job `apply_restart_for_job` call inside create_parsl_future fire
+    on `Restart`-status entries (so they get added to
+    `restarting_job_ids` and their stdout/stderr opens in 'a'+banner
+    mode). See test_run_dynamic_rediscovery.py for the full table.
     """
-    tracker_settled = tracker_status in ('Done', 'Failed', 'Warning', 'Killed', 'Ready')
-    db_runnable = db_status in ('Ready', 'Restart')
-    in_flight = tracker_status in ('Submitted', 'Running')
-    return tracker_settled and db_runnable and not in_flight
+    if tracker_status in ('Done', 'Failed', 'Warning', 'Killed') and db_status in ('Ready', 'Restart'):
+        return True
+    if tracker_status == 'Ready' and db_status == 'Restart':
+        return True
+    return False
 
 
 def get_default_run_dir() -> Path:
