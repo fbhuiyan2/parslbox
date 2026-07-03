@@ -268,7 +268,7 @@ print(result["job_id"], result["run_dir"])
 
 ## `qdel` / `scancel` — graceful cancel
 
-Sends SIGTERM, gives the orchestrator `grace` seconds to mark active jobs as `Killed` in the DB, then hard-kills the batch. After the scheduler-level kill, the DB is reconciled: jobs still in `Running`/`Submitted` under this batch (matched by `sched_job_id`) are force-flipped to `Killed`. This catches cases where the orchestrator's signal handler couldn't complete its DB writes before the process exited. Scoped by `sched_job_id`, so concurrent batch jobs are unaffected.
+Sends SIGTERM, gives the orchestrator `grace` seconds to reconcile active jobs in the DB, then hard-kills the batch. After the scheduler-level kill, the DB is reconciled per state for any non-terminal jobs under this batch (matched by `sched_job_id`): `Running` → `Killed`, `Submitted` → `Ready`, `Resubmitted` → `Restart`. This catches cases where the orchestrator's signal handler couldn't complete its DB writes before the process exited. Scoped by `sched_job_id`, so concurrent batch jobs are unaffected.
 
 ```python
 pbx.qdel("123456.polaris-pbs-01", grace=30)

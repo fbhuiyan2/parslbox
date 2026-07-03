@@ -66,7 +66,7 @@ class AddJobSchema(BaseModel):
     )
     status: str = Field(
         default="Ready",
-        description="Initial status for the job(s). Valid statuses: Ready, Done, Failed, Restart, Running, Submitted, Warning.",
+        description="Initial status for the job(s). Valid statuses: Ready, Done, Failed, Killed, Restart, Running, Submitted, Resubmitted, Warning.",
     )
 
 
@@ -313,7 +313,8 @@ class CancelJobSchema(BaseModel):
         description=(
             "Seconds between SIGTERM (sent via qsig / scancel --signal=TERM) "
             "and the hard kill. The grace period lets the running `pbx run` "
-            "orchestrator mark in-flight jobs as Killed in the database before "
+            "orchestrator reconcile its in-flight jobs in the database "
+            "(Running→Killed, Submitted→Ready, Resubmitted→Restart) before "
             "SIGKILL. Default: 30."
         ),
     )
@@ -336,7 +337,7 @@ class UpdateJobSchema(BaseModel):
 
     status: Optional[str] = Field(
         default=None,
-        description="New status for the job. Valid statuses: Ready, Done, Failed, Restart, Running, Submitted, Warning.",
+        description="New status for the job. Valid statuses: Ready, Done, Failed, Killed, Restart, Running, Submitted, Resubmitted, Warning.",
     )
 
     tag: Optional[str] = Field(

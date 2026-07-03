@@ -220,8 +220,9 @@ Details: [`parslbox/resource_manager/README.md`](parslbox/resource_manager/READM
 
 Statuses:
 - Ready → Submitted → Running → Done | Failed | Killed
-- Warning — if an app returns an invalid/unknown status
-- Killed — when walltime is exceeded **in a no-respawn run**, or whenever the user runs `pbx qdel`/`pbx scancel` (SIGTERM handler marks active jobs before the hard kill; if the handler doesn't complete its DB writes in time, a post-kill reconciliation step in `pbx qdel`/`scancel` cleans up any jobs left in `Running`/`Submitted` under the killed batch)
+- Restart → Resubmitted → Running → … — the restart path. `Submitted`/`Resubmitted` are the *claimed* states: a `pbx run` atomically flips a job to `Submitted` (from `Ready`) or `Resubmitted` (from `Restart`), stamping its batch id (`sched_job_id`) so multiple concurrent runs sharing one DB never double-claim.
+- Warning — if an app returns an invalid/unknown status (satisfies dependencies like `Done`)
+- Killed — when walltime is exceeded **in a no-respawn run**, or whenever the user runs `pbx qdel`/`pbx scancel`. At shutdown the orchestrator reconciles its own jobs per state: `Running → Killed` (or `Restart`/`Failed` in a `--respawn` run), and claimed-but-not-yet-running jobs go back to the pool (`Submitted → Ready`, `Resubmitted → Restart`). If the signal handler can't finish its DB writes in time, a post-kill reconciliation step in `pbx qdel`/`scancel` applies the same per-state rules, scoped to the killed batch's `sched_job_id`.
 - Restart — set by either the user (`pbx update --status Restart`) or by the orchestrator in a `--respawn` chain at walltime. Either way, the next `pbx run` startup calls the app's `restart()` hook for every `Restart` row (patch fields and re-run / re-run as-is / mark Failed) before the dispatch loop.
 
 Full state-transition table and end-to-end chain walkthrough: [`docs/pbx-run-details.md`](docs/pbx-run-details.md).

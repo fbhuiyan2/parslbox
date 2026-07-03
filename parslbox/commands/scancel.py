@@ -23,11 +23,12 @@ def scancel(
     Gracefully cancel a ParslBox SLURM job.
 
     Sends SIGTERM to the batch script via `scancel --signal=TERM --batch`
-    so the running `pbx run` orchestrator can mark in-flight jobs as Killed
-    in the database, then waits `grace` seconds and runs `scancel` to
-    terminate. After the scheduler kill, any jobs still left in
-    Running/Submitted under this batch (because the orchestrator's signal
-    handler didn't complete cleanly) are force-flipped to Killed.
+    so the running `pbx run` orchestrator can reconcile in-flight jobs in
+    the database, then waits `grace` seconds and runs `scancel` to
+    terminate. After the scheduler kill, any non-terminal jobs under this
+    batch (because the orchestrator's signal handler didn't complete
+    cleanly) are reconciled per state: Running→Killed, Submitted→Ready,
+    Resubmitted→Restart.
 
     Prefer this over raw `scancel` so the database stays accurate.
     """
@@ -44,8 +45,9 @@ def scancel(
         typer.secho(f"Job {jobid} cancelled cleanly.", fg=typer.colors.GREEN)
         if reconciled:
             typer.secho(
-                f"Reconciled {reconciled} job(s) left in Running/Submitted by "
-                f"an incomplete signal-handler shutdown — flipped to Killed.",
+                f"Reconciled {reconciled} non-terminal job(s) left by an "
+                f"incomplete signal-handler shutdown (Running→Killed, "
+                f"Submitted→Ready, Resubmitted→Restart).",
                 fg=typer.colors.YELLOW,
             )
         return
@@ -69,7 +71,7 @@ def scancel(
     )
     if reconciled:
         typer.secho(
-            f"Reconciled {reconciled} job(s) left in Running/Submitted — "
-            f"flipped to Killed.",
+            f"Reconciled {reconciled} non-terminal job(s) (Running→Killed, "
+            f"Submitted→Ready, Resubmitted→Restart).",
             fg=typer.colors.YELLOW,
         )

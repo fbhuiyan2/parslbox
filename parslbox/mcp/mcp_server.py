@@ -200,11 +200,12 @@ def submit_slurm_job(params: SBatchSchema) -> str:
     description=(
         "Gracefully cancel a running ParslBox PBS batch job.\n\n"
         "Sends SIGTERM via qsig, waits `grace` seconds (default 30) so the orchestrator "
-        "can mark in-flight jobs as Killed in the database, then runs qdel to terminate. "
-        "After the scheduler kill, pbx reconciles the DB: any jobs still in Running/Submitted "
-        "under this batch (matched by sched_job_id) are force-flipped to Killed, so the DB "
-        "ends up consistent even when the orchestrator's signal handler doesn't complete "
-        "cleanly. Scoped by sched_job_id, so concurrent batch jobs are unaffected. "
+        "can reconcile in-flight jobs in the database, then runs qdel to terminate. "
+        "After the scheduler kill, pbx reconciles the DB per state for any jobs still "
+        "non-terminal under this batch (matched by sched_job_id): Running→Killed, "
+        "Submitted→Ready, Resubmitted→Restart, so the DB ends up consistent even when "
+        "the orchestrator's signal handler doesn't complete cleanly. Scoped by "
+        "sched_job_id, so concurrent batch jobs are unaffected. "
         "Always prefer this over a raw qdel for ParslBox jobs — raw qdel only gives the "
         "orchestrator the cluster's default kill grace (often ~2s) and does no DB cleanup."
     ),
@@ -218,7 +219,7 @@ def cancel_pbs_job(params: CancelJobSchema) -> str:
 
     reconciled = result.get("reconciled_count", 0)
     recon_suffix = (
-        f" Reconciled {reconciled} job(s) left in Running/Submitted (flipped to Killed)."
+        f" Reconciled {reconciled} non-terminal job(s) (Running→Killed, Submitted→Ready, Resubmitted→Restart)."
         if reconciled else ""
     )
 
@@ -235,13 +236,14 @@ def cancel_pbs_job(params: CancelJobSchema) -> str:
     description=(
         "Gracefully cancel a running ParslBox SLURM batch job.\n\n"
         "Sends SIGTERM to the batch script via `scancel --signal=TERM --batch`, waits "
-        "`grace` seconds (default 30) so the orchestrator can mark in-flight jobs as Killed "
+        "`grace` seconds (default 30) so the orchestrator can reconcile in-flight jobs "
         "in the database, then runs scancel to terminate. After the scheduler kill, pbx "
-        "reconciles the DB: any jobs still in Running/Submitted under this batch (matched "
-        "by sched_job_id) are force-flipped to Killed, so the DB ends up consistent even "
-        "when the orchestrator's signal handler doesn't complete cleanly. Scoped by "
-        "sched_job_id, so concurrent batch jobs are unaffected. Always prefer this over "
-        "a raw scancel for ParslBox jobs — raw scancel does no DB cleanup."
+        "reconciles the DB per state for any jobs still non-terminal under this batch "
+        "(matched by sched_job_id): Running→Killed, Submitted→Ready, Resubmitted→Restart, "
+        "so the DB ends up consistent even when the orchestrator's signal handler doesn't "
+        "complete cleanly. Scoped by sched_job_id, so concurrent batch jobs are "
+        "unaffected. Always prefer this over a raw scancel for ParslBox jobs — raw "
+        "scancel does no DB cleanup."
     ),
 )
 def cancel_slurm_job(params: CancelJobSchema) -> str:
@@ -253,7 +255,7 @@ def cancel_slurm_job(params: CancelJobSchema) -> str:
 
     reconciled = result.get("reconciled_count", 0)
     recon_suffix = (
-        f" Reconciled {reconciled} job(s) left in Running/Submitted (flipped to Killed)."
+        f" Reconciled {reconciled} non-terminal job(s) (Running→Killed, Submitted→Ready, Resubmitted→Restart)."
         if reconciled else ""
     )
 

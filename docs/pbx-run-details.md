@@ -10,14 +10,19 @@ Reference for every scenario the in-allocation engine handles: normal runs, wall
 
 | Status | Meaning |
 | --- | --- |
-| `Ready` | Eligible to run when resources are free and parents are `Done`. |
-| `Submitted` | Handed to Parsl; about to start. |
+| `Ready` | Eligible to run when resources are free and parents are satisfied (`Done`/`Warning`). |
+| `Submitted` | **Claimed** from `Ready`: an orchestrator atomically flipped it and stamped its batch id (`sched_job_id`). About to be handed to Parsl. |
+| `Resubmitted` | **Claimed** from `Restart`: the restart-path equivalent of `Submitted`. |
 | `Running` | Executing on a compute node. |
 | `Done` | Finished successfully (app reported success). |
 | `Failed` | App reported failure, exited non-zero, or — in a respawn chain — chain exhausted. |
-| `Killed` | Walltime ran out (no `--respawn`) **or** the user ran `pbx qdel` / `pbx scancel`. |
+| `Killed` | A job that was **actually executing** (`Running`) when walltime ran out (no `--respawn`) or the user ran `pbx qdel` / `pbx scancel`. |
 | `Restart` | Two distinct meanings — see below. **Important.** |
-| `Warning` | App returned an invalid/unknown status string. |
+| `Warning` | App returned an invalid/unknown status string (satisfies dependencies like `Done`). |
+
+### Claimed states and multi-orchestrator sharing
+
+`Submitted` / `Resubmitted` are the *claimed* states. Before a job runs, the orchestrator atomically flips `Ready → Submitted` (or `Restart → Resubmitted`) in a single guarded batch write, stamping its own `sched_job_id`. This is the concurrency gate: **multiple `pbx run` orchestrators can share one DB in dynamic mode** without ever double-claiming a job — a claim only succeeds for the run that wins the atomic flip. If a claimed job never actually starts (shutdown, cancel), it reverts to the pool: `Submitted → Ready`, `Resubmitted → Restart`. Only a job that was truly `Running` becomes `Killed`.
 
 ### `Restart` semantics
 
@@ -50,7 +55,7 @@ What `pbx qsub` / `pbx sbatch` produce when `--respawn` is **not** passed. The s
 ### Walltime expiry (internal timer fires)
 
 1. The orchestrator stops dispatching new jobs.
-2. All in-flight (`Running` / `Submitted`) jobs are marked **`Killed`**.
+2. Its jobs are reconciled per state: `Running` → **`Killed`** (was executing), while claimed-but-not-yet-running jobs go back to the pool (`Submitted` → `Ready`, `Resubmitted` → `Restart`).
 3. Parsl is shut down cleanly.
 4. The batch job exits. **No resubmission.**
 
@@ -59,13 +64,13 @@ The user must manually re-queue (`pbx update <ids> --status Ready` or `--status 
 ### External cancellation (`pbx qdel <jobid>` / `pbx scancel <jobid>`)
 
 1. The CLI sends SIGTERM to the orchestrator (not directly to the scheduler).
-2. The SIGTERM handler marks all in-flight jobs **`Killed`** in the DB and triggers a graceful Parsl shutdown.
+2. The SIGTERM handler reconciles its jobs per state in the DB (`Running` → `Killed`, `Submitted` → `Ready`, `Resubmitted` → `Restart`) and triggers a graceful Parsl shutdown.
 3. After `--grace` seconds (default 30 s), the hard `qdel`/`scancel` runs.
-4. After the hard kill (success or failure), pbx reconciles the DB: any jobs left in `Running`/`Submitted` whose `sched_job_id` matches the killed batch are force-flipped to `Killed`. Scoped by `sched_job_id`, so concurrent batch jobs are unaffected.
+4. After the hard kill (success or failure), pbx reconciles the DB: any non-terminal job whose `sched_job_id` matches the killed batch is reconciled per the same rules (`Running` → `Killed`, `Submitted` → `Ready`, `Resubmitted` → `Restart`). Scoped by `sched_job_id`, so concurrent batch jobs are unaffected.
 
-The grace window is the reason you should always prefer `pbx qdel` over raw `qdel` — without it, in-flight rows can remain stuck in `Running`/`Submitted`. The reconciliation in step 4 is a safety net for the (rare) cases where the signal handler couldn't complete its DB cleanup before the process exited (DB contention, alarm timeout, exception). Without it, those jobs would stay stuck in `Running` indefinitely until a manual `pbx update`.
+The grace window is the reason you should always prefer `pbx qdel` over raw `qdel` — without it, in-flight rows can remain stuck. The reconciliation in step 4 is a safety net for the (rare) cases where the signal handler couldn't complete its DB cleanup before the process exited (DB contention, alarm timeout, exception). Without it, those jobs would stay stuck indefinitely until a manual `pbx update`.
 
-`pbx qdel`/`pbx scancel` **always** mark `Killed`, regardless of `--respawn` mode. If you want to pause-and-resume a respawn chain rather than terminate it, flip the jobs back to `Restart` manually after the cancel and run `pbx qsub --respawn N` again.
+A `Running` job is always marked `Killed` on cancel, regardless of `--respawn` mode — external cancellation stops the chain. Claimed-but-not-yet-running jobs revert to the pool (`Submitted` → `Ready`, `Resubmitted` → `Restart`), so they're picked up again by the next run. If you want to pause-and-resume a respawn chain rather than terminate it, flip the killed jobs back to `Restart` manually after the cancel and run `pbx qsub --respawn N` again.
 
 ### Normal completion
 
@@ -118,7 +123,7 @@ Link 3:  respawn_link_3.sh           →   pbx run --respawn 0   (chain end)
 **Walltime expiry.** The internal timer fires ~90 s before the scheduler's stated walltime (respawn uses a wider grace than the no-respawn 30 s — the resubmit path needs the extra runway):
 
 1. Stop dispatching new jobs.
-2. All in-flight (`Running` / `Submitted`) jobs are marked **`Restart`** (not `Killed` — this is the key difference from no-respawn runs).
+2. Its jobs are reconciled: `Running` jobs are marked **`Restart`** (not `Killed` — this is the key difference from no-respawn runs), and claimed-but-not-yet-running jobs go back to the pool (`Submitted` → `Ready`, `Resubmitted` → `Restart`).
 3. The orchestrator inspects the DB: how many `Ready` + `Restart` jobs remain?
 4. It computes the optimal node count for those jobs (see [Resource recalc](#resource-recalc--node-cap)), capped at the original allocation size.
 5. It reads `respawn_template.sh`, substitutes `<<PBX_AUTO_SELECT>>` / `<<PBX_AUTO_NODES>>` with the computed value, rewrites the run line's `--respawn 3` to `--respawn 2`, and writes `respawn_link_1.sh` to the run directory.
@@ -127,7 +132,7 @@ Link 3:  respawn_link_3.sh           →   pbx run --respawn 0   (chain end)
 
 The next scheduler allocation is now queued. If qsub/sbatch is not reachable from compute nodes, the resubmit step fails and the chain stops — see [Chain termination](#chain-termination).
 
-**External SIGTERM during Link 0.** Same as the no-respawn case: in-flight → **`Killed`**, no resubmission. External cancellation always stops the chain.
+**External SIGTERM during Link 0.** Same as the no-respawn case: `Running` → **`Killed`** (claimed-but-not-run revert to the pool), no resubmission. External cancellation always stops the chain.
 
 #### Link 1 (first respawn)
 
@@ -151,7 +156,7 @@ The final link has `--respawn 0` baked into its `pbx run` line. Two things chang
 
 **Per-job `restart()` still fires.** It isn't gated on the counter (or on `--respawn` itself) — it always runs for Restart-status jobs that reach dispatch, so any leftover `Restart` jobs get their last chance through `app.restart()`.
 
-**Walltime expiry: in-flight → `Failed`, no resubmission.** Because `--respawn == 0`, the orchestrator marks in-flight jobs **`Failed`** (with the reason "chain exhausted: respawn reached 0") instead of `Restart`, skips the resubmit step entirely, and exits. The chain ends.
+**Walltime expiry: `Running` → `Failed`, no resubmission.** Because `--respawn == 0`, the orchestrator marks `Running` jobs **`Failed`** (with the reason "chain exhausted: respawn reached 0") instead of `Restart`, skips the resubmit step entirely, and exits. Claimed-but-not-run jobs still revert to the pool (`Submitted` → `Ready`, `Resubmitted` → `Restart`). The chain ends.
 
 If you want to continue the chain after exhaustion, you can manually re-queue the failed jobs (`pbx update <ids> --status Restart`) and resubmit (`pbx qsub --respawn M ...`).
 
@@ -159,7 +164,7 @@ If you want to continue the chain after exhaustion, you can manually re-queue th
 
 External SIGTERM (`pbx qdel <jobid>` / `pbx scancel <jobid>`) always:
 
-- Marks in-flight jobs **`Killed`** (not `Restart`).
+- Marks `Running` jobs **`Killed`** (not `Restart`); claimed-but-not-run jobs revert to the pool (`Submitted` → `Ready`, `Resubmitted` → `Restart`).
 - Skips the resubmit step.
 - Ends the chain.
 
@@ -254,16 +259,18 @@ A chain ends — no further auto-resubmission — when **any** of:
 5. **Template validation fails.** A required arg was edited out of the `pbx run` line.
 6. **External SIGTERM.** `pbx qdel <jobid>` / `pbx scancel <jobid>` always stops the chain.
 
-In every case the previously-running link still marks its in-flight jobs as `Restart` (or `Killed` for SIGTERM and case 1) and exits cleanly. You can pick up where it left off with `pbx qsub --respawn M ...` and the next link's startup hook will process those `Restart` rows.
+In every case the previously-running link still marks its `Running` jobs as `Restart` (or `Failed`/`Killed` for case 1 and SIGTERM) and reverts claimed-but-not-run jobs to the pool, then exits cleanly. You can pick up where it left off with `pbx qsub --respawn M ...` and the next link's startup hook will process those `Restart` rows.
 
 ---
 
 ## Quick reference: which status, when?
 
+Rows below describe the `Running` job (the one actually executing). In every trigger, claimed-but-not-yet-running jobs revert to the pool: `Submitted` → `Ready`, `Resubmitted` → `Restart`.
+
 | Trigger | No `--respawn` | `--respawn N > 0` | `--respawn 0` |
 | --- | --- | --- | --- |
-| Walltime expiry | in-flight → `Killed` | in-flight → `Restart` + resubmit | in-flight → `Failed` |
-| `pbx qdel` / `pbx scancel` | in-flight → `Killed` | in-flight → `Killed`, chain stops | in-flight → `Killed`, chain stops |
+| Walltime expiry | `Running` → `Killed` | `Running` → `Restart` + resubmit | `Running` → `Failed` |
+| `pbx qdel` / `pbx scancel` | `Running` → `Killed` | `Running` → `Killed`, chain stops | `Running` → `Killed`, chain stops |
 | App reports success | `Done` | `Done` | `Done` |
 | App reports failure / exits non-zero | `Failed` | `Failed` | `Failed` |
 | App returns unknown status | `Warning` | `Warning` | `Warning` |

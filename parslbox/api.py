@@ -588,10 +588,10 @@ class ParslBox:
         Gracefully cancel a ParslBox PBS job.
 
         Sends SIGTERM via `qsig`, waits `grace` seconds for the orchestrator
-        to mark in-flight jobs as Killed in the database, then runs `qdel`.
-        After the scheduler-level kill, jobs still in Running/Submitted under
-        this batch (signal handler did not complete cleanly) are force-flipped
-        to Killed via DB reconciliation.
+        to reconcile in-flight jobs in the database, then runs `qdel`. After
+        the scheduler-level kill, any non-terminal jobs under this batch
+        (signal handler did not complete cleanly) are reconciled per state:
+        Running→Killed, Submitted→Ready, Resubmitted→Restart.
 
         Args:
             jobid: PBS job ID.
@@ -609,11 +609,11 @@ class ParslBox:
         Gracefully cancel a ParslBox SLURM job.
 
         Sends SIGTERM to the batch script via `scancel --signal=TERM --batch`,
-        waits `grace` seconds for the orchestrator to mark in-flight jobs as
-        Killed in the database, then runs `scancel` to terminate. After the
-        scheduler-level kill, jobs still in Running/Submitted under this batch
-        (signal handler did not complete cleanly) are force-flipped to Killed
-        via DB reconciliation.
+        waits `grace` seconds for the orchestrator to reconcile in-flight jobs
+        in the database, then runs `scancel` to terminate. After the
+        scheduler-level kill, any non-terminal jobs under this batch (signal
+        handler did not complete cleanly) are reconciled per state:
+        Running→Killed, Submitted→Ready, Resubmitted→Restart.
 
         Args:
             jobid: SLURM job ID.

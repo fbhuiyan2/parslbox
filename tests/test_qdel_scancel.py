@@ -8,7 +8,8 @@ Covers:
    - First-stage (qsig / scancel-signal) failure short-circuits and does NOT reconcile
    - Second-stage (qdel / scancel) failure still triggers reconciliation
  - DB reconciliation
-   - Flips stuck Running/Submitted with matching sched_job_id to Killed
+   - Per-state for jobs with matching sched_job_id: Running→Killed,
+     Submitted→Ready, Resubmitted→Restart
    - Leaves other batch jobs (different sched_job_id) untouched
    - Leaves terminal-status jobs (Done/Failed/Killed/Warning) untouched
    - No-op when db_path is None (backwards compat)
@@ -379,7 +380,7 @@ class TestQdelCli:
             result = self.runner.invoke(qdel_app, ["42"])
         assert result.exit_code == 0
         assert "Hard-kill stage 'qdel'" in result.stdout
-        assert "Reconciled 4 job(s)" in result.stdout
+        assert "Reconciled 4 non-terminal job(s)" in result.stdout
 
     def test_cli_surfaces_reconciliation_on_clean_success(self):
         """Even on full success, if reconciliation flipped some jobs, the CLI
@@ -390,7 +391,7 @@ class TestQdelCli:
             result = self.runner.invoke(qdel_app, ["42"])
         assert result.exit_code == 0
         assert "cancelled cleanly" in result.stdout
-        assert "Reconciled 2 job(s)" in result.stdout
+        assert "Reconciled 2 non-terminal job(s)" in result.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -437,7 +438,7 @@ class TestScancelCli:
             result = self.runner.invoke(scancel_app, ["777"])
         assert result.exit_code == 0
         assert "Hard-cancel stage 'scancel'" in result.stdout
-        assert "Reconciled 3 job(s)" in result.stdout
+        assert "Reconciled 3 non-terminal job(s)" in result.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -493,7 +494,7 @@ class TestMcpCancelResponses:
             schema = srv.CancelJobSchema(jobid="1", grace=30)
             msg = srv.cancel_pbs_job(schema)
         assert "cancelled cleanly" in msg
-        assert "Reconciled 5 job(s)" in msg
+        assert "Reconciled 5 non-terminal job(s)" in msg
 
     def test_mcp_pbs_failure_with_reconciliation_includes_suffix(self):
         from parslbox.mcp import mcp_server as srv
@@ -504,7 +505,7 @@ class TestMcpCancelResponses:
             schema = srv.CancelJobSchema(jobid="1", grace=30)
             msg = srv.cancel_pbs_job(schema)
         assert "Failed to cancel" in msg
-        assert "Reconciled 2 job(s)" in msg
+        assert "Reconciled 2 non-terminal job(s)" in msg
 
     def test_mcp_slurm_success_with_reconciliation_includes_suffix(self):
         from parslbox.mcp import mcp_server as srv
@@ -514,4 +515,4 @@ class TestMcpCancelResponses:
             schema = srv.CancelJobSchema(jobid="9", grace=30)
             msg = srv.cancel_slurm_job(schema)
         assert "cancelled cleanly" in msg
-        assert "Reconciled 1 job(s)" in msg
+        assert "Reconciled 1 non-terminal job(s)" in msg
