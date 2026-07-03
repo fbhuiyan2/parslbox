@@ -259,7 +259,7 @@ A chain ends — no further auto-resubmission — when **any** of:
 5. **Template validation fails.** A required arg was edited out of the `pbx run` line.
 6. **External SIGTERM.** `pbx qdel <jobid>` / `pbx scancel <jobid>` always stops the chain.
 
-In every case the previously-running link still marks its `Running` jobs as `Restart` (or `Failed`/`Killed` for case 1 and SIGTERM) and reverts claimed-but-not-run jobs to the pool, then exits cleanly. You can pick up where it left off with `pbx qsub --respawn M ...` and the next link's startup hook will process those `Restart` rows.
+In every case the previously-running link still marks its `Running` jobs as `Restart` (or `Failed`/`Killed` for case 1 and SIGTERM) and reverts claimed-but-not-run jobs to the pool, then exits cleanly. You can pick up where it left off with `pbx qsub --respawn M ...` and the next link will process those `Restart` rows via `restart()` as each is dispatched.
 
 ---
 
@@ -275,4 +275,4 @@ Rows below describe the `Running` job (the one actually executing). In every tri
 | App reports failure / exits non-zero | `Failed` | `Failed` | `Failed` |
 | App returns unknown status | `Warning` | `Warning` | `Warning` |
 | Parents not `Done` yet | stays `Ready` | stays `Ready` | stays `Ready` |
-| Startup, job is `Restart` | `app.restart()` called → Patched/Re-run/Failed | `app.restart()` called → Patched/Re-run/Failed | `app.restart()` called → Patched/Re-run/Failed |
+| Dispatch, job is `Restart` | `app.restart()` called → Patched/Re-run/Failed | `app.restart()` called → Patched/Re-run/Failed | `app.restart()` called → Patched/Re-run/Failed |

@@ -30,9 +30,9 @@ Use `--help` on any command to see flags.
 
 - **Job IDs accept ranges** (space-separated inside quotes): `pbx update "1-5 8 14-20" --status Restart`. Same for `rm`, `info`, and `add --parents`.
 - **Tags**: `--tag` (singular) for filtering on `add`/`update`/`filter`/`ls`; `--tags` (plural, comma-separated) on `qsub`/`sbatch`/`run`. `pbx info --tag` is a *display* flag (show only the tag column), not a filter. `*` glob for partial matching (e.g., `--tag 'stage*'` matches `stage1`, `stage-prod`). Exclusion via `--exclude-tag` / `--xtag` is `pbx filter`-only.
-- **Status values**: `Ready`, `Submitted`, `Running`, `Done`, `Failed`, `Killed`, `Restart`, `Warning` (case-insensitive).
+- **Status values**: `Ready`, `Submitted`, `Running`, `Done`, `Failed`, `Killed`, `Restart`, `Resubmitted`, `Warning` (case-insensitive). `Submitted`/`Resubmitted` are the *claimed* states (a run atomically flipped `Ready`→`Submitted` / `Restart`→`Resubmitted` and stamped its batch id) — normally transient; you set jobs to `Ready`/`Restart`, not to these.
 - **Self-respawn chains**: `pbx qsub --respawn N` / `pbx sbatch --respawn N` enables walltime-driven auto-resubmission. `N` is the number of remaining auto-resubmissions (decremented per link; `0` = chain ends after this run). See [docs/pbx-run-details.md](../../docs/pbx-run-details.md).
-- **Dynamic discovery**: `pbx run` (and qsub/sbatch) polls the DB every 60 s for new jobs by default. `--static` disables.
+- **Dynamic discovery**: `--dynamic` (default) re-queries the DB for runnable jobs on every dispatch pass, so jobs added or flipped to `Ready`/`Restart` mid-run are picked up automatically; it also lets multiple `pbx run` allocations share one DB (each atomically claims what it dispatches). `--static` claims the runnable set once up front and does not re-query.
 
 ## App names
 

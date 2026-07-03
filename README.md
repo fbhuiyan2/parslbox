@@ -25,8 +25,8 @@ ParslBox provides a CLI (`pbx`), a Python API, and an MCP server for AI-agent in
   - MPI backends: MPICH, OpenMPI, srun
 - **Scheduler support:** PBS (`pbx qsub`) and SLURM (`pbx sbatch`) with configurable `--sched-opts`
 - **Pre-configured HPC systems:** Polaris, Aurora (GPU & Tile modes), Sophia, Crux, LCRC Swing, LCRC Improv, Pinnacles-CenvalArc, Perlmutter (GPU & CPU), plus `*-mpi`/`*-srun` launcher variants for large-scale (>10k worker) runs
-- **Dynamic job discovery:** `--dynamic` (default) polls for newly added jobs during a run session. New jobs matching the same `--apps`/`--tags` filters are picked up every 60s. Any tracker-settled job (Done/Failed/Warning/Killed/Ready) whose DB status the user flips back to `Ready` or `Restart` (via `pbx update --status … <ids>` from another terminal) is also re-discovered and re-dispatched — re-discoveries via `Restart` go through the app's `restart()` hook just like startup. Use `--static` for collect-once behavior
-- **Self-respawn chain:** `pbx qsub --respawn N` produces a self-perpetuating submission chain that auto-resubmits at every walltime boundary. Jobs preempted mid-run are marked `Restart`; each next link calls each app's `restart()` hook at startup so apps can decide how to resume. See [`docs/pbx-run-details.md`](docs/pbx-run-details.md)
+- **Dynamic job discovery:** `--dynamic` (default) re-queries the DB for runnable jobs on every dispatch pass. New jobs matching the same `--apps`/`--tags` filters, and jobs the user flips back to `Ready`/`Restart` from another terminal (via `pbx update --status … <ids>`), are picked up automatically — jobs re-dispatched via `Restart` go through the app's `restart()` hook just like any other `Restart` job. Because each run atomically claims only what it dispatches, multiple `pbx run` allocations can safely share one DB in dynamic mode. Use `--static` for collect-once behavior (claim the runnable set once up front; no re-query)
+- **Self-respawn chain:** `pbx qsub --respawn N` produces a self-perpetuating submission chain that auto-resubmits at every walltime boundary. Running jobs preempted at walltime are marked `Restart`; the next link calls each app's `restart()` hook lazily as each `Restart` job is dispatched, so apps can decide how to resume. See [`docs/pbx-run-details.md`](docs/pbx-run-details.md)
 - **Fault tolerance:** Node health tracking, quarantine, and auto-recovery
 - **Script-driven status reporting:** Python/Julia scripts report success/failure via `report_status()` utility
 - **Python API and MCP server** for programmatic and AI-agent integration
@@ -204,7 +204,7 @@ Using separate `PBX_DB_PATH` and/or `PBX_CONFIG_PATH` allows multiple isolated d
 - **CPU-only jobs:** Use `--nocc` for fractional node occupancy (e.g., 0.25); multiple jobs co-reside up to 1.0
 - **Multi-node jobs:** Exclusive free nodes with MPI hostlist generation
 - **Non-MPI apps:** Resource launcher constrains execution to assigned node/resources
-- **Backlog scheduling:** Dependency-aware rescheduling as resources free up
+- **Dependency-aware scheduling:** Jobs dispatch once their parents finish and resources free up (parents satisfy on `Done`/`Warning`)
 - **Node health tracking:** Quarantine nodes after repeated failures, auto-recover when healthy
 
 ### MPI CPU Binding
@@ -223,7 +223,7 @@ Statuses:
 - Restart → Resubmitted → Running → … — the restart path. `Submitted`/`Resubmitted` are the *claimed* states: a `pbx run` atomically flips a job to `Submitted` (from `Ready`) or `Resubmitted` (from `Restart`), stamping its batch id (`sched_job_id`) so multiple concurrent runs sharing one DB never double-claim.
 - Warning — if an app returns an invalid/unknown status (satisfies dependencies like `Done`)
 - Killed — when walltime is exceeded **in a no-respawn run**, or whenever the user runs `pbx qdel`/`pbx scancel`. At shutdown the orchestrator reconciles its own jobs per state: `Running → Killed` (or `Restart`/`Failed` in a `--respawn` run), and claimed-but-not-yet-running jobs go back to the pool (`Submitted → Ready`, `Resubmitted → Restart`). If the signal handler can't finish its DB writes in time, a post-kill reconciliation step in `pbx qdel`/`scancel` applies the same per-state rules, scoped to the killed batch's `sched_job_id`.
-- Restart — set by either the user (`pbx update --status Restart`) or by the orchestrator in a `--respawn` chain at walltime. Either way, the next `pbx run` startup calls the app's `restart()` hook for every `Restart` row (patch fields and re-run / re-run as-is / mark Failed) before the dispatch loop.
+- Restart — set by either the user (`pbx update --status Restart`) or by the orchestrator in a `--respawn` chain at walltime. Either way, the next `pbx run` calls the app's `restart()` hook lazily per-job as each `Restart` row is dispatched (patch fields and re-run / re-run as-is / mark Failed), right after resources are assigned.
 
 Full state-transition table and end-to-end chain walkthrough: [`docs/pbx-run-details.md`](docs/pbx-run-details.md).
 

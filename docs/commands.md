@@ -225,8 +225,8 @@ Notes:
 - `--walltime` defaults to **minutes**; supports `h` and `d` suffixes (`90`, `4.25h`, `3.5d`).
 - `--retries N` is passed through to Parsl: each individual ParslBox job that fails (non-zero exit, app exception) is retried up to `N` times before being marked `Failed`. Default `0` (no retry).
 - `--sched-opts` adds extra scheduler directives. **Each value is a complete directive line including the `#PBS` / `#SBATCH` prefix** (e.g., `'#PBS -l filesystems=home:eagle'`, `'#SBATCH --qos=regular'`). Repeatable; directives matching a template key override it.
-- `--dynamic` (default) polls the DB for new Ready/Restart jobs matching the same `--apps`/`--tags` filters every 60s. `--static` disables this.
-- `--respawn N` enables the self-respawn chain. A `respawn_template.sh` is generated alongside `submit.sh`. At each walltime expiry, in-flight jobs are marked `Restart` (instead of `Killed`) and the next link is auto-submitted with `--respawn (N-1)`. When `--respawn 0`, in-flight jobs go to `Failed` and the chain ends. Full lifecycle + per-link behavior: [`pbx-run-details.md`](pbx-run-details.md).
+- `--dynamic` (default) re-queries the DB for runnable (`Ready`/`Restart`) jobs matching the same `--apps`/`--tags` filters on every dispatch pass, so jobs added or flipped mid-run are picked up; it also lets multiple runs share one DB. `--static` claims the runnable set once up front and does not re-query.
+- `--respawn N` enables the self-respawn chain. A `respawn_template.sh` is generated alongside `submit.sh`. At each walltime expiry, `Running` jobs are marked `Restart` (instead of `Killed`) and the next link is auto-submitted with `--respawn (N-1)`. When `--respawn 0`, `Running` jobs go to `Failed` and the chain ends. Full lifecycle + per-link behavior: [`pbx-run-details.md`](pbx-run-details.md).
 - **Tag globs**: each `--tags` token may be a literal or a `*` glob (`*prod`, `run*`, `*3c*`). Globs are resolved against the DB before submission. **If any token matches no existing tag, submission aborts.** Quote globs to stop the shell from expanding `*`.
 - **Job-count guard**: before submitting, qsub/sbatch query the DB for matching Ready/Restart jobs. **If zero match, submission aborts** to avoid wasting the allocation.
 - After generation, the submit script is printed in a cyan box with the `pbx run` line highlighted in red. When `--respawn` is set, `respawn_template.sh` is also printed (yellow note explains the placeholder behavior).
@@ -270,9 +270,9 @@ pbx qsub -c sophia -N sweep -q gpu --select 4 -T 4h -A myproject -a lammps -t sw
 Gracefully cancel a running ParslBox batch job. **Always prefer these over raw `qdel`/`scancel`.**
 
 - `--grace/-g N` — seconds between SIGTERM and the hard kill (default `30`).
-- Sends SIGTERM first so the orchestrator can mark in-flight jobs as `Killed` in the database, then runs the scheduler's kill command.
-- Raw `qdel`/`scancel` give only the site's default kill grace (often ~2s), which can leave jobs stuck in `Running` state.
-- **Always marks `Killed`, even under `--respawn`.** If you want to pause-and-resume a respawn chain rather than terminate it, flip the jobs back to `Restart` manually after the cancel (`pbx update --status Restart <ids>`) and run `pbx qsub --respawn N` again.
+- Sends SIGTERM first so the orchestrator can reconcile its in-flight jobs in the database, then runs the scheduler's kill command.
+- Raw `qdel`/`scancel` give only the site's default kill grace (often ~2s), which can leave jobs stuck in `Running`/claimed states.
+- **A `Running` job is always marked `Killed`, even under `--respawn`** (claimed-but-not-yet-running jobs revert to the pool: `Submitted` → `Ready`, `Resubmitted` → `Restart`). If you want to pause-and-resume a respawn chain rather than terminate it, flip the killed jobs back to `Restart` manually after the cancel (`pbx update --status Restart <ids>`) and run `pbx qsub --respawn N` again.
 - **DB reconciliation.** After the scheduler kill (whether it succeeded or not), pbx queries the DB for any non-terminal jobs under this batch (`sched_job_id` match) and reconciles them per state: `Running` → `Killed`, `Submitted` → `Ready`, `Resubmitted` → `Restart`. This catches cases where the orchestrator's signal handler couldn't complete its cleanup before the process exited (DB contention, alarm timeout, etc.). Scoped by `sched_job_id` so concurrent batch jobs are unaffected. If the hard-kill step returned an error but reconciliation cleaned up stuck jobs, the command exits `0` with a warning — the batch is dead and the DB is consistent, which was the user intent.
 
 ```bash
@@ -286,6 +286,6 @@ pbx scancel 7654321 -g 60  # custom grace
 
 Engine used by qsub/sbatch — not for direct use. Full runtime reference: [`pbx-run-details.md`](pbx-run-details.md).
 
-- `--dynamic` (default) / `--static` controls live job discovery during the run session.
-- Triggers a graceful shutdown automatically ~30s before walltime so in-flight jobs are marked cleanly in the database — `Killed` by default, or `Restart`/`Failed` under `--respawn`.
-- `--respawn N` is set internally by `pbx qsub --respawn N` / `pbx sbatch --respawn N`. It turns on the walltime-time auto-resubmission step. Do not invoke `pbx run` with it directly — use `pbx qsub --respawn N`. The startup `restart()` hook runs for every `Restart`-status job at every `pbx run` invocation, regardless of `--respawn`.
+- `--dynamic` (default) re-queries the DB for runnable jobs each dispatch pass (and lets multiple runs share one DB); `--static` claims the runnable set once up front. Neither idles — a run exits when nothing runnable remains.
+- Triggers a graceful shutdown automatically before walltime (30s grace, 90s under `--respawn`) so in-flight jobs are reconciled cleanly: `Running` → `Killed` by default (or `Restart`/`Failed` under `--respawn`), and claimed-but-not-yet-running jobs revert to `Ready`/`Restart`.
+- `--respawn N` is set internally by `pbx qsub --respawn N` / `pbx sbatch --respawn N`. It turns on the walltime-time auto-resubmission step. Do not invoke `pbx run` with it directly — use `pbx qsub --respawn N`. The `restart()` hook runs lazily per-job as each `Restart`-status job is dispatched, at every `pbx run` invocation, regardless of `--respawn`.

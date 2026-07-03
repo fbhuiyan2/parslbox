@@ -209,7 +209,7 @@ print(result["job_id"], result["run_dir"])
 print("matched", result.get("matched_jobs"), "tags →", result.get("resolved_tags"))
 ```
 
-Self-respawn chain — pass `respawn=N` (non-negative int). pbx generates `respawn_template.sh` alongside `submit.sh`; at every walltime expiry the orchestrator marks in-flight jobs `Restart` and auto-submits the next link with `respawn` decremented by 1. When the counter reaches 0, in-flight jobs go to `Failed` and the chain ends. Full lifecycle: [`pbx-run-details.md`](pbx-run-details.md).
+Self-respawn chain — pass `respawn=N` (non-negative int). pbx generates `respawn_template.sh` alongside `submit.sh`; at every walltime expiry the orchestrator marks `Running` jobs `Restart` and auto-submits the next link with `respawn` decremented by 1. When the counter reaches 0, `Running` jobs go to `Failed` and the chain ends. Full lifecycle: [`pbx-run-details.md`](pbx-run-details.md).
 
 ```python
 result = pbx.qsub(
