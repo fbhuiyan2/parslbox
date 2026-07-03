@@ -114,6 +114,17 @@ def _status(db_path, jid):
     return database.get_jobs_by_ids(db_path, [jid])[0]['status']
 
 
+def _simulate_completion(ctx, job_id, status='Done'):
+    """Mimic handle_completion between the as_completed wait and the next
+    dispatch: pop the future, mark the tracker, BUFFER the terminal status
+    (NOT flushed), and free resources. Running/Done ride the buffer, so the DB
+    still shows the pre-buffer status until a flush happens."""
+    ctx.fut_to_item.pop(f'fut-{job_id}', None)
+    ctx.job_tracker.update_job_status(job_id, status)
+    ctx.status_buffer.add_status_update(job_id, status=status)
+    ctx.resource_manager.free_resources_with_health_check(job_id)
+
+
 # --------------------------------------------------------------------------- #
 # coarse_pick
 # --------------------------------------------------------------------------- #
@@ -290,3 +301,72 @@ class TestDispatchStatic:
         n = dispatch_static(ctx)
         assert n == 1
         assert rm._backlogged_jobs_set == {child}
+
+
+# --------------------------------------------------------------------------- #
+# Flush-before-dispatch ordering invariant
+#
+# Running/Done ride the status buffer; parents_satisfied reads parent status
+# fresh from the DB. So a just-completed parent whose Done is still buffered is
+# invisible to dispatch — the child looks un-ready. The main loop MUST flush the
+# buffer before dispatching, or the no-idle exit skips fan-in / aggregator jobs
+# whose last parent just finished. These tests pin that contract at the helper
+# level for both modes.
+# --------------------------------------------------------------------------- #
+class TestFlushBeforeDispatchOrdering:
+    def test_dynamic_child_needs_parent_done_flushed(self, db):
+        parent = _add(db, '/p', status='Ready')
+        child = _add(db, '/c', status='Ready', parents=[parent])
+        rm = FakeRM(capacity=10)
+        tracker = JobTracker([], db)
+        rm.job_tracker = tracker
+        ctx = _mk_ctx(db, rm, tracker)
+
+        # Pass 1: parent dispatches; child blocked (parent not yet Done).
+        dispatch_dynamic(ctx, None, None)
+        assert f'fut-{parent}' in ctx.fut_to_item
+        assert f'fut-{child}' not in ctx.fut_to_item
+
+        # Parent completes — Done buffered, not flushed.
+        _simulate_completion(ctx, parent, 'Done')
+
+        # Buggy ordering (dispatch before flush): parent's Done is buffered, DB
+        # still shows 'Submitted', so the child is NOT picked up.
+        dispatch_dynamic(ctx, None, None)
+        assert f'fut-{child}' not in ctx.fut_to_item
+        assert _status(db, child) == 'Ready'
+
+        # Correct ordering (flush THEN dispatch): child becomes dep-ready.
+        ctx.status_buffer.flush_all()
+        assert _status(db, parent) == 'Done'
+        dispatch_dynamic(ctx, None, None)
+        assert f'fut-{child}' in ctx.fut_to_item
+        assert _status(db, child) == 'Submitted'
+
+    def test_static_child_needs_parent_done_flushed(self, db):
+        parent = _add(db, '/p', status='Ready')
+        child = _add(db, '/c', status='Ready', parents=[parent])
+        database.claim_jobs(db, [parent, child], [], owner='A')
+        tracker = JobTracker(database.get_jobs(db), db)
+        rm = FakeRM(capacity=10)
+        rm.job_tracker = tracker
+        rm.add_to_backlog(parent)
+        rm.add_to_backlog(child)
+        ctx = _mk_ctx(db, rm, tracker, owner='A')
+
+        # Pass 1: only parent is dep-ready.
+        assert dispatch_static(ctx) == 1
+        assert f'fut-{parent}' in ctx.fut_to_item
+        assert rm._backlogged_jobs_set == {child}
+
+        _simulate_completion(ctx, parent, 'Done')
+
+        # Buggy ordering: child stays blocked and parked in the backlog.
+        assert dispatch_static(ctx) == 0
+        assert child in rm._backlogged_jobs_set
+
+        # Correct ordering: flush first, child becomes dep-ready and dispatches.
+        ctx.status_buffer.flush_all()
+        assert dispatch_static(ctx) == 1
+        assert f'fut-{child}' in ctx.fut_to_item
+        assert rm._backlogged_jobs_set == set()

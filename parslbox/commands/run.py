@@ -403,6 +403,14 @@ def run(
                 logger.info(f"Recovered {len(recovered_nodes)} nodes from quarantine: {recovered_nodes}")
             last_recovery_attempt = current_time
 
+        # Flush BEFORE dispatch: Running/Done/Failed ride the status buffer, but
+        # dependency checks (parents_satisfied) read parent status fresh from the
+        # DB. If a parent's completion is still buffered when dispatch runs, its
+        # child looks un-ready and — if it's the last work — the no-idle exit
+        # below fires and the child is skipped (fan-in / aggregator jobs). Claims
+        # (Submitted/Resubmitted) are written synchronously and are unaffected.
+        status_buffer.flush_all()
+
         # Dispatch as much as currently fits.
         try:
             if dynamic:
@@ -412,8 +420,6 @@ def run(
         except Exception as e:
             logger.error(f"Error during dispatch: {e}")
             dispatched = 0
-
-        status_buffer.flush_all()
 
         if dispatched:
             status = resource_manager.get_resource_status()
