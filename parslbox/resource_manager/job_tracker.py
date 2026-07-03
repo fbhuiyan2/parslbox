@@ -129,7 +129,13 @@ class JobTracker:
         if not job:
             logger.warning(f"Job {job_id} not found in JobTracker")
             return False
+        return self.parents_satisfied(job)
 
+    def parents_satisfied(self, job: dict) -> bool:
+        """Dict-based dependency check — same semantics as are_parents_done but
+        takes the job dict directly, so a candidate can be gated before it is
+        registered in the tracker (used by the dispatch loop pre-claim)."""
+        job_id = job.get('job_id')
         parents_str = job.get('parents')
         if not parents_str:
             return True  # No dependencies

@@ -195,40 +195,45 @@ class TestRestartingJobIdsPlumbing:
     asserted here so silent removal of any one of them shows up in CI.
     """
 
-    def test_create_parsl_future_accepts_restarting_job_ids_param(self):
-        """Signature must include the parameter so all 3 call sites in run.py
-        can pass the set through."""
+    def test_create_parsl_future_uses_restarting_job_ids(self):
+        """create_parsl_future (now in schedule_helpers, taking a ctx) must
+        still drive file-mode / restart() logic off restarting_job_ids (via
+        ctx) and expose an `is_restart` selector."""
         import inspect
-        from parslbox.commands.run import create_parsl_future
+        from parslbox.commands.helpers.schedule_helpers import create_parsl_future
         sig = inspect.signature(create_parsl_future)
-        assert "restarting_job_ids" in sig.parameters, (
-            "create_parsl_future is missing the `restarting_job_ids` "
-            "parameter — file-mode logic needs it to decide 'a' vs 'w'."
+        assert "is_restart" in sig.parameters, (
+            "create_parsl_future is missing the `is_restart` parameter — "
+            "restart() handling and 'a' vs 'w' file mode need it."
+        )
+        src = inspect.getsource(create_parsl_future)
+        assert "restarting_job_ids" in src, (
+            "create_parsl_future no longer references restarting_job_ids — "
+            "restart-continuation append mode would be silently broken."
         )
 
     def test_create_parsl_future_uses_choose_output_mode(self):
         """The body must call `choose_output_mode` to set the stdout/stderr
         mode, not hardcode 'w' as before."""
         import inspect
-        from parslbox.commands.run import create_parsl_future
+        from parslbox.commands.helpers.schedule_helpers import create_parsl_future
         src = inspect.getsource(create_parsl_future)
         assert "choose_output_mode(" in src, (
             "create_parsl_future no longer calls choose_output_mode — "
             "per-job restart-continuation append mode would be silently broken."
         )
 
-    def test_run_py_discards_from_set_on_terminal_status(self):
-        """The result-handling loop must clear set entries on Done/Failed/
+    def test_discards_from_set_on_terminal_status(self):
+        """The result-handling path must clear set entries on Done/Failed/
         Warning so a Failed→Ready re-discovery (same pbx run invocation)
         opens in 'w' mode instead of stale 'a'+banner."""
         import re
         from pathlib import Path
-        import parslbox.commands.run as run_mod
-        src = Path(run_mod.__file__).read_text()
-        # Look for restarting_job_ids.discard(...) call somewhere in the file.
+        import parslbox.commands.helpers.schedule_helpers as sched_mod
+        src = Path(sched_mod.__file__).read_text()
         assert re.search(r"restarting_job_ids\.discard\s*\(", src), (
-            "run.py never calls restarting_job_ids.discard — stale set "
-            "entries would survive across same-invocation re-dispatches."
+            "schedule_helpers never calls restarting_job_ids.discard — stale "
+            "set entries would survive across same-invocation re-dispatches."
         )
 
 
@@ -266,7 +271,7 @@ class TestLazyRestartWiring:
 
     def test_create_parsl_future_calls_apply_restart_for_job(self):
         import inspect
-        from parslbox.commands.run import create_parsl_future
+        from parslbox.commands.helpers.schedule_helpers import create_parsl_future
         src = inspect.getsource(create_parsl_future)
         assert "apply_restart_for_job(" in src, (
             "create_parsl_future does not call apply_restart_for_job. "

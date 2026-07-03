@@ -125,83 +125,57 @@ class TestLammpsKkRestartOverride:
 
 
 # ---------------------------------------------------------------------------
-# Source-pattern guards — make sure run.py actually calls the helper at
-# each of the three dispatch sites. A refactor that drops one of these
-# calls would silently regress the gate.
+# Source-pattern guards — the dispatch engine (schedule_helpers) must call the
+# gate in both dispatch paths. A refactor that drops one would silently regress
+# the gate.
 # ---------------------------------------------------------------------------
 
 
-def _run_py_source() -> str:
-    import parslbox.commands.run as run_mod
-    return Path(run_mod.__file__).read_text()
+def _sched_helpers_source() -> str:
+    import parslbox.commands.helpers.schedule_helpers as sched_mod
+    return Path(sched_mod.__file__).read_text()
 
 
-def _block_containing(src: str, marker_re: str, search_re: str) -> bool:
-    """Find a block anchored on `marker_re` (a regex matching some
-    distinctive line in the block) and check `search_re` appears within
-    ~40 lines after it.
-    """
+def _function_source(func_name: str) -> str:
+    """Return the source of a single top-level function in schedule_helpers."""
+    src = _sched_helpers_source()
     lines = src.splitlines()
-    for i, line in enumerate(lines):
-        if re.search(marker_re, line):
-            window = "\n".join(lines[i: i + 40])
-            if re.search(search_re, window):
-                return True
-    return False
+    out, capturing = [], False
+    for line in lines:
+        if re.match(rf"def\s+{func_name}\s*\(", line):
+            capturing = True
+            out.append(line)
+            continue
+        if capturing:
+            if line and not line[0].isspace() and not line.startswith(")"):
+                break
+            out.append(line)
+    return "\n".join(out)
 
 
 class TestDispatchSitesCallGateHelper:
     def test_should_gate_dispatch_is_imported(self):
-        src = _run_py_source()
-        # Multi-line `from ... import (\n  ...,\n  should_gate_dispatch,\n)`
-        # — match the import block via DOTALL.
+        src = _sched_helpers_source()
         assert re.search(
             r"from\s+parslbox\.commands\.helpers\.run_cmd_helpers\s+import\s*\("
             r".*?should_gate_dispatch.*?\)",
             src,
             re.DOTALL,
         ), (
-            "run.py does not import should_gate_dispatch — the gate will not "
-            "fire at any dispatch site."
+            "schedule_helpers does not import should_gate_dispatch — the gate "
+            "will not fire at any dispatch site."
         )
 
-    def test_initial_dispatch_site_calls_helper(self):
-        """Site A: the `for job in filtered_jobs:` loop must gate."""
-        src = _run_py_source()
-        assert _block_containing(
-            src,
-            marker_re=r"for\s+job\s+in\s+filtered_jobs\s*:",
-            search_re=r"\bshould_gate_dispatch\s*\(",
-        ), (
-            "Initial dispatch (for job in filtered_jobs) does not call "
-            "should_gate_dispatch — jobs would dispatch regardless of "
-            "remaining walltime at pbx run startup."
+    def test_dynamic_dispatch_calls_helper(self):
+        """dispatch_dynamic must gate every candidate before claiming."""
+        assert re.search(r"\bshould_gate_dispatch\s*\(", _function_source("dispatch_dynamic")), (
+            "dispatch_dynamic does not call should_gate_dispatch — jobs would "
+            "dispatch regardless of remaining walltime."
         )
 
-    def test_dynamic_discovery_dispatch_site_calls_helper(self):
-        """Site B: the `for job in new_jobs:` loop inside discover_new_jobs
-        must gate."""
-        src = _run_py_source()
-        assert _block_containing(
-            src,
-            marker_re=r"for\s+job\s+in\s+new_jobs\s*:",
-            search_re=r"\bshould_gate_dispatch\s*\(",
-        ), (
-            "Dynamic-discovery dispatch (for job in new_jobs) does not call "
-            "should_gate_dispatch — newly discovered jobs would dispatch "
-            "regardless of remaining walltime."
-        )
-
-    def test_backlog_reschedule_site_calls_helper(self):
-        """Site C: backlog reschedule must filter dependency_ready_jobs
-        through the gate BEFORE passing to schedule_backlog."""
-        src = _run_py_source()
-        assert _block_containing(
-            src,
-            marker_re=r"dependency_ready_jobs\s*=\s*resource_manager\."
-                      r"get_dependency_ready_jobs_from_backlog\s*\(",
-            search_re=r"\bshould_gate_dispatch\s*\(",
-        ), (
-            "Backlog reschedule branch does not call should_gate_dispatch — "
-            "backlog jobs would dispatch regardless of remaining walltime."
+    def test_static_dispatch_calls_helper(self):
+        """dispatch_static must gate backlog jobs before dispatching."""
+        assert re.search(r"\bshould_gate_dispatch\s*\(", _function_source("dispatch_static")), (
+            "dispatch_static does not call should_gate_dispatch — backlog jobs "
+            "would dispatch regardless of remaining walltime."
         )

@@ -96,41 +96,6 @@ def should_gate_dispatch(
     return remaining_walltime_s < floor
 
 
-def should_re_dispatch_known_job(tracker_status: str, db_status: str) -> bool:
-    """Decide whether a job already in the dispatch loop's `known_job_ids`
-    should be re-dispatched when dynamic discovery sees it back in a
-    runnable status in the DB.
-
-    Re-dispatch only on a real state transition:
-      - tracker terminal (Done / Failed / Warning / Killed) AND
-        DB runnable (Ready / Restart) — user/script is replaying it.
-      - tracker == Ready AND DB == Restart — user flipped a
-        never-dispatched Ready job to Restart to force
-        checkpoint-resume semantics.
-
-    Explicitly NOT re-dispatched:
-      - tracker == Ready AND DB == Ready — no transition. Tracker stays
-        Ready when the job sat in the backlog the whole time without
-        ever being dispatched; re-routing it through new_jobs would just
-        bounce it back to the backlog and busy-loop on every discovery
-        pass. (This was the bug behind the dynamic-discovery tight-loop
-        observed in production.)
-      - tracker Submitted/Running — live future, DB flip is a no-op this
-        link; let the future settle on its own path.
-
-    Re-discovery routes the job into `new_jobs`, which is what makes the
-    per-job `apply_restart_for_job` call inside create_parsl_future fire
-    on `Restart`-status entries (so they get added to
-    `restarting_job_ids` and their stdout/stderr opens in 'a'+banner
-    mode). See test_run_dynamic_rediscovery.py for the full table.
-    """
-    if tracker_status in ('Done', 'Failed', 'Warning', 'Killed') and db_status in ('Ready', 'Restart'):
-        return True
-    if tracker_status == 'Ready' and db_status == 'Restart':
-        return True
-    return False
-
-
 def get_default_run_dir() -> Path:
     """Generate default run directory with current time and date in hhmmss_ddmmyy format."""
     now = datetime.now()

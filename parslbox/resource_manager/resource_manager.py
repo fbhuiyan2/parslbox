@@ -197,8 +197,9 @@ class ResourceManager:
             return assignment
             
         except InsufficientResources:
-            # Add to backlog using centralized method
-            self.add_to_backlog(resource_spec.job_id)
+            # No side effects here: the caller decides what to do with a job
+            # that doesn't fit (static → keep in backlog; dynamic → revert the
+            # claim). Silently backlogging here conflated the two modes.
             raise
     
     def _validate_resource_spec(self, spec: JobResourceSpec) -> None:
@@ -514,12 +515,28 @@ class ResourceManager:
     def add_to_backlog(self, job_id: int) -> None:
         """
         Add a job to the backlog queue.
-        
+
         Args:
             job_id: The job ID to add to backlog
         """
         if job_id not in self._backlogged_jobs_set:
             self._backlogged_jobs_set.add(job_id)
+
+    def free_node_capacity(self) -> int:
+        """Lax, node-level count of how many more jobs could currently be placed.
+
+        Counts healthy nodes with any free capacity (CPU headroom or a free
+        GPU). Used ONLY to bound the dispatch pick so we don't claim the whole
+        Ready pool — `assign_resources` remains the real fit authority, so this
+        number is deliberately coarse (it ignores exact sub-node packing).
+        """
+        capacity = 0
+        for node in self.nodes:
+            if not node.health_tracker.can_accept_jobs():
+                continue
+            if node.cpu_occupancy < 1.0 or len(node.available_gpu_ids) > 0:
+                capacity += 1
+        return capacity
 
     
     def free_resources(self, job_id: int) -> None:
