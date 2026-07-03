@@ -149,7 +149,7 @@ def parse_parents(parents_str):
 
 
 def create_shutdown_handler(status_buffer, logger, parsl_loaded_flag, job_tracker=None,
-                            respawn_ctx=None):
+                            respawn_ctx=None, owner=None):
     """
     Create a signal handler that flushes the status buffer on termination.
 
@@ -188,6 +188,7 @@ def create_shutdown_handler(status_buffer, logger, parsl_loaded_flag, job_tracke
             reason=f"signal {signal_name}",
             cleanup_parsl=False,
             respawn_ctx=None,  # signal path never auto-resubmits
+            owner=owner,
         )
         sys.exit(130)
 
@@ -195,37 +196,41 @@ def create_shutdown_handler(status_buffer, logger, parsl_loaded_flag, job_tracke
 
 
 def perform_shutdown(status_buffer, job_tracker, parsl_loaded_flag, logger,
-                     reason: str, cleanup_parsl: bool, respawn_ctx=None):
+                     reason: str, cleanup_parsl: bool, respawn_ctx=None,
+                     owner: str = None):
     """
     Shared shutdown sequence used by both the signal handler and the
     walltime-triggered check in the main loop.
 
     Ordering:
-      STEP 0: snapshot active job IDs from in-memory JobTracker.
-      STEP 1: flush the status buffer (writes any pending Done/Failed).
-      STEP 2: mark active jobs.
-              - respawn_ctx with respawn > 0 and reason=="walltime"
-                → mark `Restart` (chain continues).
-              - respawn_ctx with respawn == 0 and reason=="walltime"
-                → mark `Failed` ("chain exhausted: respawn count reached 0").
-              - otherwise → mark `Killed` (existing behavior).
+      STEP 1: flush the status buffer (writes any pending Running/Done/Failed)
+              — done FIRST so the DB snapshot in STEP 0 is accurate (a job
+              dispatched this pass is buffered Running, not yet in the DB).
+      STEP 0: snapshot this run's non-terminal jobs from the DB, scoped to
+              `owner` (sched_job_id), bucketed by current status.
+      STEP 2: reconcile per state (only ever touches this run's own jobs):
+              - Submitted   → Ready   (claimed, never ran → back to the pool)
+              - Resubmitted → Restart (claimed, never ran → back to the pool)
+              - Running     → Restart (walltime + respawn > 0, chain continues)
+                            → Failed  (walltime + respawn == 0, chain exhausted)
+                            → Killed  (signal / qdel / scancel)
       STEP 3: Parsl cleanup — only when cleanup_parsl=True (walltime path).
-              Skipped for the signal path because the scheduler will tear
-              down the cgroup anyway and HTE shutdown can be slow.
-      STEP 4: Respawn auto-resubmit — only when respawn_ctx with respawn > 0
-              and we just marked >= 1 job as Restart.
+      STEP 4: Respawn auto-resubmit — only under respawn > 0 at walltime, when
+              at least one job was reconciled into a runnable state.
 
     Args:
         status_buffer: StatusBuffer instance.
-        job_tracker: JobTracker instance (source of active job IDs).
+        job_tracker: JobTracker instance (unused for the snapshot now; kept for
+            signature compatibility / future use).
         parsl_loaded_flag: Dict with 'loaded' key.
         logger: Logger instance.
         reason: Human-readable trigger (e.g. "signal SIGTERM", "walltime").
         cleanup_parsl: If True, call parsl.dfk().cleanup().
-        respawn_ctx: Optional dict with keys: respawn (int), run_dir (Path),
-            system_config (object), db_path (Path), app_filter (set or None),
-            tag_filter (set or None). When present AND reason == "walltime",
+        respawn_ctx: Optional dict (respawn, run_dir, system_config, db_path,
+            app_filter, tag_filter). When present AND reason == "walltime",
             triggers the respawn branching for Step 2 / Step 4.
+        owner: This run's sched_job_id — the claim owner token. Reconciliation
+            is scoped to it so a run never touches another orchestrator's jobs.
     """
     import time
 
@@ -246,20 +251,11 @@ def perform_shutdown(status_buffer, job_tracker, parsl_loaded_flag, logger,
     # backstop needs to fire.
     signal.alarm(25)
 
-    # STEP 0: snapshot active job IDs.
-    active_ids = []
-    if job_tracker:
-        try:
-            active_jobs = (
-                job_tracker.get_jobs_by_status("Running")
-                + job_tracker.get_jobs_by_status("Submitted")
-            )
-            active_ids = [j['job_id'] for j in active_jobs]
-            logger.info(f"Shutdown: Step 0 - Found {len(active_ids)} active jobs")
-        except Exception as e:
-            logger.error(f"Shutdown: Step 0 - Failed to get active jobs: {e}")
+    db_path = status_buffer.db_path
 
-    # STEP 1: flush status buffer (preserves any pending Done/Failed).
+    # STEP 1: flush status buffer FIRST — writes any pending Running/Done/Failed
+    # so the DB snapshot below reflects reality (a job dispatched this pass is
+    # buffered Running, not yet persisted).
     try:
         flush_start = time.time()
         count = status_buffer.flush_all()
@@ -273,32 +269,65 @@ def perform_shutdown(status_buffer, job_tracker, parsl_loaded_flag, logger,
     except Exception as e:
         logger.error(f"Shutdown: Step 1 - Status buffer flush FAILED: {e}")
 
-    # STEP 2: mark active jobs (Killed by default; Restart or Failed under
-    # respawn + walltime).
-    restart_marked = 0
-    if active_ids:
-        if respawn_ctx is not None and reason == "walltime":
-            if respawn_ctx["respawn"] > 0:
-                target_status = "Restart"
-            else:
-                target_status = "Failed"
-        else:
-            target_status = "Killed"
+    # STEP 0: snapshot this run's non-terminal jobs from the DB, owner-scoped,
+    # bucketed by current status.
+    running_ids, submitted_ids, resubmitted_ids = [], [], []
+    if owner:
         try:
-            database.update_jobs(status_buffer.db_path,
-                                 job_ids=active_ids, status=target_status)
-            logger.info(f"Shutdown: Step 2 - Marked {len(active_ids)} "
-                        f"active jobs as {target_status}")
-            if target_status == "Restart":
-                restart_marked = len(active_ids)
-            elif target_status == "Failed" and respawn_ctx is not None:
-                logger.warning(
-                    "Shutdown: Step 2 - chain exhausted (respawn reached 0); "
-                    "these jobs were marked Failed. Manually flip them to Restart "
-                    "and resubmit if you want to continue."
-                )
+            rows = database.get_jobs_by_sched_id(
+                db_path, owner, statuses=["Running", "Submitted", "Resubmitted"]
+            )
+            for r in rows:
+                if r['status'] == 'Running':
+                    running_ids.append(r['job_id'])
+                elif r['status'] == 'Submitted':
+                    submitted_ids.append(r['job_id'])
+                elif r['status'] == 'Resubmitted':
+                    resubmitted_ids.append(r['job_id'])
+            logger.info(
+                f"Shutdown: Step 0 - owner={owner}: {len(running_ids)} running, "
+                f"{len(submitted_ids)} submitted, {len(resubmitted_ids)} resubmitted"
+            )
         except Exception as e:
-            logger.error(f"Shutdown: Step 2 - Failed to mark active jobs: {e}")
+            logger.error(f"Shutdown: Step 0 - Failed to snapshot owned jobs: {e}")
+    else:
+        logger.warning("Shutdown: Step 0 - no owner id; skipping DB reconcile")
+
+    # STEP 2: reconcile per state (owner-scoped, so never another run's jobs).
+    restart_marked = 0
+    try:
+        # Claimed-but-never-ran jobs go back to the pool regardless of respawn.
+        reverted = database.revert_claims(
+            db_path, submitted_ids + resubmitted_ids, owner=owner
+        )
+        if reverted:
+            logger.info(
+                f"Shutdown: Step 2 - reverted {reverted} claimed job(s) "
+                f"(Submitted→Ready / Resubmitted→Restart)"
+            )
+
+        # Running jobs: target depends on trigger + respawn.
+        if respawn_ctx is not None and reason == "walltime":
+            running_target = "Restart" if respawn_ctx["respawn"] > 0 else "Failed"
+        else:
+            running_target = "Killed"
+
+        if running_ids:
+            database.update_jobs(db_path, job_ids=running_ids, status=running_target)
+            logger.info(
+                f"Shutdown: Step 2 - Marked {len(running_ids)} running job(s) as {running_target}"
+            )
+            if running_target == "Failed" and respawn_ctx is not None:
+                logger.warning(
+                    "Shutdown: Step 2 - chain exhausted (respawn reached 0); running "
+                    "jobs marked Failed. Manually flip to Restart to continue."
+                )
+
+        # Chain continues if anything was reconciled into a runnable state.
+        if respawn_ctx is not None and reason == "walltime" and respawn_ctx["respawn"] > 0:
+            restart_marked = len(running_ids) + reverted
+    except Exception as e:
+        logger.error(f"Shutdown: Step 2 - Failed to reconcile jobs: {e}")
 
     # STEP 3: Parsl cleanup (only when we have runway).
     if cleanup_parsl:

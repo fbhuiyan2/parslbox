@@ -8,16 +8,19 @@ commands and the ParslBox API methods.
 
 After the scheduler-level kill, an optional DB reconciliation step queries
 for any jobs still owned by this batch job (matching `sched_job_id`) that
-remain in a non-terminal status (`Running` / `Submitted`) — these are jobs
-whose orchestrator signal handler never got to STEP 2 (mark Killed) before
-the process exited (DB contention, alarm timeout, exception, etc.). The
-reconciliation force-flips them to `Killed` so the DB matches reality.
+remain in a non-terminal status — these are jobs whose orchestrator signal
+handler never got to reconcile them before the process exited (DB contention,
+alarm timeout, exception, etc.). The reconciliation applies the same per-state
+rules as a graceful shutdown so the DB matches reality:
+
+  - Running     → Killed  (was actually executing)
+  - Submitted   → Ready   (claimed, never ran → back to the pool)
+  - Resubmitted → Restart (claimed, never ran → back to the pool)
 
 Reconciliation is SAFE for concurrent multi-batch use: `sched_job_id` is
-unique per claim (overwritten on each `create_parsl_future` call), so other
-batch jobs' active jobs carry different ids and are not touched. Stale
-`sched_job_id` values can only persist for jobs that were never re-claimed
-— exactly the stuck set we want to clean.
+unique per batch, so other batch jobs' active jobs carry different ids and are
+not touched. Stale `sched_job_id` values can only persist for jobs that were
+never re-claimed — exactly the stuck set we want to clean.
 
 Reconciliation is SKIPPED when the initial SIGTERM-delivery step fails: if
 the signal was never delivered, the batch is still running normally and
@@ -33,23 +36,32 @@ from parslbox.database import database
 
 
 def _reconcile_stuck_jobs(db_path: Optional[Path], jobid: str) -> int:
-    """Force-flip jobs left in Running/Submitted by the killed batch to Killed.
+    """Reconcile jobs left non-terminal by the killed batch, per-state:
+    Running→Killed, Submitted→Ready, Resubmitted→Restart (all scoped to this
+    batch's sched_job_id).
 
     Returns the number of jobs reconciled (0 if none stuck, or if db_path is
-    None). Never raises — reconciliation failures log to stderr but do not
-    propagate so the cancel call returns its primary result cleanly.
+    None). Never raises — reconciliation failures do not propagate so the
+    cancel call returns its primary result cleanly.
     """
     if db_path is None:
         return 0
     try:
         stuck = database.get_jobs_by_sched_id(
-            db_path, jobid, statuses=["Running", "Submitted"]
+            db_path, jobid, statuses=["Running", "Submitted", "Resubmitted"]
         )
         if not stuck:
             return 0
-        stuck_ids = [j["job_id"] for j in stuck]
-        database.update_jobs(db_path, job_ids=stuck_ids, status="Killed")
-        return len(stuck_ids)
+        running_ids = [j["job_id"] for j in stuck if j["status"] == "Running"]
+        claimed_ids = [j["job_id"] for j in stuck if j["status"] in ("Submitted", "Resubmitted")]
+
+        count = 0
+        if running_ids:
+            database.update_jobs(db_path, job_ids=running_ids, status="Killed")
+            count += len(running_ids)
+        # Claimed-but-never-ran jobs return to the pool (owner-scoped revert).
+        count += database.revert_claims(db_path, claimed_ids, owner=jobid)
+        return count
     except Exception:
         # Best-effort; primary cancel result must not be masked by a DB hiccup.
         return 0

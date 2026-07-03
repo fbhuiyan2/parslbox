@@ -246,8 +246,14 @@ def run(
             f"{'Restart and chain will resubmit' if respawn > 0 else 'Failed (chain end)'}."
         )
 
+    # This run's claim owner token (its scheduler batch id). Reconciliation and
+    # claiming are scoped to it so concurrent runs never touch each other's jobs.
+    owner = get_scheduler_job_id(scheduler)
+
     # Register signal handlers for graceful shutdown on walltime exceeded
-    shutdown_handler = create_shutdown_handler(status_buffer, logger, parsl_loaded_flag, job_tracker)
+    shutdown_handler = create_shutdown_handler(
+        status_buffer, logger, parsl_loaded_flag, job_tracker, owner=owner
+    )
     signal.signal(signal.SIGTERM, shutdown_handler)
     signal.signal(signal.SIGINT, shutdown_handler)
     logger.info("Registered signal handlers for SIGTERM and SIGINT")
@@ -315,7 +321,6 @@ def run(
             filtered_jobs = [job for job in filtered_jobs if job['app'] != app_name]
 
     # Build the scheduling context shared by the dispatch engine.
-    owner = get_scheduler_job_id(scheduler)
     fut_to_item: dict = {}
     sched_ctx = SchedulerContext(
         db_path=db_path,
@@ -380,6 +385,7 @@ def run(
                 reason="walltime",
                 cleanup_parsl=True,
                 respawn_ctx=respawn_ctx,
+                owner=owner,
             )
             sys.exit(0)
 

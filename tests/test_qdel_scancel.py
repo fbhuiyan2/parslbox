@@ -225,16 +225,17 @@ class TestCancelPbsJob:
 # ---------------------------------------------------------------------------
 
 class TestReconciliationScope:
-    def test_flips_only_running_and_submitted_in_target_batch(self, reconciliation_db):
+    def test_reconciles_per_state_in_target_batch(self, reconciliation_db):
         with patch("parslbox.commands.helpers.cancel_helpers.subprocess.run",
                    return_value=MagicMock(returncode=0)), \
              patch("parslbox.commands.helpers.cancel_helpers.time.sleep"):
             result = cancel_pbs_job("BATCH_A", grace=1, db_path=reconciliation_db)
 
         assert result["reconciled_count"] == 3
-        # BATCH_A's stuck jobs are now Killed
-        assert _status_of(reconciliation_db, 1) == "Killed"
-        assert _status_of(reconciliation_db, 2) == "Killed"
+        # Submitted (claimed, never ran) → back to the pool as Ready
+        assert _status_of(reconciliation_db, 1) == "Ready"
+        assert _status_of(reconciliation_db, 2) == "Ready"
+        # Running (was executing) → Killed
         assert _status_of(reconciliation_db, 3) == "Killed"
 
     def test_does_not_touch_terminal_status_jobs(self, reconciliation_db):

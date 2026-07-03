@@ -611,15 +611,17 @@ class TestSubmitRespawnLink:
 # ============================================================
 
 
+SHUTDOWN_OWNER = "BATCH_SD"
+
+
 def _shutdown_fixtures(db_path, active_ids):
-    """Mock status_buffer, job_tracker, parsl_loaded_flag for perform_shutdown."""
+    """Mock status_buffer + parsl flag, and stamp active jobs with the owner so
+    the owner-scoped DB reconcile in perform_shutdown picks them up."""
     sb = MagicMock()
     sb.flush_all.return_value = 0
     sb.db_path = db_path
     jt = MagicMock()
-    jt.get_jobs_by_status.side_effect = lambda s: (
-        [{"job_id": jid} for jid in active_ids] if s in ("Running", "Submitted") else []
-    )
+    database.update_jobs(db_path, job_ids=list(active_ids), sched_job_id=SHUTDOWN_OWNER)
     return sb, jt, {"loaded": False}
 
 
@@ -630,7 +632,7 @@ class TestPerformShutdownBranching:
         perform_shutdown(
             status_buffer=sb, job_tracker=jt, parsl_loaded_flag=pfl,
             logger=MagicMock(), reason="walltime", cleanup_parsl=False,
-            respawn_ctx=None,
+            respawn_ctx=None, owner=SHUTDOWN_OWNER,
         )
         assert database.get_jobs_by_ids(db, [jid])[0]["status"] == "Killed"
 
@@ -659,7 +661,7 @@ class TestPerformShutdownBranching:
             perform_shutdown(
                 status_buffer=sb, job_tracker=jt, parsl_loaded_flag=pfl,
                 logger=MagicMock(), reason="walltime", cleanup_parsl=False,
-                respawn_ctx=ctx,
+                respawn_ctx=ctx, owner=SHUTDOWN_OWNER,
             )
         assert database.get_jobs_by_ids(db, [jid])[0]["status"] == "Restart"
         # Resubmit was attempted
@@ -684,7 +686,7 @@ class TestPerformShutdownBranching:
             perform_shutdown(
                 status_buffer=sb, job_tracker=jt, parsl_loaded_flag=pfl,
                 logger=MagicMock(), reason="walltime", cleanup_parsl=False,
-                respawn_ctx=ctx,
+                respawn_ctx=ctx, owner=SHUTDOWN_OWNER,
             )
         assert database.get_jobs_by_ids(db, [jid])[0]["status"] == "Failed"
         m_sub.assert_not_called()
@@ -705,7 +707,7 @@ class TestPerformShutdownBranching:
             perform_shutdown(
                 status_buffer=sb, job_tracker=jt, parsl_loaded_flag=pfl,
                 logger=MagicMock(), reason="signal SIGTERM", cleanup_parsl=False,
-                respawn_ctx=ctx,
+                respawn_ctx=ctx, owner=SHUTDOWN_OWNER,
             )
         assert database.get_jobs_by_ids(db, [jid])[0]["status"] == "Killed"
         m_sub.assert_not_called()
