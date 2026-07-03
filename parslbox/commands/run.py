@@ -44,7 +44,7 @@ from parslbox.database.status_buffer import StatusBuffer
 app = typer.Typer()
 
 # Valid job status values (stored in lowercase for comparison)
-VALID_JOB_STATUSES = ["ready", "done", "failed", "killed", "restart", "running", "submitted", "warning"]
+VALID_JOB_STATUSES = ["ready", "done", "failed", "killed", "restart", "running", "submitted", "resubmitted", "warning"]
 
 
 def get_scheduler_job_id(scheduler):

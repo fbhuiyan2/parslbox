@@ -10,7 +10,7 @@ import parsl
 from parslbox.database import database
 
 # Valid job status values (stored in lowercase for comparison)
-VALID_JOB_STATUSES = ["ready", "done", "failed", "killed", "restart", "running", "submitted", "warning"]
+VALID_JOB_STATUSES = ["ready", "done", "failed", "killed", "restart", "running", "submitted", "resubmitted", "warning"]
 
 
 _RESTART_BANNER_TEMPLATE = (
