@@ -205,7 +205,7 @@ Using separate `PBX_DB_PATH` and/or `PBX_CONFIG_PATH` allows multiple isolated d
 - **Multi-node jobs:** Exclusive free nodes with MPI hostlist generation
 - **Non-MPI apps:** Resource launcher constrains execution to assigned node/resources
 - **Dependency-aware scheduling:** Jobs dispatch once their parents finish and resources free up (parents satisfy on `Done`/`Warning`)
-- **Node health tracking:** Quarantine nodes after repeated failures, auto-recover when healthy
+- **Node health tracking:** Quarantine a node only after multiple *distinct* jobs fail on it (a single job's crash — even a multi-node one — never quarantines a node), auto-recover when healthy
 
 ### MPI CPU Binding
 

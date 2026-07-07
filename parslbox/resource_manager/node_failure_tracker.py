@@ -30,16 +30,42 @@ class ErrorType(Enum):
 
 
 @dataclass
+class FailureOutcome:
+    """Result of recording one job failure on a node — returned to the caller
+    (ResourceManager) so it can emit a single aggregated log line per job
+    failure instead of one per node."""
+    counted: bool                 # did this failure count against node health?
+    error_type: ErrorType
+    old_status: NodeHealth
+    new_status: NodeHealth
+    distinct_failures: int        # distinct failing jobs charged to this node
+
+
+@dataclass
 class NodeHealthTracker:
-    """Tracks node health and failure patterns for fault tolerance."""
-    consecutive_failures: int = 0
+    """Tracks node health and failure patterns for fault tolerance.
+
+    Escalation is driven by the number of **distinct jobs** that have failed on
+    this node with a node-suspicious error (not by raw failure events). A single
+    job — even one spanning every node in the allocation, and even if retried —
+    contributes at most 1 to every node it touched, so it can never by itself
+    quarantine a node. Nodes are only suspected/quarantined when several
+    *different* jobs die on them, which is the real signature of a bad node
+    rather than a bad app/input.
+    """
     total_failures: int = 0
     last_failure_time: Optional[float] = None
     last_failure_error: Optional[str] = None
     quarantine_start_time: Optional[float] = None
     health_status: NodeHealth = NodeHealth.HEALTHY
-    
-    # Configuration (can be overridden by system config)
+
+    # Distinct job ids that have failed on this node with a node-suspicious
+    # error since the last success/recovery. Its size is the escalation metric.
+    failed_job_ids: set = field(default_factory=set)
+
+    # Configuration (can be overridden by system config). `max_consecutive_failures`
+    # now means "distinct failing jobs before quarantine" (name kept for config
+    # compatibility).
     max_consecutive_failures: int = 4
     quarantine_duration: int = 600  # 10 minutes
     
@@ -117,59 +143,66 @@ class NodeHealthTracker:
         logger.debug(f"Classified error as JOB_SPECIFIC (unrecognized): {error_message[:200]}")
         return ErrorType.JOB_SPECIFIC
     
-    def record_failure(self, error_message: str = None) -> bool:
+    def record_failure(self, job_id=None, error_message: str = None) -> "FailureOutcome":
         """
-        Record a job failure and determine if node should be quarantined.
-        
+        Record a job failure on this node.
+
+        Escalation counts DISTINCT failing jobs, so a job passed more than once
+        (multi-node accounting, retry, restart) is charged at most once. This
+        method does no logging — it returns a `FailureOutcome` so the caller can
+        emit a single aggregated line per job failure.
+
         Args:
-            error_message: Error message from the failed job
-            
+            job_id: ID of the failed job (used to de-duplicate distinct failures).
+            error_message: Error message from the failed job.
+
         Returns:
-            True if node should be quarantined, False otherwise
+            FailureOutcome describing the classification and any status change.
         """
         current_time = time.time()
         error_type = self.classify_error(error_message)
-        logger.info(f"Node health: error classified as {error_type.value}")
-        
+
         self.total_failures += 1
         self.last_failure_time = current_time
         self.last_failure_error = error_message[:200] if error_message else error_message
-        
-        if error_type == ErrorType.PERSISTENT:
-            # Persistent errors always increment consecutive failures
-            self.consecutive_failures += 1
-            logger.warning(f"Node persistent error detected. Consecutive failures: {self.consecutive_failures}/{self.max_consecutive_failures}")
-        elif error_type == ErrorType.TRANSIENT:
-            # Transient errors increment consecutive failures but with lower weight
-            self.consecutive_failures += 1
-            logger.info(f"Node transient error detected. Consecutive failures: {self.consecutive_failures}/{self.max_consecutive_failures}")
-        else:  # JOB_SPECIFIC
-            # Job-specific errors don't count toward node health
-            logger.info(f"Job-specific error detected (not counting toward node health)")
-            return False
-        
-        # Check if we should quarantine
-        if self.consecutive_failures >= self.max_consecutive_failures:
+
+        old_status = self.health_status
+
+        # Job-specific / no-info errors never count against the node.
+        if error_type == ErrorType.JOB_SPECIFIC:
+            return FailureOutcome(
+                counted=False, error_type=error_type, old_status=old_status,
+                new_status=self.health_status, distinct_failures=len(self.failed_job_ids),
+            )
+
+        # Node-suspicious error: charge this node once per distinct job.
+        before = len(self.failed_job_ids)
+        self.failed_job_ids.add(job_id)
+        distinct = len(self.failed_job_ids)
+        counted = distinct > before  # False if this job already failed here
+
+        if distinct >= self.max_consecutive_failures:
             self.health_status = NodeHealth.QUARANTINED
             self.quarantine_start_time = current_time
-            logger.error(f"Node quarantined after {self.consecutive_failures} consecutive failures")
-            return True
-        elif self.consecutive_failures >= self.max_consecutive_failures // 2:
-            self.health_status = NodeHealth.SUSPECTED
-            logger.warning(f"Node marked as suspected after {self.consecutive_failures} failures")
-        
-        return False
-    
+        elif distinct >= max(2, self.max_consecutive_failures // 2):
+            # Require at least 2 distinct jobs — one job must never suspect a node.
+            if self.health_status == NodeHealth.HEALTHY:
+                self.health_status = NodeHealth.SUSPECTED
+
+        return FailureOutcome(
+            counted=counted, error_type=error_type, old_status=old_status,
+            new_status=self.health_status, distinct_failures=distinct,
+        )
+
     def record_success(self) -> None:
-        """Record a successful job completion."""
+        """Record a successful job completion — clears accumulated failure
+        evidence (the node just proved it can run work)."""
         if self.health_status == NodeHealth.SUSPECTED:
-            # Reset to healthy after successful job
             self.health_status = NodeHealth.HEALTHY
-            self.consecutive_failures = 0
+            self.failed_job_ids.clear()
             logger.info("Node health restored to HEALTHY after successful job")
         elif self.health_status == NodeHealth.HEALTHY:
-            # Reset consecutive failures on success
-            self.consecutive_failures = 0
+            self.failed_job_ids.clear()
     
     def can_accept_jobs(self) -> bool:
         """Check if node can accept new jobs based on health status."""
@@ -196,18 +229,30 @@ class NodeHealthTracker:
         
         if self.is_quarantine_expired():
             self.health_status = NodeHealth.SUSPECTED
-            self.consecutive_failures = max(1, self.consecutive_failures // 2)  # Reduce but don't reset
+            # Keep the node on probation: retain half the distinct-failure
+            # evidence so a still-bad node re-quarantines quickly.
+            keep = len(self.failed_job_ids) // 2
+            self.failed_job_ids = set(list(self.failed_job_ids)[:keep])
             self.quarantine_start_time = None
-            logger.info(f"Node recovered from quarantine, status: {self.health_status}")
+            logger.info(f"Node recovered from quarantine, status: {self.health_status.value}")
             return True
-        
+
         return False
-    
+
+    def reset_health(self) -> None:
+        """Clear all failure evidence and restore the node to HEALTHY."""
+        self.failed_job_ids.clear()
+        self.health_status = NodeHealth.HEALTHY
+        self.quarantine_start_time = None
+
     def get_status_summary(self) -> Dict:
         """Get a summary of node health status."""
         return {
             'health_status': self.health_status.value,
-            'consecutive_failures': self.consecutive_failures,
+            # Distinct failing jobs charged to this node (drives escalation). Key
+            # name kept as 'consecutive_failures' for backward compatibility.
+            'consecutive_failures': len(self.failed_job_ids),
+            'distinct_failed_jobs': len(self.failed_job_ids),
             'total_failures': self.total_failures,
             'last_failure_time': self.last_failure_time,
             'last_failure_error': self.last_failure_error,
@@ -261,13 +306,12 @@ class NodeFailureTracker:
             True if node should be quarantined, False otherwise
         """
         tracker = self.get_or_create_tracker(node_id)
-        should_quarantine = tracker.record_failure(error_message)
-        
-        if should_quarantine:
-            logger.error(f"Node {node_id} quarantined after job {job_id} failure: {error_message}")
-        else:
-            logger.info(f"Recorded failure for job {job_id} on node {node_id}: {tracker.health_status.value}")
-        
+        outcome = tracker.record_failure(job_id, error_message)
+        should_quarantine = outcome.new_status == NodeHealth.QUARANTINED
+        logger.debug(
+            f"Centralized tracker: job {job_id} on node {node_id} → "
+            f"{tracker.health_status.value} ({outcome.distinct_failures} distinct)"
+        )
         return should_quarantine
     
     def record_job_success(self, node_id: str, job_id: int) -> None:
@@ -401,10 +445,8 @@ class NodeFailureTracker:
         
         tracker = self.node_health[node_id]
         if tracker.health_status == NodeHealth.QUARANTINED:
-            tracker.health_status = NodeHealth.HEALTHY
-            tracker.consecutive_failures = 0
-            tracker.quarantine_start_time = None
+            tracker.reset_health()
             logger.info(f"Node {node_id} manually recovered from quarantine")
             return True
-        
+
         return False
