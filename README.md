@@ -38,36 +38,76 @@ Requirements:
 - Python >= 3.11, < 3.14
 - Parsl >= 2025.9.8
 
-### Using Poetry
+Clone the repo first:
+
 ```bash
-conda create --name parslbox python=3.11.9
+git clone https://github.com/fbhuiyan2/parslbox.git
+cd parslbox
+```
+
+Then pick a Python environment manager below. Poetry (recommended) installs into the active environment and uses the committed `poetry.lock` for reproducible dependency resolution. pip is offered as an alternative.
+
+### conda
+
+```bash
+conda create -n parslbox python=3.11.9
 conda activate parslbox
 pip install poetry
-
-git clone https://github.com/fbhuiyan2/parslbox.git
-cd parslbox
-poetry install                          # core dependencies only
+poetry install                          # core dependencies
 # poetry install --extras "simulation"  # + ase, pymatgen
-# poetry install --extras "agentic"    # + uvicorn, mcp, pydantic
-# poetry install --extras "simulation agentic"  # both extras
-# poetry install --all-extras          # all optional packages
+# poetry install --extras "agentic"     # + uvicorn, mcp, pydantic
+# poetry install --extras "simulation agentic"  # both
+# poetry install --all-extras
 ```
 
-### Using pip
+<details><summary>Or with pip</summary>
+
 ```bash
-conda create --name parslbox python=3.11.9
-conda activate parslbox
-
-git clone https://github.com/fbhuiyan2/parslbox.git
-cd parslbox
-pip install .                           # core dependencies only
-# pip install ".[simulation]"           # + ase, pymatgen
-# pip install ".[agentic]"             # + uvicorn, mcp, pydantic
-# pip install ".[simulation,agentic]"  # both extras
-# pip install ".[all]"                 # all optional packages
+pip install .                         # core
+# pip install ".[simulation]"
+# pip install ".[agentic]"
+# pip install ".[simulation,agentic]"
+# pip install ".[all]"
 ```
+</details>
+
+### Python venv
+
+```bash
+# First confirm a suitable Python is on PATH:
+#   which python           # or `which python3.11`
+#   python --version       # should be >= 3.11, < 3.14
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install poetry
+poetry install                          # (same extras options as above)
+```
+
+<details><summary>Or with pip</summary>
+
+```bash
+pip install .                         # (same extras options as above)
+```
+</details>
+
+### uv
+
+```bash
+uv venv -p 3.11.9 .uvenv
+source .uvenv/bin/activate
+uv pip install poetry
+poetry install                          # (same extras options as above)
+```
+
+<details><summary>Or with uv pip</summary>
+
+```bash
+uv pip install .                      # (same extras options as above)
+```
+</details>
 
 ### Setup
+
 Run `pbx config` to interactively create a configuration file. Edit the generated config to set correct executable paths and environment setup before running jobs.
 
 ## Quick Start
