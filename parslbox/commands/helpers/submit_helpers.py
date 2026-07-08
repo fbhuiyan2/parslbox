@@ -59,7 +59,8 @@ def render_submit_script_panel(submit_file_path, title: str = "Submit Script"):
     from rich.panel import Panel
     from rich.text import Text
 
-    script = Path(submit_file_path).read_text()
+    abs_path = Path(submit_file_path).resolve()
+    script = abs_path.read_text()
     text = Text()
     for line in script.splitlines():
         if 'pbx run' in line:
@@ -69,7 +70,7 @@ def render_submit_script_panel(submit_file_path, title: str = "Submit Script"):
         text.append("\n")
     return Panel(
         text,
-        title=f"[bold cyan]{title}[/bold cyan] [dim]({submit_file_path})[/dim]",
+        title=f"[bold cyan]{title}[/bold cyan] [dim]({abs_path})[/dim]",
         border_style="cyan",
         expand=True,
     )
