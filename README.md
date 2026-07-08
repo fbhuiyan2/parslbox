@@ -149,6 +149,8 @@ pbx qsub -c sophia -N sweep -q gpu --select 4 -T 4h -A myproject -a lammps-kk -t
   --respawn 3
 ```
 
+**New to pbx?** See [Example usage](#example-usage) below — [`job_test/create_test_jobs.py`](job_test/create_test_jobs.py) generates a batch of tiny throwaway jobs so you can exercise the whole pipeline end-to-end in a few minutes without preparing real workloads.
+
 ## Supported Applications
 
 Built-in: **lammps-kk**, **vasp**, **orca**, **python**, **julia**. Custom apps can be registered via `config.yaml`. Full details, per-app notes, status reporting protocol, and custom-app templates: [`docs/apps.md`](docs/apps.md).
@@ -218,25 +220,50 @@ See [`examples/chemgraph_parslbox_example/`](examples/chemgraph_parslbox_example
 
 Full per-command reference with examples lives in [`docs/commands.md`](docs/commands.md).
 
-## Configuration
+## Environment variables
 
-Environment variables:
-- `PBX_DB_PATH` — database file or directory path
-- `PBX_CONFIG_PATH` — config file or directory path
-- `PBX_RUN_DELAY` — seconds to sleep between consecutive job submissions (default: `0.2`). Bump up on systems like Perlmutter where rapid `srun` invocations can overload `slurmctld`.
+pbx reads three **shell** environment variables to locate its config, database, and pace job submissions. These are set in your shell (via `export`) — **not** inside `config.yaml`. `pbx config` prints copy-paste-ready `export` lines at the end of its output when relevant.
 
-Defaults (when env vars are not set):
-- Database: `~/.parslbox/job_database_pbx.db`
-- Config: `~/.parslbox/config.yaml`
-- Runs: `~/.parslbox/runs/<timestamp>/`
+| Variable | Purpose | Default when unset |
+|---|---|---|
+| `PBX_CONFIG_PATH` | Location of `config.yaml` | `~/.parslbox/config.yaml` |
+| `PBX_DB_PATH` | Location of the SQLite job database | `~/.parslbox/job_database_pbx.db` |
+| `PBX_RUN_DELAY` | Seconds to sleep between consecutive job submissions | `0.2` — bump up on systems like Perlmutter where rapid `srun` invocations can overload `slurmctld` |
+
+If you `echo $PBX_DB_PATH` in a fresh shell and get an empty line, that's the intended "not set" state — pbx falls back to the defaults above. Nothing is wrong.
+
+### How to set them
 
 ```bash
-export PBX_DB_PATH=/scratch/mydbs/pbx.db
-export PBX_CONFIG_PATH=/scratch/mycfgs/config.yaml
+# In your current shell (temporary — must re-export in each new shell):
+export PBX_CONFIG_PATH=/scratch/mycfgs                # dir → <dir>/config.yaml
+export PBX_DB_PATH=/scratch/mydbs                     # dir → <dir>/job_database_pbx.db
 export PBX_RUN_DELAY=0.5
 ```
 
-Using separate `PBX_DB_PATH` and/or `PBX_CONFIG_PATH` allows multiple isolated databases and configurations. All three env vars are automatically propagated into the qsub/sbatch submission script.
+For persistence across shells, add the same lines to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.).
+
+### `PBX_DB_PATH` accepts three forms
+
+pbx normalizes the value at read time:
+
+```bash
+export PBX_DB_PATH=$(pwd)                             # current dir  → <cwd>/job_database_pbx.db
+export PBX_DB_PATH=/path/to/project/dir               # any dir      → <dir>/job_database_pbx.db
+export PBX_DB_PATH=/path/to/project/mydb.db           # explicit .db file name (must end in .db)
+```
+
+`PBX_CONFIG_PATH` similarly accepts either a directory (pbx appends `config.yaml`) or a full path to a `.yml`/`.yaml` file.
+
+> **Note:** these are shell env vars — they are not read from, or set inside, `config.yaml`.
+
+### Propagation
+
+All three env vars are automatically forwarded into the `pbx qsub`/`pbx sbatch` submission scripts, so the batch job sees the same config/DB paths as your login shell.
+
+### Run directory
+
+The default run directory (`~/.parslbox/runs/<timestamp>/`) is not env-var-controlled. Override per-run via the `--run-dir /custom/path` CLI flag on `pbx qsub` / `pbx sbatch` / `pbx run`.
 
 ## Resource Manager
 
@@ -267,7 +294,32 @@ Statuses:
 
 Full state-transition table and end-to-end chain walkthrough: [`docs/pbx-run-details.md`](docs/pbx-run-details.md).
 
-## Examples
+## Example usage
+
+### First-time test drive (`job_test/`)
+
+The fastest way to verify a fresh install and see the whole pipeline in action:
+
+```bash
+cd job_test
+python create_test_jobs.py <config_name> --python hello_affinity.py 3 --tag firstrun
+```
+
+This creates 3 tiny Python jobs (using [`hello_affinity.py`](job_test/hello_affinity.py), which just prints per-rank CPU/GPU affinity) under `job_test/tests/python/` and registers them with pbx. Then submit them:
+
+```bash
+pbx ls -t firstrun               # confirm the jobs got registered
+pbx qsub -c <config_name> -N firstrun -q <queue> --select 1 -T 15 -A <project> -t firstrun
+```
+
+`create_test_jobs.py` supports LAMMPS, Python, Julia, and VASP job creation with varied resources and dependencies — see its `--help` for the full menu. Other useful files in [`job_test/`](job_test/):
+
+- `hello_affinity.py` / `hello_affinity_julia.jl` — affinity-printing scripts; drop-in `--input` targets for the `python` / `julia` apps
+- `test_dynamic_jobs/` — self-spawning workload for exercising the `--dynamic` job-discovery flow
+
+### Realistic workflows (`examples/`)
+
+Longer, production-style orchestrations with their own READMEs and analysis scripts:
 
 - [`examples/strong_scaling/`](examples/strong_scaling/) — LAMMPS strong scaling orchestration with automated analysis and publication-ready plots
 - [`examples/weak_scaling/`](examples/weak_scaling/) — LAMMPS weak scaling orchestration with intelligent system replication
