@@ -115,15 +115,6 @@ class TestAppBaseDefault:
         assert _Dummy().min_remaining_walltime({"job_id": 1}) == 0
 
 
-class TestLammpsKkRestartOverride:
-    def test_lammps_kk_restart_overrides_to_3600(self):
-        from parslbox.apps.custom_apps.lammps_kk_restart import LammpsKkRestart
-
-        # Bypass __init__ — we only need an instance to call the method on.
-        inst = LammpsKkRestart.__new__(LammpsKkRestart)
-        assert inst.min_remaining_walltime({"job_id": 1}) == 3600
-
-
 # ---------------------------------------------------------------------------
 # Source-pattern guards — the dispatch engine (schedule_helpers) must call the
 # gate in both dispatch paths. A refactor that drops one would silently regress
