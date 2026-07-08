@@ -26,11 +26,10 @@ def config_setup(
     path: Optional[str] = None,
     systems: Optional[List[str]] = None,
     apps: Optional[List[str]] = None,
-    create_db: Optional[bool] = None,
 ) -> dict:
     """
     Core configuration setup logic - used by both CLI and API.
-    
+
     Args:
         path: Where to create config:
               - None: Use PBX_CONFIG_PATH if set, else default home (CLI prompts if interactive)
@@ -41,18 +40,17 @@ def config_setup(
                  None = error in API mode, prompt in CLI mode
         apps: List of app names to include (empty list = python only)
               None = error in API mode, prompt in CLI mode
-        create_db: Whether to create database
-                   None = error in API mode, prompt in CLI mode
-    
+
     Returns:
         dict: {
             "config_path": str,
-            "db_path": str or None,
-            "env_vars_needed": dict or None,
+            "db_path": str,                 # always populated (either PBX_DB_PATH or home default)
+            "db_from_env": bool,            # True if the DB path came from PBX_DB_PATH
+            "config_env_var": dict or None, # {PBX_CONFIG_PATH: value} when config is non-default
             "systems_selected": List[str],
             "apps_selected": List[str],
         }
-    
+
     Raises:
         FileExistsError: If config file exists (API mode only - CLI prompts)
         ValueError: If invalid systems/apps provided
@@ -66,15 +64,13 @@ def config_setup(
             raise RuntimeError("API mode requires 'systems' parameter")
         if apps is None:
             raise RuntimeError("API mode requires 'apps' parameter")
-        if create_db is None:
-            raise RuntimeError("API mode requires 'create_db' parameter")
-    
+
     # Step 1: Determine config path
     config_path = _determine_config_path(path)
-    
+
     # Step 2: Handle existing config
     _handle_existing_config(config_path)
-    
+
     # Step 3: Select systems
     if systems is None:
         systems = _select_systems()
@@ -84,39 +80,43 @@ def config_setup(
         invalid = [s for s in systems if s not in available]
         if invalid:
             raise ValueError(f"Invalid system(s): {invalid}. Available: {available}")
-    
+
     # Require at least 1 system
     if not systems:
         raise ValueError("At least one system must be selected")
-    
+
     # Step 4: Select apps
     if apps is None:
         apps = _select_apps()
-    
+
     # If no apps selected, default to python only
     if not apps:
         apps = ["python"]
         if _is_interactive:
             typer.secho("\nNo apps selected. Defaulting to 'python' app.", fg=typer.colors.YELLOW)
-    
+
     # Step 5: Generate config
     generator = ConfigGenerator(systems, apps)
     config_content = generator.generate()
-    
+
     # Step 6: Write config file
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(config_content)
-    
-    # Step 7: Handle database
-    db_path = _handle_database(config_path.parent, create_db)
-    
-    # Step 8: Handle environment variables (if not default location)
-    env_vars = _handle_env_vars(config_path.parent)
-    
+
+    # Step 7: Initialize the database. PBX_DB_PATH env var (if set) takes
+    # priority — env always wins. Otherwise, use the home default.
+    db_path, db_from_env = _initialize_database()
+
+    # Step 8: Config env var (only when config is in a non-default location).
+    # PBX_DB_PATH is NOT recommended here — it's user-choice for per-project
+    # isolation and is covered by the always-printed database-instructions block.
+    config_env_var = _config_env_var(config_path.parent)
+
     return {
         "config_path": str(config_path),
-        "db_path": str(db_path) if db_path else None,
-        "env_vars_needed": env_vars,
+        "db_path": str(db_path),
+        "db_from_env": db_from_env,
+        "config_env_var": config_env_var,
         "systems_selected": systems,
         "apps_selected": apps,
     }
@@ -142,36 +142,88 @@ def config(
     """
     global _is_interactive
     _is_interactive = True
-    
+
     try:
         result = config_setup(
             path=path,
             systems=None,  # Prompt in CLI
             apps=None,     # Prompt in CLI
-            create_db=None # Prompt in CLI
         )
-        
-        # Display success message
+
+        # ---- Summary ----
         typer.secho("\n" + "="*70, fg=typer.colors.GREEN)
         typer.secho("✓ Configuration created successfully!", fg=typer.colors.GREEN, bold=True)
         typer.secho("="*70, fg=typer.colors.GREEN)
-        
+
         typer.secho(f"\n  Config file: {result['config_path']}", fg=typer.colors.CYAN)
-        
-        if result.get('db_path'):
-            typer.secho(f"  Database:    {result['db_path']}", fg=typer.colors.CYAN)
-        
+
+        db_annotation = " (from PBX_DB_PATH)" if result.get('db_from_env') else ""
+        typer.secho(f"  Database:    {result['db_path']}{db_annotation}", fg=typer.colors.CYAN)
+
         typer.secho(f"\n  Systems: {', '.join(result['systems_selected'])}", fg=typer.colors.YELLOW)
         typer.secho(f"  Apps:    {', '.join(result['apps_selected'])}", fg=typer.colors.YELLOW)
-        
-        if result.get('env_vars_needed'):
+
+        # ---- Config env var (only when config is non-default) ----
+        if result.get('config_env_var'):
             typer.secho("\n" + "-"*70, fg=typer.colors.YELLOW)
-            typer.secho("⚠  Environment variables required:", fg=typer.colors.YELLOW, bold=True)
+            typer.secho("⚠  Config env var required (custom config path)", fg=typer.colors.YELLOW, bold=True)
             typer.secho("-"*70, fg=typer.colors.YELLOW)
-            for var, val in result['env_vars_needed'].items():
+            typer.secho("\nCopy-paste into THIS shell before running any pbx command:\n", dim=True)
+            for var, val in result['config_env_var'].items():
                 typer.secho(f"  export {var}={val}", fg=typer.colors.MAGENTA)
-            typer.secho("\nAdd these to your shell profile (~/.bashrc, ~/.zshrc, etc.)", dim=True)
-        
+            typer.secho(
+                "\nFor future sessions, re-run the export each time or add it "
+                "to your shell profile\n(~/.bashrc, ~/.zshrc, ...) for persistence.",
+                dim=True,
+            )
+
+        # ---- Database instructions (ALWAYS printed) ----
+        typer.secho("\n" + "-"*70, fg=typer.colors.YELLOW)
+        typer.secho("Database location", fg=typer.colors.YELLOW, bold=True)
+        typer.secho("-"*70, fg=typer.colors.YELLOW)
+        if result.get('db_from_env'):
+            typer.secho(
+                f"\nUsing PBX_DB_PATH override: {result['db_path']}",
+                fg=typer.colors.CYAN,
+            )
+            typer.secho(
+                "\nEnv vars must be re-exported per shell session (or added to your\n"
+                "shell profile for persistence). To switch back to the home default,\n"
+                "run: unset PBX_DB_PATH",
+                dim=True,
+            )
+        else:
+            typer.secho(
+                f"\nDefault DB (no PBX_DB_PATH set): {result['db_path']}",
+                fg=typer.colors.CYAN,
+            )
+            typer.secho(
+                "\nAll jobs from all your workflows land in this shared DB unless you\n"
+                "set PBX_DB_PATH to isolate a project. Three accepted forms:\n",
+                dim=True,
+            )
+            typer.secho(
+                '  export PBX_DB_PATH=$(pwd)                       '
+                '# current dir  → <dir>/job_database_pbx.db',
+                fg=typer.colors.MAGENTA,
+            )
+            typer.secho(
+                '  export PBX_DB_PATH=/path/to/project/dir         '
+                '# any dir      → <dir>/job_database_pbx.db',
+                fg=typer.colors.MAGENTA,
+            )
+            typer.secho(
+                '  export PBX_DB_PATH=/path/to/project/mydb.db     '
+                '# explicit .db file name (must end in .db)',
+                fg=typer.colors.MAGENTA,
+            )
+            typer.secho(
+                "\nLike PBX_CONFIG_PATH, re-export per shell session or add to your\n"
+                "shell profile for persistence.",
+                dim=True,
+            )
+
+        # ---- Next steps ----
         typer.secho("\n" + "-"*70)
         typer.secho("Next steps:", bold=True)
         typer.secho("-"*70)
@@ -179,7 +231,7 @@ def config(
         typer.secho("  2. Run 'pbx add' to add jobs to the database")
         typer.secho("  3. Run 'pbx run' to execute your workflow")
         typer.secho("")
-        
+
     except (FileExistsError, ValueError, RuntimeError) as e:
         typer.secho(f"\n❌ Error: {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
@@ -211,9 +263,16 @@ def _determine_config_path(path: Optional[str]) -> Path:
             # Prompt user
             typer.secho("\nWhere should the config be created?", bold=True)
             typer.echo("  1. Current directory (.)")
-            typer.echo("  2. Home directory (~/.parslbox) [Default]")
+            typer.echo("  2. Home directory (~/.parslbox) [Default, recommended for first-time setup]")
             typer.echo("  3. Custom path")
-            
+            typer.secho(
+                "\nTip: For your first install, pick option 2. It requires no env-var setup\n"
+                "and lets all pbx commands work out of the box. Options 1 and 3 place the\n"
+                "config in a non-default location and require you to `export PBX_CONFIG_PATH`\n"
+                "in every shell where you run pbx.",
+                dim=True,
+            )
+
             choice = typer.prompt("\nChoice", type=int, default=2)
             
             if choice == 1:
@@ -300,52 +359,32 @@ def _prompt_for_backup_name(original_path: Path) -> str:
     return backup_name
 
 
-def _handle_database(db_dir: Path, create_db: Optional[bool]) -> Optional[Path]:
-    """Handle database creation."""
-    db_path = db_dir / "job_database_pbx.db"
-    
-    # Check if database already exists FIRST
-    if db_path.exists():
-        # Database exists - just inform user and use it
-        if _is_interactive:
-            typer.secho(f"✓ Using existing database at: {db_path}", fg=typer.colors.GREEN)
-        return db_path
-    
-    # Database doesn't exist - ask if user wants to create one
-    if create_db is None:
-        if not _is_interactive:
-            raise RuntimeError("create_db cannot be None in API mode")
-        
-        response = typer.prompt(f"\nCreate database in {db_dir}? [Y/n]", default="Y")
-        create_db = response.lower() in ["y", "yes", ""]
-    
-    if not create_db:
-        return None
-    
-    # Create database
+def _initialize_database() -> tuple[Path, bool]:
+    """Initialize the pbx database. Idempotent — no-op if it already exists.
+
+    Env vars always win: if PBX_DB_PATH is set (before `pbx config` runs),
+    use it. Otherwise use the home default (~/.parslbox/job_database_pbx.db).
+
+    Returns:
+        (db_path, from_env) — db_path is where the DB now lives;
+        from_env is True when PBX_DB_PATH was set at invocation time.
+    """
+    from_env = os.getenv("PBX_DB_PATH") is not None
+    db_path = path_utils.get_db_path()   # handles the three PBX_DB_PATH forms
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     database.initialize_database(db_path)
-    
-    if _is_interactive:
-        typer.secho(f"✓ Created database at: {db_path}", fg=typer.colors.GREEN)
-    
-    return db_path
+    return db_path, from_env
 
 
-def _handle_env_vars(config_dir: Path) -> Optional[dict]:
-    """Display env vars if config is not in default location."""
+def _config_env_var(config_dir: Path) -> Optional[dict]:
+    """Return {PBX_CONFIG_PATH: value} when config lives outside the home default,
+    else None. PBX_DB_PATH is not returned here — DB location is a separate
+    user-choice concern surfaced by the always-printed database-instructions block.
+    """
     default_config_dir = Path.home() / ".parslbox"
-    
-    # If using default location, no env vars needed
     if config_dir.resolve() == default_config_dir.resolve():
         return None
-    
-    # Non-default location - need env vars
-    env_vars = {
-        "PBX_CONFIG_PATH": str(config_dir),
-        "PBX_DB_PATH": str(config_dir),
-    }
-    
-    return env_vars
+    return {"PBX_CONFIG_PATH": str(config_dir)}
 
 
 def _select_systems() -> List[str]:
