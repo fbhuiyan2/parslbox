@@ -161,7 +161,7 @@ def add(
     paths: Annotated[
         List[str],
         typer.Argument(
-            help="One or more paths to job directories, or 'all' to add all subdirectories in the current location."
+            help="One or more paths to job directories, 'all' to add all subdirectories of the current location, or 'all:<dir>' for all subdirectories of <dir>."
         ),
     ],
     app: Annotated[

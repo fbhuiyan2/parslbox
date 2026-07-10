@@ -551,6 +551,46 @@ class TestAddCommand:
             finally:
                 os.chdir(original_cwd)
     
+    def test_add_all_with_base_dir(self, temp_db, temp_job_dirs, mock_system_config):
+        """Test adding all subdirectories of an explicit dir with 'all:<dir>'."""
+        runner = CliRunner()
+
+        env_file = temp_job_dirs["temp_dir"] / "test_env.sh"
+        env_file.write_text("#!/bin/bash\necho 'test environment'")
+
+        base = temp_job_dirs["temp_dir"] / "batch"
+        base.mkdir()
+        (base / "run_a").mkdir()
+        (base / "run_b").mkdir()
+
+        with patch('parslbox.commands.add.path_utils.DB_FILE', temp_db), \
+             patch('parslbox.commands.add.get_system_config', return_value=mock_system_config), \
+             patch('parslbox.commands.add.is_app_registered', return_value=True), \
+             patch('parslbox.commands.add.get_app_config', return_value={
+                 'INPUT_REQUIRED': False,
+                 'DFLT_INPUT': None
+             }), \
+             patch('parslbox.commands.helpers.job_info_validator.get_system_config', return_value=mock_system_config), \
+             patch('parslbox.commands.helpers.job_info_validator.is_app_registered', return_value=True), \
+             patch('parslbox.commands.helpers.job_info_validator.get_app_config', return_value={
+                 'INPUT_REQUIRED': False,
+                 'DFLT_INPUT': None
+             }), \
+             patch('typer.confirm', return_value=True):
+
+            result = runner.invoke(add_app, [
+                f"all:{base}",
+                "--config", "polaris",
+                "--app", "python",
+                "--envfile", str(env_file)
+            ])
+
+            assert result.exit_code == 0
+            assert "Successfully added 2 job(s)" in result.stdout
+
+            jobs = database.get_jobs(temp_db)
+            assert len(jobs) == 2
+
     def test_input_file_handling(self, temp_db, temp_job_dirs, mock_system_config):
         """Test input file handling for different app configurations."""
         runner = CliRunner()

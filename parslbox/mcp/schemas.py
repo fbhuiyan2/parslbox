@@ -8,7 +8,11 @@ class AddJobSchema(BaseModel):
     """Schema for adding job(s)"""
 
     paths: List[str] = Field(
-        description="One or more paths to job directories, or 'all' to add all subdirectories in the current location.",
+        description=(
+            "One or more paths to job directories. Use 'all:<dir>' to add every subdirectory of <dir> "
+            "(pass an absolute <dir>). Bare 'all' resolves against the MCP server's working directory, "
+            "which is usually not the caller's location, so prefer 'all:<dir>'."
+        ),
     )
     app: str = Field(
         description="The application type. Built-in options are 'lammps-kk', 'vasp', 'python' and 'julia'. Custom apps may also be available.",

@@ -155,6 +155,28 @@ class TestAddJobs:
             assert job_id is not None
             assert isinstance(job_id, int)
 
+    def test_add_jobs_all_with_base_dir(self, pbx, tmp_path):
+        """'all:<dir>' adds every subdirectory of the given dir (MCP-safe form)."""
+        env_file = tmp_path / "test.sh"
+        env_file.write_text("#!/bin/bash\necho 'test environment'")
+
+        base = tmp_path / "jobs"
+        base.mkdir()
+        for i in range(3):
+            (base / f"job_{i}").mkdir()
+
+        job_ids, failures, msg_log = pbx.add_jobs(
+            paths=[f"all:{base}"], app="python", config="polaris", input_file="script.py", env_file=str(env_file)
+        )
+
+        assert len(job_ids) == 3
+        assert len(failures) == 0
+
+    def test_add_jobs_all_base_dir_missing(self, pbx):
+        """'all:<dir>' on a nonexistent dir raises ValidationError."""
+        with pytest.raises(ValidationError, match="does not exist or is not a directory"):
+            pbx.add_jobs(paths=["all:/nonexistent/base"], app="python", config="polaris", env_file="pass", input_file="script.py")
+
     def test_add_jobs_partial_failure(self, pbx, tmp_path):
         """Test adding jobs when some fail."""
         # Create environment file
