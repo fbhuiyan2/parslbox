@@ -5,7 +5,7 @@ description: Help with ParslBox `pbx` shell commands — adding/listing/filterin
 
 # ParslBox CLI (`pbx`)
 
-Authoritative reference: [docs/commands.md](../../docs/commands.md). Read it for any non-trivial flag, edge case, or output format question. This skill is a fast index.
+Authoritative reference: [docs/commands.md](docs/commands.md). Read it for any non-trivial flag, edge case, or output format question. This skill is a fast index.
 
 ## Commands at a glance
 
@@ -32,12 +32,12 @@ Use `--help` on any command to see flags.
 - **Bulk add**: `pbx add all` registers every subdirectory of the cwd as a job; `pbx add all:<dir>` uses subdirectories of `<dir>`. All options in the call (app, config, resources, tag, env file) apply to every job.
 - **Tags**: `--tag` (singular) for filtering on `add`/`update`/`filter`/`ls`; `--tags` (plural, comma-separated) on `qsub`/`sbatch`/`run`. `pbx info --tag` is a *display* flag (show only the tag column), not a filter. `*` glob for partial matching (e.g., `--tag 'stage*'` matches `stage1`, `stage-prod`). Exclusion via `--exclude-tag` / `--xtag` is `pbx filter`-only.
 - **Status values**: `Ready`, `Submitted`, `Running`, `Done`, `Failed`, `Killed`, `Restart`, `Resubmitted`, `Warning` (case-insensitive). `Submitted`/`Resubmitted` are the *claimed* states (a run atomically flipped `Ready`→`Submitted` / `Restart`→`Resubmitted` and stamped its batch id) — normally transient; you set jobs to `Ready`/`Restart`, not to these.
-- **Self-respawn chains**: `pbx qsub --respawn N` / `pbx sbatch --respawn N` enables walltime-driven auto-resubmission. `N` is the number of remaining auto-resubmissions (decremented per link; `0` = chain ends after this run). See [docs/pbx-run-details.md](../../docs/pbx-run-details.md).
+- **Self-respawn chains**: `pbx qsub --respawn N` / `pbx sbatch --respawn N` enables walltime-driven auto-resubmission. `N` is the number of remaining auto-resubmissions (decremented per link; `0` = chain ends after this run). See [docs/pbx-run-details.md](docs/pbx-run-details.md).
 - **Dynamic discovery**: `--dynamic` (default) re-queries the DB for runnable jobs on every dispatch pass, so jobs added or flipped to `Ready`/`Restart` mid-run are picked up automatically; it also lets multiple `pbx run` allocations share one DB (each atomically claims what it dispatches). `--static` claims the runnable set once up front and does not re-query.
 
 ## App names
 
-`lammps-kk`, `vasp`, `orca`, `python`, `julia`. Custom apps register in `config.yaml`. See [docs/apps.md](../../docs/apps.md).
+`lammps-kk`, `vasp`, `orca`, `python`, `julia`. Custom apps register in `config.yaml`. See [docs/apps.md](docs/apps.md).
 
 ## Config & DB paths
 
@@ -47,4 +47,4 @@ Use `--help` on any command to see flags.
 
 ## When asked something specific
 
-Read [docs/commands.md](../../docs/commands.md) for the exact command. For app-specific behavior (e.g., LAMMPS rank policy, Python status reporting) read [docs/apps.md](../../docs/apps.md). For `pbx run` runtime details / restart chain semantics read [docs/pbx-run-details.md](../../docs/pbx-run-details.md).
+Read [docs/commands.md](docs/commands.md) for the exact command. For app-specific behavior (e.g., LAMMPS rank policy, Python status reporting) read [docs/apps.md](docs/apps.md). For `pbx run` runtime details / restart chain semantics read [docs/pbx-run-details.md](docs/pbx-run-details.md).

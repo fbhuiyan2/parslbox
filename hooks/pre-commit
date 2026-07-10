@@ -1,0 +1,8 @@
+#!/bin/sh
+# Keep each skill's docs/ copies in sync with canonical docs/ before committing.
+# Activate once per clone with:  git config core.hooksPath hooks
+set -eu
+
+repo_root=$(git rev-parse --show-toplevel)
+"$repo_root/scripts/sync-skill-docs.sh"
+git add "$repo_root"/skills/*/docs/
