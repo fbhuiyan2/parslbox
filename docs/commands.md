@@ -58,8 +58,9 @@ Notes:
 pbx add /path/to/sim --app lammps --config polaris --ngpus 2 --tag run1
 pbx add /path/to/sim -a lammps -c polaris -g 2 -t run1
 
-# All subdirectories as VASP jobs
+# All subdirectories as VASP jobs — cwd, or an explicit base dir
 pbx add all -a vasp -c polaris -t ManyVaspCalc
+pbx add all:/abs/path/to/runs -a vasp -c polaris -t ManyVaspCalc
 
 # Python job with args and env file
 pbx add /path/to/analysis -a python -c polaris -i plot.py \

@@ -29,6 +29,7 @@ Use `--help` on any command to see flags.
 ## Conventions worth knowing
 
 - **Job IDs accept ranges** (space-separated inside quotes): `pbx update "1-5 8 14-20" --status Restart`. Same for `rm`, `info`, and `add --parents`.
+- **Bulk add**: `pbx add all` registers every subdirectory of the cwd as a job; `pbx add all:<dir>` uses subdirectories of `<dir>`. All options in the call (app, config, resources, tag, env file) apply to every job.
 - **Tags**: `--tag` (singular) for filtering on `add`/`update`/`filter`/`ls`; `--tags` (plural, comma-separated) on `qsub`/`sbatch`/`run`. `pbx info --tag` is a *display* flag (show only the tag column), not a filter. `*` glob for partial matching (e.g., `--tag 'stage*'` matches `stage1`, `stage-prod`). Exclusion via `--exclude-tag` / `--xtag` is `pbx filter`-only.
 - **Status values**: `Ready`, `Submitted`, `Running`, `Done`, `Failed`, `Killed`, `Restart`, `Resubmitted`, `Warning` (case-insensitive). `Submitted`/`Resubmitted` are the *claimed* states (a run atomically flipped `Ready`→`Submitted` / `Restart`→`Resubmitted` and stamped its batch id) — normally transient; you set jobs to `Ready`/`Restart`, not to these.
 - **Self-respawn chains**: `pbx qsub --respawn N` / `pbx sbatch --respawn N` enables walltime-driven auto-resubmission. `N` is the number of remaining auto-resubmissions (decremented per link; `0` = chain ends after this run). See [docs/pbx-run-details.md](../../docs/pbx-run-details.md).
