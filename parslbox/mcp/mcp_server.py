@@ -415,12 +415,17 @@ def get_jobs(params: GetJobsByIdsSchema) -> str:
 app = mcp.streamable_http_app()
 
 if __name__ == "__main__":
-    import sys
+    import argparse
 
-    if "--stdio" in sys.argv:
-        # stdio mode: Claude Code launches and manages the process
+    parser = argparse.ArgumentParser(description="ParslBox MCP server")
+    parser.add_argument("--stdio", action="store_true", help="Run in stdio mode (the harness launches and manages the process)")
+    parser.add_argument("--port", type=int, default=9795, help="Port for HTTP mode (default: 9795)")
+    args = parser.parse_args()
+
+    if args.stdio:
+        # stdio mode: the harness launches and manages the process
         mcp.run(transport="stdio")
     else:
         # HTTP mode: run as a standalone server
         import uvicorn
-        uvicorn.run(app, host="127.0.0.1", port=9795)
+        uvicorn.run(app, host="127.0.0.1", port=args.port)

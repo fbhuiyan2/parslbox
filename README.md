@@ -196,25 +196,11 @@ Exceptions: `ParslBoxError`, `ValidationError`, `JobNotFoundError`
 
 Full per-method reference with examples: [`docs/api-details.md`](docs/api-details.md).
 
-## MCP Server
+## Agentic usage
 
-ParslBox includes an MCP server for AI-agent integration. Install with `pip install ".[agentic]"` and start:
+ParslBox ships an **MCP server** and two **agent skills** (`parslbox-cli`, `parslbox-api`) that drop into any agentic harness — [Claude Code](https://claude.com/claude-code), [OpenCode](https://opencode.ai), or anything that speaks MCP. The MCP server exposes job add/submit/query/cancel as callable tools; the skills teach the agent the `pbx` CLI and the Python API. Install the MCP dependencies with `pip install ".[agentic]"`.
 
-```bash
-# HTTP mode (standalone server on port 9795)
-python -m parslbox.mcp.mcp_server
-
-# stdio mode (for Claude Code integration)
-python -m parslbox.mcp.mcp_server --stdio
-```
-
-Exposed tools: `add_jobs`, `submit_pbs_job`, `submit_slurm_job`, `cancel_pbs_job`, `cancel_slurm_job`, `remove_job`, `update_job`, `filter_jobs`, `list_jobs`, `get_job`, `get_jobs`.
-
-### Claude Code Integration
-
-The project ships a [`.mcp.json`](.mcp.json) for automatic discovery — Claude Code launched from the repo directory will offer to connect. For global access, copy that file to `~/.claude/.mcp.json` and edit the two `/path/to/...` placeholders.
-
-See [`examples/chemgraph_parslbox_example/`](examples/chemgraph_parslbox_example/) for an HTTP client example.
+See [`docs/agentic_usage.md`](docs/agentic_usage.md) for full setup — adding the MCP server and skills to Claude Code and OpenCode — plus best practices for driving parslbox from an agent.
 
 ## Commands Overview
 
