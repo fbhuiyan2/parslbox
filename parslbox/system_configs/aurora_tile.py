@@ -4,7 +4,7 @@ from typing import Optional
 from parsl.config import Config
 from parsl.executors import HighThroughputExecutor
 from parsl.providers import LocalProvider
-from parsl.launchers import SimpleLauncher
+from parsl.launchers import MpiExecLauncher
 from parslbox.system_configs.base_sysconf import SystemConfig
 
 
@@ -66,33 +66,37 @@ class AuroraTileConfig(SystemConfig):
         """
         Generates a Parsl configuration for the ALCF Aurora supercomputer (tile mode).
 
-        This config is designed for multi-node execution via a PBS batch job.
-        It uses the SimpleLauncher to place workers according to the tile-based
-        architecture, with one worker per tile for maximum granularity.
+        This config is designed for multi-node execution via a PBS batch job. It uses
+        the MpiExecLauncher to place one Parsl manager per compute node (via `mpiexec`
+        with `--ppn 1`), and each manager spawns its workers locally on that node. This
+        distributes workers across the allocation instead of concentrating them on the
+        head node, so it scales past the head-node RAM ceiling that a SimpleLauncher
+        hits above ~10k workers.
 
         Args:
             run_dir (Path): The path for Parsl's run directory.
             retries (int): The number of retries for failed Parsl apps.
             max_workers (Optional[int]): Optional override for total workers across all nodes.
-                                        If None, uses MAX_WORKERS_PER_NODE * nodes (default behavior).
-                                        If provided, will be capped at MAX_WORKERS_PER_NODE * nodes.
+                                        If None, uses MAX_WORKERS_PER_NODE per node (default behavior).
+                                        If provided, the per-node worker count is capped at
+                                        MAX_WORKERS_PER_NODE.
 
         Returns:
             Config: A Parsl configuration object.
         """
-        nodes, total_tiles = self.detect_resources()
-        
-        # Use provided max_workers or fall back to default calculation
-        # Cap at system maximum to prevent oversubscription
-        if max_workers is not None:
-            max_workers_per_node = min(max_workers, self.MAX_WORKERS_PER_NODE * nodes)
-        else:
-            max_workers_per_node = self.MAX_WORKERS_PER_NODE * nodes    # Because LocalProvider does not launch workers on compute nodes.
-                                                                        # It only launches workers on the first node where the Parsl manager is running.
+        nodes, _ = self.detect_resources()
 
-        # Calculate how many physical cores each worker (mapped to a GPU tile) gets
-        cores_per_worker = self.CORES_PER_NODE / max_workers_per_node      # cores to be assigned to each worker. Oversubscription is possible
-                                                                            # by setting cores_per_worker < 1.0.
+        # Per-node worker count (NOT x nodes) — mpiexec launches one manager
+        # per compute node, and each manager spawns up to this many workers
+        # locally on its node.
+        if max_workers is not None:
+            max_workers_per_node = min(max_workers // nodes, self.MAX_WORKERS_PER_NODE)
+        else:
+            max_workers_per_node = self.MAX_WORKERS_PER_NODE
+
+        # Cores assigned to each worker (mapped to a GPU tile). Oversubscription is
+        # possible by setting cores_per_worker < 1.0.
+        cores_per_worker = self.CORES_PER_NODE / max(1, max_workers_per_node)
 
         return Config(
             executors=[
@@ -101,19 +105,26 @@ class AuroraTileConfig(SystemConfig):
                     heartbeat_period=120,
                     heartbeat_threshold=300,
                     worker_debug=True,
-                    # Tell the executor how many total tiles are available
-                    available_accelerators=0, #total_tiles,
-                    # Use the configurable max workers per node (12 for Aurora tiles)
+                    available_accelerators=0,
                     max_workers_per_node=max_workers_per_node,
-                    # Assign a balanced number of cores to each worker
                     cores_per_worker=cores_per_worker,
-                    # Use the configurable CPU affinity for Parsl workers
                     #cpu_affinity=self.WORKER_CPU_AFFINITY,
                     prefetch_capacity=0,  # Recommended for GPU workloads
                     provider=LocalProvider(
                         init_blocks=1,
                         max_blocks=1,
-                        launcher=SimpleLauncher(),
+                        min_blocks=1,
+                        nodes_per_block=nodes,
+                        # ALCF-recommended args (Aurora docs):
+                        #   bind_cmd="--cpu-bind" — MPICH/PALS syntax (default
+                        #     "--bind-to" is OpenMPI-only and is rejected by PALS)
+                        #   overrides="--ppn 1" — exactly one manager rank per
+                        #     compute node; manager then spawns the
+                        #     max_workers_per_node workers locally
+                        launcher=MpiExecLauncher(
+                            bind_cmd="--cpu-bind",
+                            overrides="--ppn 1",
+                        ),
                     ),
                 )
             ],

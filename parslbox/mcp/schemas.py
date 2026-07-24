@@ -18,7 +18,7 @@ class AddJobSchema(BaseModel):
         description="The application type. Built-in options are 'lammps-kk', 'vasp', 'python' and 'julia'. Custom apps may also be available.",
     )
     config: str = Field(
-        description="The name of the configuration to use. Options are 'crux', 'polaris', 'sophia', 'aurora-gpu' and 'aurora-tile'",
+        description="The name of the configuration to use. Options are 'polaris', 'sophia', 'crux', 'aurora-tile', 'aurora-gpu', 'lcrc-swing', 'lcrc-improv', 'pinnacles-cenvalarc', 'perlmutter-gpu', 'perlmutter-cpu' and 'perlmutter-gpu-srun'",
     )
     tag: Optional[str] = Field(
         default=None,
@@ -156,7 +156,7 @@ class QSubSchema(BaseModel):
     """Schema for generating and submitting a PBS job via ParslBox."""
 
     config: str = Field(
-        description="The name of the configuration to use. Options are 'crux', 'polaris', 'sophia', 'aurora-gpu' and 'aurora-tile'",
+        description="The name of the configuration to use. Options are 'polaris', 'sophia', 'crux', 'aurora-tile', 'aurora-gpu', 'lcrc-swing', 'lcrc-improv', 'pinnacles-cenvalarc', 'perlmutter-gpu', 'perlmutter-cpu' and 'perlmutter-gpu-srun'",
     )
 
     job_name: str = Field(

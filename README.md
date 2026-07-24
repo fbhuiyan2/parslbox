@@ -169,12 +169,11 @@ Built-in: **lammps-kk**, **vasp**, **orca**, **python**, **julia**. Custom apps 
 | **pinnacles-cenvalarc** | SLURM | 0 or 2 (auto-detected) | NVIDIA L40S / H200 NVL | 64 | srun |
 | **perlmutter-gpu** | SLURM | 4 | NVIDIA A100 | 128 | srun |
 | **perlmutter-cpu** | SLURM | 0 (CPU-only) | — | 128 | srun |
-| **aurora-tile-mpi** | PBS | 12 (6x2 tiles) | Intel Max 1550 | 208 | MPICH |
 | **perlmutter-gpu-srun** | SLURM | 4 | NVIDIA A100 | 128 | srun |
 
 Each system defines its own MPI defaults, scheduler templates, and resource detection methods. New systems can be added by creating a config class inheriting from `BaseSystemConfig`.
 
-**Launcher variants** (`*-mpi` / `*-srun`): hardware-identical to their base configs (`aurora-tile`, `perlmutter-gpu`) but use `MpiExecLauncher` / `SrunLauncher` instead of `SimpleLauncher`. This places one Parsl manager per compute node (workers distributed across nodes) rather than concentrating all workers on the head node. Use for runs above ~10k workers, where head-node RAM would otherwise be the scaling ceiling. The base configs remain the default and are recommended for smaller runs.
+**Launcher placement:** most configs use `SimpleLauncher`, which concentrates all workers on the head node. For very large runs (above ~10k workers) head-node RAM becomes the scaling ceiling, so some configs instead place one Parsl manager per compute node (workers distributed across nodes): `perlmutter-gpu-srun` is a `SrunLauncher` variant of `perlmutter-gpu` for this purpose, and `aurora-tile` uses `MpiExecLauncher` per-node placement by default.
 
 ## Programmatic API (Python)
 

@@ -40,11 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Restructured shutdown logic** in `parslbox/commands/helpers/run_cmd_helpers.py` — Cleaner separation between walltime-kill, user-cancel, and graceful-exit paths; better integration with `JobTracker` to mark active jobs correctly on termination
 - **Elapsed-time logging** — `pbx run` now logs total elapsed time on exit
 
-#### New System Configs
-- **`aurora-tile-mpi`** (`parslbox/system_configs/aurora_tile_mpi.py`) — Aurora tile variant using MPI backend
-- **`lcrc-swing-mpi`** (`parslbox/system_configs/lcrc_swing_mpi.py`) — LCRC Swing variant using MPI backend
-- **`perlmutter-gpu-srun`** (`parslbox/system_configs/perlmutter_gpu_srun.py`) — Perlmutter GPU variant using srun backend
-- All three registered in `parslbox/system_configs/loader.py`
+#### System Configs
+- **`aurora-tile` now uses `MpiExecLauncher`** — places one Parsl manager per compute node (workers distributed across the allocation) instead of the previous `SimpleLauncher`, so it scales past the head-node RAM ceiling (~10k workers)
+- **`perlmutter-gpu-srun`** (`parslbox/system_configs/perlmutter_gpu_srun.py`) — Perlmutter GPU variant using the `SrunLauncher` for the same per-node placement; registered in `parslbox/system_configs/loader.py`
 
 #### Add Command — Range Syntax for Parents
 - **`pbx add --parent` accepts ranges** — e.g., `--parent 1-5,8,12-14`, matching the range syntax already supported by `pbx update`/`rm`/`info`
@@ -107,8 +105,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `parslbox/commands/helpers/hook_dispatch.py`
 - `parslbox/apps/_hook_runner.py`
 - `parslbox/utils/tag_match.py`
-- `parslbox/system_configs/aurora_tile_mpi.py`
-- `parslbox/system_configs/lcrc_swing_mpi.py`
 - `parslbox/system_configs/perlmutter_gpu_srun.py`
 - `docs/api-details.md`
 - `docs/apps.md`
@@ -146,7 +142,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `parslbox/database/database.py` — supporting tag-match query changes
 - `parslbox/utils/pbx_config_template.py` — `PBX_RUN_DELAY` and related entries
 - `parslbox/system_configs/perlmutter_cpu.py`, `perlmutter_gpu.py`, `pinnacles_cenvalarc.py` — worker-count and CPU-per-node corrections
-- `parslbox/system_configs/loader.py` — registers `aurora-tile-mpi`, `lcrc-swing-mpi`, `perlmutter-gpu-srun`
+- `parslbox/system_configs/aurora_tile.py` — switched to `MpiExecLauncher` (per-node manager placement)
+- `parslbox/system_configs/loader.py` — registers `perlmutter-gpu-srun`
 - `pyproject.toml`, `poetry.lock` — Parsl 2027
 - `README.md` — slimmed, links to new `docs/` pages
 - `examples/strong_scaling/lammps_strong_scale_orchestrator.py`, `examples/weak_scaling/lammps_weak_scale_orchestrator.py` — CPU-only correction
