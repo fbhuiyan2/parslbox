@@ -22,10 +22,14 @@ class AppBase(ABC):
     # App configuration (must be defined in subclasses)
     INPUT_REQUIRED: bool
     DFLT_INPUT: str | None
-    USES_MPI: bool = True  # Whether this app uses MPI for parallelization.
-                           # Set to False for non-MPI apps (e.g., Python scripts).
-                           # Non-MPI apps get a resource launcher prepended to
-                           # constrain execution to the assigned node/resources.
+
+    # When True, preprocess() and postprocess() are dispatched on the assigned
+    # compute node via a subprocess wrapped with the resource launcher, instead
+    # of running in-process in the pbx run orchestrator on the head node.
+    # Default False preserves prior behavior. Does NOT affect restart().
+    # Apps opting in MUST have a side-effect-free __init__ (the dispatcher
+    # re-instantiates the app on the compute node via get_app_instance()).
+    RUN_HOOKS_ON_COMPUTE: bool = False
 
     @classmethod
     def get_default_ranks_per_node(cls, ngpus, num_nodes, system_config):
@@ -87,10 +91,10 @@ class AppBase(ABC):
     def preprocess(self, job_id: int, job_path: Path, db_path: Path, app_config: dict, config_name: str):
         """
         Preprocessing before job execution.
-        
+
         This method is called before the main parsl_app execution.
         Default implementation does nothing.
-        
+
         Args:
             job_id (int): The job ID
             job_path (Path): Path to the job directory
@@ -99,7 +103,64 @@ class AppBase(ABC):
             config_name (str): Name of the system configuration (e.g., 'polaris')
         """
         pass
-    
+
+    def restart(self, job_dict: dict) -> dict | None:
+        """
+        Restart hook called at `pbx run` startup for every job in `Restart`
+        status, before the run loop touches it. Fires whether the Restart
+        status came from the previous link's walltime kill (under
+        `--respawn`) or was set manually by the user via
+        `pbx update --status Restart`.
+
+        Three scenes, encoded by whether the subclass overrides this method:
+
+        - Scene A (real restart): override to return a dict of changed job fields
+          (e.g., {"in_file": "in.restart"}). Orchestrator patches those fields in
+          the DB, flips status to `Ready`, and re-runs with `preprocess` skipped.
+        - Scene B (re-run as-is): override to return None or {}. Orchestrator flips
+          status to `Ready` without patches; re-runs unchanged, `preprocess` skipped.
+        - Scene C (no restart capability): do NOT override. Base class raises
+          NotImplementedError; orchestrator marks the job `Failed` with reason
+          "app does not support restart".
+
+        Args:
+            job_dict (dict): Full job row from the DB.
+
+        Returns:
+            dict | None: Partial mapping of DB column names to new values, or
+            None/{} to re-run as-is.
+
+        Raises:
+            NotImplementedError: Base default; signals Scene C.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support restart. "
+            f"Override restart() to enable Restart-status job handling for this app."
+        )
+
+    def min_remaining_walltime(self, job_dict: dict) -> int:
+        """Minimum remaining batch walltime (seconds) required to dispatch a
+        fresh job for this app. When `remaining < this value`, the orchestrator
+        skips the job at every dispatch site (initial, backlog, dynamic-discovery);
+        the job stays in DB as Ready/Restart and is picked up by the next pbx run.
+
+        Default 0 = no gate (preserves existing behavior). Restart-continuations
+        (jobs already in `restarting_job_ids`) are exempt regardless of this
+        value — they have checkpoint state and brief runtime still advances them.
+
+        Override for apps where a fresh job needs meaningful runtime to be useful
+        (long MD runs, etc.).
+
+        Args:
+            job_dict (dict): Full job row from the DB. Available so subclasses
+                can scale the floor by input size, GPU count, etc. if desired.
+
+        Returns:
+            int: Minimum remaining walltime in seconds. 0 (default) disables
+            the gate for this app.
+        """
+        return 0
+
     def parsl_app(self, job_id: int, job_path: Path, db_path: Path, assignment, mpi_commands: dict,
                   app_config: dict, config_name: str, in_file: str, mpi_opts: str, env_file: str, 
                   stdout: str, stderr: str):
@@ -206,13 +267,6 @@ class AppBase(ABC):
             app_config=app_config,
             mpi_commands=mpi_commands
         )
-
-        # For non-MPI apps, prepend resource launcher to constrain
-        # execution to the resources assigned by the resource manager
-        if not self.USES_MPI:
-            resource_launcher = mpi_commands.get('PBX_RESOURCE_LAUNCHER', '')
-            if resource_launcher:
-                command = f"{resource_launcher} {command}"
 
         # App-specific setup (e.g., OMP_NUM_THREADS)
         setup_frm_app = self.get_additional_setup(

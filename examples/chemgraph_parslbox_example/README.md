@@ -25,12 +25,15 @@ Navigate to this directory, activate the environment and start the MCP server.
 ```bash
 # Activate ParslBox environment
 conda activate parslbox_env # ParslBox environment
-pip install mcp # Run this to install MCP (not yet included in ParslBox pyproject.toml)
+pip install ".[agentic]" # Installs the MCP dependencies
 
 # Start MCP server
 python -m parslbox.mcp.mcp_server
+
+# If port 9795 is already in use, pick another:
+# python -m parslbox.mcp.mcp_server --port 8080
 ```
-The server will run on port 9005 by default.
+The server runs on port 9795 by default (override with `--port`). Forward whichever port you chose.
 
 ### 4. Launch ChemGraph
 In another terminal session, ssh to the same compute node that the ParslBox MCP is running

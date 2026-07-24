@@ -232,6 +232,169 @@ def get_jobs_by_ids(db_path: Path, job_ids: List[int]) -> List[Dict[str, Any]]:
         results = cur.execute(query, job_ids).fetchall()
         return [dict(row) for row in results]
 
+def get_jobs_by_sched_id(
+    db_path: Path,
+    sched_job_id: str,
+    statuses: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """Fetch jobs whose `sched_job_id` matches, optionally filtered by status.
+
+    Used by `pbx qdel` / `pbx scancel` reconciliation: after killing a batch
+    job, any jobs the orchestrator's signal handler didn't manage to flip to
+    `Killed` (Step 2 of perform_shutdown) are still sitting in `Running` or
+    `Submitted`. They are uniquely identifiable by their `sched_job_id`
+    (overwritten on every claim, so only stuck jobs from the killed batch
+    still carry its id in a non-terminal status).
+    """
+    if not sched_job_id:
+        return []
+    with get_configured_connection(db_path) as con:
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        if statuses:
+            placeholders = ','.join('?' for _ in statuses)
+            query = (
+                f"SELECT * FROM jobs WHERE sched_job_id = ? "
+                f"AND status IN ({placeholders}) ORDER BY job_id ASC"
+            )
+            params = [sched_job_id, *statuses]
+        else:
+            query = "SELECT * FROM jobs WHERE sched_job_id = ? ORDER BY job_id ASC"
+            params = [sched_job_id]
+        results = cur.execute(query, params).fetchall()
+        return [dict(row) for row in results]
+
+
+def get_runnable_jobs(
+    db_path: Path,
+    apps: Optional[List[str]] = None,
+    tags: Optional[List[str]] = None,
+    max_nodes: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Fetch runnable (`Ready`/`Restart`) jobs, the candidate set for dispatch.
+
+    Optional filters: `apps` (exact match), `tags` (each may be a `*`-glob),
+    and `max_nodes` (node-level fit ceiling — drops jobs too big for current
+    free capacity). Ordered Restart-first (don't waste already-consumed
+    walltime), then smallest first (cheap packing order).
+    """
+    conditions = ["status IN ('Ready', 'Restart')"]
+    params: List[Any] = []
+
+    if apps:
+        placeholders = ','.join('?' for _ in apps)
+        conditions.append(f"app IN ({placeholders})")
+        params.extend(apps)
+
+    if tags:
+        from parslbox.utils.tag_match import has_glob, to_sql_like
+        tag_clauses = []
+        for t in tags:
+            if has_glob(t):
+                tag_clauses.append("tag LIKE ? ESCAPE '\\'")
+                params.append(to_sql_like(t))
+            else:
+                tag_clauses.append("tag = ?")
+                params.append(t)
+        conditions.append("(" + " OR ".join(tag_clauses) + ")")
+
+    if max_nodes is not None:
+        conditions.append("num_nodes <= ?")
+        params.append(max_nodes)
+
+    query = (
+        "SELECT * FROM jobs WHERE " + " AND ".join(conditions)
+        + " ORDER BY (status = 'Restart') DESC, num_nodes ASC, job_id ASC"
+    )
+    with get_configured_connection(db_path) as con:
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        results = cur.execute(query, params).fetchall()
+        return [dict(row) for row in results]
+
+
+def claim_jobs(
+    db_path: Path,
+    ready_ids: List[int],
+    restart_ids: List[int],
+    owner: str,
+) -> List[int]:
+    """Atomically claim runnable jobs for one orchestrator.
+
+    Flips `Ready`->`Submitted` and `Restart`->`Resubmitted` for the given ids,
+    guarded on the current status so a row a competing run already claimed is
+    skipped, stamping `sched_job_id=owner`. Returns the ids actually won by
+    this call (readback scoped to the requested ids + owner, so prior-loop
+    claims by the same run are never re-reported).
+
+    The two UPDATEs plus the readback run in a single transaction; SQLite
+    serializes writers, so the claim is atomic against concurrent runs.
+    """
+    all_ids = list(ready_ids) + list(restart_ids)
+    if not all_ids:
+        return []
+
+    with get_configured_connection(db_path) as con:
+        cur = con.cursor()
+        if ready_ids:
+            placeholders = ','.join('?' for _ in ready_ids)
+            cur.execute(
+                f"UPDATE jobs SET status = 'Submitted', sched_job_id = ? "
+                f"WHERE job_id IN ({placeholders}) AND status = 'Ready'",
+                [owner, *ready_ids],
+            )
+        if restart_ids:
+            placeholders = ','.join('?' for _ in restart_ids)
+            cur.execute(
+                f"UPDATE jobs SET status = 'Resubmitted', sched_job_id = ? "
+                f"WHERE job_id IN ({placeholders}) AND status = 'Restart'",
+                [owner, *restart_ids],
+            )
+        placeholders = ','.join('?' for _ in all_ids)
+        rows = cur.execute(
+            f"SELECT job_id FROM jobs WHERE job_id IN ({placeholders}) "
+            f"AND sched_job_id = ? AND status IN ('Submitted', 'Resubmitted')",
+            [*all_ids, owner],
+        ).fetchall()
+        return [row[0] for row in rows]
+
+
+def revert_claims(
+    db_path: Path,
+    job_ids: List[int],
+    owner: Optional[str] = None,
+) -> int:
+    """Return claimed-but-not-started jobs to the runnable pool.
+
+    `Submitted`->`Ready`, `Resubmitted`->`Restart`, clearing `sched_job_id`.
+    When `owner` is given, only rows still owned by that run are reverted
+    (concurrency-safe — never touches another run's jobs). Returns the number
+    of rows reverted.
+    """
+    if not job_ids:
+        return 0
+
+    placeholders = ','.join('?' for _ in job_ids)
+    owner_clause = " AND sched_job_id = ?" if owner else ""
+
+    with get_configured_connection(db_path) as con:
+        cur = con.cursor()
+        params = [*job_ids] + ([owner] if owner else [])
+        cur.execute(
+            f"UPDATE jobs SET status = 'Ready', sched_job_id = NULL "
+            f"WHERE job_id IN ({placeholders}) AND status = 'Submitted'{owner_clause}",
+            params,
+        )
+        reverted = cur.rowcount
+        cur.execute(
+            f"UPDATE jobs SET status = 'Restart', sched_job_id = NULL "
+            f"WHERE job_id IN ({placeholders}) AND status = 'Resubmitted'{owner_clause}",
+            params,
+        )
+        reverted += cur.rowcount
+        return reverted
+
+
 def parse_existing_parents(parents_str: Optional[str]) -> List[int]:
     """
     Parse existing parents from JSON string to list of integers.

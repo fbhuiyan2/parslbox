@@ -476,6 +476,13 @@ class ResourceAssignment:
 
         Returns:
             Dictionary of environment variable name -> value
+
+        NOTE: When adding new GPU-visibility env vars (e.g.,
+        HIP_VISIBLE_DEVICES / ROCR_VISIBLE_DEVICES for AMD ROCm), also
+        update parslbox/commands/helpers/hook_dispatch.py — its `unset`
+        line clears these vars before exporting fresh values so the
+        orchestrator's allocation-wide env can't leak into RUN_HOOKS_ON_COMPUTE
+        subprocesses. The two lists must stay in sync.
         """
         env_vars = {}
 

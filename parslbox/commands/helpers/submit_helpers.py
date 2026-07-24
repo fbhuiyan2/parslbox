@@ -52,14 +52,15 @@ def count_matching_runnable_jobs(
     return count
 
 
-def render_submit_script_panel(submit_file_path):
+def render_submit_script_panel(submit_file_path, title: str = "Submit Script"):
     """Build a Rich Panel containing the submit script with the `pbx run` line
     highlighted in red. Returns the Panel ready to be `console.print`-ed.
     """
     from rich.panel import Panel
     from rich.text import Text
 
-    script = Path(submit_file_path).read_text()
+    abs_path = Path(submit_file_path).resolve()
+    script = abs_path.read_text()
     text = Text()
     for line in script.splitlines():
         if 'pbx run' in line:
@@ -69,10 +70,39 @@ def render_submit_script_panel(submit_file_path):
         text.append("\n")
     return Panel(
         text,
-        title=f"[bold cyan]Submit Script[/bold cyan] [dim]({submit_file_path})[/dim]",
+        title=f"[bold cyan]{title}[/bold cyan] [dim]({abs_path})[/dim]",
         border_style="cyan",
         expand=True,
     )
+
+
+RESPAWN_TEMPLATE_HEADER = """#######################################################################
+# PBX RESPAWN TEMPLATE
+#
+# Generated once by `pbx qsub --respawn N`. NEVER overwritten by pbx.
+#
+# RESOURCE PLACEHOLDERS - safe to edit:
+#   <<PBX_AUTO_SELECT>>   <<PBX_AUTO_NODES>>   <<PBX_AUTO_NGPUS>>
+# Replace with concrete numbers to fix size for all subsequent
+# respawn links; otherwise pbx auto-computes from remaining work,
+# capped at the original allocation size.
+#
+# DO NOT EDIT the `pbx run ...` line below. The --respawn value
+# is pbx-managed; any edit will be overwritten each cycle. If any
+# required arg is missing from that line, pbx will error out and
+# stop the chain.
+#
+# To STOP the chain: `pbx qdel <jobid>` or `pbx scancel <jobid>`.
+# Do not try to stop it by editing or deleting this file.
+#######################################################################"""
+
+
+def _prepend_respawn_header(script: str) -> str:
+    """Insert the respawn-template header comment after the shebang."""
+    lines = script.split('\n', 1)
+    if lines and lines[0].startswith('#!'):
+        return f"{lines[0]}\n{RESPAWN_TEMPLATE_HEADER}\n{lines[1] if len(lines) > 1 else ''}"
+    return f"{RESPAWN_TEMPLATE_HEADER}\n{script}"
 
 
 def submit_job(
@@ -92,6 +122,7 @@ def submit_job(
     scheduler_type: str = "pbs",
     submit_command: str = "qsub",
     dynamic: bool = True,
+    respawn: Optional[int] = None,
     validate_runnable: bool = True,
 ) -> Dict[str, Any]:
     """
@@ -113,14 +144,26 @@ def submit_job(
         sched_opts: List of extra scheduler directive strings from CLI
         scheduler_type: "pbs" or "slurm"
         submit_command: "qsub" or "sbatch"
+        respawn: When set, generate a respawn_template.sh alongside submit.sh and
+            embed --respawn N in both scripts' pbx run line so the chain
+            self-perpetuates at every walltime boundary. The integer is the
+            number of remaining auto-resubmissions (decremented per link;
+            0 = no resubmit, chain ends after this run). Pass None to disable.
 
     Returns:
-        Dictionary with submission details including job_id and run_dir
+        Dictionary with submission details including job_id and run_dir.
+        When respawn is set, also includes 'respawn_template_file' pointing
+        to the generated template path.
 
     Raises:
-        ValidationError: If configuration is invalid
+        ValidationError: If configuration is invalid, or if respawn is negative.
         FileNotFoundError: If submit command is not found
     """
+    if respawn is not None and respawn < 0:
+        raise ValidationError(
+            f"--respawn must be >= 0, got {respawn}."
+        )
+
     # Tag glob expansion + runnable-jobs guard (skipped when caller has already
     # validated, e.g. unit tests that bypass the DB).
     matched_count = None
@@ -193,6 +236,8 @@ def submit_job(
         run_options.append(f"--loglevel {loglevel}")
     if not dynamic:  # Only add when disabling (default is dynamic)
         run_options.append("--static")
+    if respawn is not None:
+        run_options.append(f"--respawn {respawn}")
 
     # Always pass walltime to `pbx run` so it can trigger graceful shutdown
     # 30s before the batch job's walltime expires.
@@ -254,10 +299,42 @@ def submit_job(
     # Merge directives: template → system+config → CLI
     submit_script = merge_sched_opts(rendered, combined_config_opts, sched_opts)
 
+    # When --respawn is set, the scheduler log rolls per chain link instead of
+    # being overwritten each cycle. Link 0 uses pbx_scheduler_link-0.out;
+    # build_respawn_link_script bumps the digit for subsequent links.
+    if respawn is not None:
+        submit_script = submit_script.replace(
+            "pbx_scheduler.out", "pbx_scheduler_link-0.out"
+        )
+
     # Write submit script
     submit_file = run_dir / "submit.sh"
     with open(submit_file, 'w') as f:
         f.write(submit_script)
+
+    # When --respawn is set, also generate respawn_template.sh alongside submit.sh.
+    # Same content except the resource line has a placeholder for auto-fill at
+    # respawn time, and the file starts with an educational header comment.
+    respawn_template_file: Optional[Path] = None
+    if respawn is not None:
+        respawn_template_vars = dict(template_vars)
+        respawn_template_vars['select'] = (
+            "<<PBX_AUTO_SELECT>>" if scheduler_type == "pbs" else "<<PBX_AUTO_NODES>>"
+        )
+        respawn_rendered = sched_template.format(**respawn_template_vars)
+        if not project:
+            respawn_rendered = '\n'.join(
+                line for line in respawn_rendered.split('\n')
+                if not re.match(r'\s*#(PBS\s+-A|SBATCH\s+--account=)\s*$', line)
+            )
+        respawn_script = merge_sched_opts(respawn_rendered, combined_config_opts, sched_opts)
+        respawn_script = _prepend_respawn_header(respawn_script)
+        respawn_script = respawn_script.replace(
+            "pbx_scheduler.out", "pbx_scheduler_link-0.out"
+        )
+        respawn_template_file = run_dir / "respawn_template.sh"
+        with open(respawn_template_file, 'w') as f:
+            f.write(respawn_script)
 
     # Submit the job
     try:
@@ -277,6 +354,7 @@ def submit_job(
             "job_id": job_id,
             "run_dir": str(run_dir),
             "submit_file": str(submit_file),
+            "respawn_template_file": str(respawn_template_file) if respawn_template_file else None,
             "matched_jobs": matched_count,
             "resolved_tags": list(tags) if tags else None,
         }
@@ -293,6 +371,7 @@ def submit_job(
             "error": e.stderr,
             "run_dir": str(run_dir),
             "submit_file": str(submit_file),
+            "respawn_template_file": str(respawn_template_file) if respawn_template_file else None,
             "matched_jobs": matched_count,
             "resolved_tags": list(tags) if tags else None,
         }

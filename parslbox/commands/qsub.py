@@ -29,6 +29,7 @@ def submit_to_scheduler(
     config_path: Optional[Path] = None,
     sched_opts: Optional[List[str]] = None,
     dynamic: bool = True,
+    respawn: Optional[int] = None,
 ):
     """
     Submit a PBS job via qsub. Thin wrapper around submit_job().
@@ -50,6 +51,7 @@ def submit_to_scheduler(
         scheduler_type="pbs",
         submit_command="qsub",
         dynamic=dynamic,
+        respawn=respawn,
     )
 
 
@@ -109,6 +111,10 @@ def qsub(
         bool,
         typer.Option("--dynamic/--static", help="Dynamically discover new jobs during run (default: dynamic).")
     ] = True,
+    respawn: Annotated[
+        Optional[int],
+        typer.Option("--respawn", help="Enable the self-respawn chain: at walltime, mark in-flight jobs Restart and auto-submit the next link. The integer is the number of remaining auto-resubmissions in the chain (decremented per link; 0 = no resubmit, chain ends after this run).")
+    ] = None,
 ):
     """
     Generate and submit a PBS job script for running parslbox workflows.
@@ -138,6 +144,7 @@ def qsub(
             loglevel=loglevel,
             sched_opts=sched_opts,
             dynamic=dynamic,
+            respawn=respawn,
         )
 
         # CLI-specific output formatting
@@ -156,6 +163,22 @@ def qsub(
         typer.secho(f"\U0001f4c1 Created run directory: {result['run_dir']}", fg=typer.colors.BLUE)
         typer.secho(f"\U0001f4dd Generated submit script: {result['submit_file']}", fg=typer.colors.GREEN)
         console.print(render_submit_script_panel(result['submit_file']))
+
+        if result.get('respawn_template_file'):
+            typer.secho(
+                f"\U0001f501 Generated respawn template: {result['respawn_template_file']}",
+                fg=typer.colors.GREEN,
+            )
+            console.print(render_submit_script_panel(
+                result['respawn_template_file'], title="Respawn Template"
+            ))
+            typer.secho(
+                "ℹ️  Placeholders <<PBX_AUTO_SELECT>> / <<PBX_AUTO_NODES>> "
+                "will be auto-filled from the remaining runnable jobs at restart "
+                "time, capped at the original allocation size. Edit the template "
+                "before walltime to override. Do not edit the `pbx run` line.",
+                fg=typer.colors.YELLOW,
+            )
 
         if result["success"]:
             job_id = result.get("pbs_job_id", result.get("job_id", "UNKNOWN"))

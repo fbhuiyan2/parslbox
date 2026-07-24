@@ -7,6 +7,156 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.1] - 2026-07-24
+
+### Added
+
+#### Restart Mode (`--restart`) — Walltime-Driven Resubmission Chain
+- **`--restart` flag on `pbx run`, `pbx qsub`, `pbx sbatch`** — Enables a chained-submission model where the active batch job, upon nearing walltime, submits its own successor that picks up the remaining backlog of `Ready`/`Restart` jobs
+  - Startup hook records job context (scheduler job ID, generated script path, walltime) so the orchestrator knows what to resubmit
+  - Walltime-aware resubmission: the current job exits cleanly and queues the next link in the chain before the scheduler kills it
+  - Works across PBS and SLURM via the unified `submit_helpers.submit_job()` path
+  - Plumbed through CLI, `ParslBox` API, MCP schemas/tools, and bash script generation
+- **`restart_template` path included in submit responses (MCP + API)** — Callers can inspect/modify the generated restart script before the next chain link fires
+- **New helpers:** `parslbox/commands/helpers/restart_helpers.py`, `parslbox/commands/helpers/resource_estimate.py`
+- **Docs:** new `docs/pbx-run-details.md` covers the restart chain and runtime behavior in depth
+
+#### Tag System Enhancements
+- **Partial tag matching** — Filters and selectors now support partial/substring tag matches via new `parslbox/utils/tag_match.py` helper
+- **Tag exclusion** — `pbx filter` and related selectors accept exclude-tag syntax (negated tags) to skip jobs matching given tags; `exclude_tags` parameter added to the API and MCP filter schema
+- **Submission summary print** — `pbx qsub`/`pbx sbatch` now print a summary of matched jobs at submission time
+- **`pbx info` updated** — improved output and selector handling consistent with the new tag matching rules
+
+#### Job Cancellation Commands
+- **`pbx qdel`** — Cancels a PBS-submitted PBX job (wraps `qdel`)
+- **`pbx scancel`** — Cancels a SLURM-submitted PBX job (wraps `scancel`)
+- **Shared helper:** `parslbox/commands/helpers/cancel_helpers.py`
+- Both commands exposed via the `ParslBox` API and MCP server
+
+#### `PBX_RUN_DELAY` Environment Variable
+- **Configurable inter-job submission delay** (default `0.2s`) — Throttles the rate at which `pbx run` hands jobs to Parsl, smoothing scheduler/launcher load on bursty submissions
+
+#### Revamped SIGTERM Handling in `pbx run`
+- **Restructured shutdown logic** in `parslbox/commands/helpers/run_cmd_helpers.py` — Cleaner separation between walltime-kill, user-cancel, and graceful-exit paths; better integration with `JobTracker` to mark active jobs correctly on termination
+- **Elapsed-time logging** — `pbx run` now logs total elapsed time on exit
+
+#### System Configs
+- **`aurora-tile` now uses `MpiExecLauncher`** — places one Parsl manager per compute node (workers distributed across the allocation) instead of the previous `SimpleLauncher`, so it scales past the head-node RAM ceiling (~10k workers)
+- **`perlmutter-gpu-srun`** (`parslbox/system_configs/perlmutter_gpu_srun.py`) — Perlmutter GPU variant using the `SrunLauncher` for the same per-node placement; registered in `parslbox/system_configs/loader.py`
+
+#### Add Command — Range Syntax for Parents
+- **`pbx add --parent` accepts ranges** — e.g., `--parent 1-5,8,12-14`, matching the range syntax already supported by `pbx update`/`rm`/`info`
+
+#### Julia Test Scripts
+- **`job_test/hello_affinity_julia.jl`** + `hello_affinity_julia_env.sh` — Julia affinity test for verifying rank/GPU placement
+- **`job_test/create_test_jobs.py`** extended to generate Julia jobs alongside Python jobs
+
+#### Documentation Restructure
+- **`README.md` slimmed down**, content split into focused docs:
+  - `docs/api-details.md` — `ParslBox` API reference
+  - `docs/apps.md` — App reference (LAMMPS, VASP, ORCA, Python, Julia)
+  - `docs/commands.md` — CLI command reference
+  - `docs/pbx-run-details.md` — `pbx run` runtime/restart-chain reference
+
+#### Hooks on Compute (`RUN_HOOKS_ON_COMPUTE`)
+- **New opt-in class attribute on `AppBase`** — When set to `True`, an app's `preprocess()` and `postprocess()` Python methods are dispatched on the assigned compute node via a subprocess wrapped with `build_resource_launcher()`, instead of running in-process in the `pbx run` orchestrator on the head node
+  - Default `False` preserves prior behavior — no existing app is affected
+  - Does **not** affect `restart()` (which runs before any assignment exists)
+  - Frees the head node from heavy hook work; lets hooks use the same modules/Python env/GPU access as the job itself
+- **New compute-side dispatcher** — `parslbox/apps/_hook_runner.py` invoked as `python -m parslbox.apps._hook_runner <app_name> <method_name> <args_json>`; re-instantiates the app via `app_registry.get_app_instance()`, calls the method, writes its return value to `<job_path>/PBX_HOOK_RETURN` (mirrors the existing `PBX_JOB_STATUS_REPORT` idiom from v0.8.7)
+- **New head-side helper** — `parslbox/commands/helpers/hook_dispatch.py` builds the `bash -c` payload with `shlex.quote()`, sources `env_file` if present, captures stdout/stderr, propagates `CalledProcessError` to the orchestrator's existing exception handlers
+- **Resource launcher built for MPI apps too** when the flag is True — previously only built for `USES_MPI=False`. The single-rank launcher constrains the hook subprocess to assigned resources
+
+### Fixed
+
+#### Multi-GPU-per-Rank GPU Wrapper
+- **GPU wrapper now correctly handles ranks holding multiple GPUs** — `mpi_launcher_helpers.py` and the resource-manager models reworked so wrappers emit the right `CUDA_VISIBLE_DEVICES`/binding mask when `gpus_per_rank > 1`
+- New test suite: `tests/test_multi_gpu_per_rank.py`
+
+#### Multinode CPU Jobs on GPU Systems
+- **`job_info_validator` now allows CPU-only multinode jobs on GPU systems** — Previously rejected; CPU jobs on GPU partitions are valid use cases (e.g., pre/post-processing on GPU-node CPUs)
+- **Sub-node CPU job `node_occupancy < 1` validation fix** — corrects edge cases where small CPU jobs were misclassified
+
+#### srun Subnode `--cpus-per-task` Fix
+- Corrected `--cpus-per-task` emission for srun sub-node CPU jobs in `mpi_command_builder.py`; Pinnacles CENVALARC config updated accordingly
+
+#### `sched_opts` Injection
+- **Fixed `sched_opts` directive injection** in `submit_helpers.py` / `sched_opts_helpers.py` — corrects an issue where merged directives were not placed at the `{sched_opts}` template slot under certain code paths
+
+### Changed
+
+#### System Config Tuning
+- **`perlmutter-cpu`**: `CORES_PER_NODE` and worker counts corrected
+- **`perlmutter-gpu`**: max-worker accounting corrected
+- **`pinnacles-cenvalarc`**: max-worker accounting corrected
+
+#### Parsl Dependency
+- **Parsl bumped to the 2027 release line** (`pyproject.toml`, `poetry.lock`)
+
+#### Scaling Orchestrators
+- **CPU-only mode handling corrected** in `lammps_strong_scale_orchestrator.py` and `lammps_weak_scale_orchestrator.py`
+
+### New Files
+- `parslbox/commands/qdel.py`
+- `parslbox/commands/scancel.py`
+- `parslbox/commands/helpers/cancel_helpers.py`
+- `parslbox/commands/helpers/restart_helpers.py`
+- `parslbox/commands/helpers/resource_estimate.py`
+- `parslbox/commands/helpers/hook_dispatch.py`
+- `parslbox/apps/_hook_runner.py`
+- `parslbox/utils/tag_match.py`
+- `parslbox/system_configs/perlmutter_gpu_srun.py`
+- `docs/api-details.md`
+- `docs/apps.md`
+- `docs/commands.md`
+- `docs/pbx-run-details.md`
+- `job_test/hello_affinity_julia.jl`
+- `job_test/hello_affinity_julia_env.sh`
+- `tests/test_restart_mode_orchestrator.py`
+- `tests/test_restart_flag_plumbing.py`
+- `tests/test_qdel_scancel.py`
+- `tests/test_shutdown.py`
+- `tests/test_tag_match.py`
+- `tests/test_filter_command.py`
+- `tests/test_info_command.py`
+- `tests/test_multi_gpu_per_rank.py`
+- `tests/api_tests/test_submission.py`
+
+### Modified Files
+- `parslbox/commands/run.py` — restart-mode orchestrator, elapsed-time log, `PBX_RUN_DELAY`, revamped SIGTERM
+- `parslbox/commands/qsub.py`, `parslbox/commands/sbatch.py` — `--restart` flag, submission-summary print
+- `parslbox/commands/add.py` — `--parent` accepts ranges
+- `parslbox/commands/filter.py` — exclude-tag support
+- `parslbox/commands/info.py` — selector/tag-matching updates
+- `parslbox/commands/helpers/submit_helpers.py` — restart plumbing, `sched_opts` injection fix, `PBX_RUN_DELAY`
+- `parslbox/commands/helpers/run_cmd_helpers.py` — restructured shutdown, restart hooks
+- `parslbox/commands/helpers/sched_opts_helpers.py` — injection fix
+- `parslbox/commands/helpers/filter_helpers.py` — exclude-tag plumbing
+- `parslbox/commands/helpers/job_info_validator.py` — multinode CPU on GPU systems, sub-node occupancy fix
+- `parslbox/commands/helpers/mpi_launcher_helpers.py` — multi-GPU-per-rank wrapper rework
+- `parslbox/resource_manager/mpi_command_builder.py` — srun sub-node `--cpus-per-task` fix
+- `parslbox/resource_manager/models.py` — multi-GPU-per-rank fields
+- `parslbox/apps/appbase.py` — restart-aware script generation, GPU wrapper fix
+- `parslbox/api.py` — `qdel`/`scancel` methods, `--restart` plumbing, exclude-tag filter
+- `parslbox/mcp/mcp_server.py`, `parslbox/mcp/schemas.py` — restart, qdel/scancel, exclude-tag, restart_template in responses
+- `parslbox/database/database.py` — supporting tag-match query changes
+- `parslbox/utils/pbx_config_template.py` — `PBX_RUN_DELAY` and related entries
+- `parslbox/system_configs/perlmutter_cpu.py`, `perlmutter_gpu.py`, `pinnacles_cenvalarc.py` — worker-count and CPU-per-node corrections
+- `parslbox/system_configs/aurora_tile.py` — switched to `MpiExecLauncher` (per-node manager placement)
+- `parslbox/system_configs/loader.py` — registers `perlmutter-gpu-srun`
+- `pyproject.toml`, `poetry.lock` — Parsl 2027
+- `README.md` — slimmed, links to new `docs/` pages
+- `examples/strong_scaling/lammps_strong_scale_orchestrator.py`, `examples/weak_scaling/lammps_weak_scale_orchestrator.py` — CPU-only correction
+- `job_test/create_test_jobs.py` — Julia job generation
+- `tests/test_add_command.py` — tests for `--parent` range, sub-node occupancy, multinode CPU on GPU systems
+- `tests/api_tests/test_job_queries.py` — tests for `exclude_tags` filter
+- `tests/test_hooks_on_compute.py` — tests for `RUN_HOOKS_ON_COMPUTE` dispatch path
+- `parslbox/apps/appbase.py` — `RUN_HOOKS_ON_COMPUTE` attribute
+- `parslbox/apps/EXAMPLE_NEW_APP.py` — documents `RUN_HOOKS_ON_COMPUTE`
+- `docs/apps.md` — documents `RUN_HOOKS_ON_COMPUTE` in optional overrides table
+
+---
+
 ## [0.9.3] - 2026-05-19
 
 ### Added

@@ -106,7 +106,9 @@ def add_jobs(params: AddJobSchema) -> str:
         "Takes configuration (system config name, job name, queue, select, walltime, project) "
         "plus optional run directory, apps, tags, retries, and sched_opts for extra PBS directives. "
         "Walltime defaults to minutes; supports h/d suffixes (e.g., 90, 4.25h, 3.5d). "
-        "Returns a short message describing whether submission succeeded."
+        "Set respawn=N to enable a self-respawn chain: at walltime, in-flight jobs are "
+        "marked Restart and the next link is auto-submitted, until all jobs finish or "
+        "respawn reaches 0. Returns a short message describing whether submission succeeded."
     ),
 )
 def submit_pbs_job(params: QSubSchema) -> str:
@@ -122,6 +124,7 @@ def submit_pbs_job(params: QSubSchema) -> str:
         run_dir = status.get("run_dir", "UNKNOWN")
         matched = status.get("matched_jobs")
         resolved = status.get("resolved_tags")
+        respawn_template = status.get("respawn_template_file")
         lines = [
             f"Job was submitted successfully.",
             f"PBS job ID: {job_id}",
@@ -131,6 +134,8 @@ def submit_pbs_job(params: QSubSchema) -> str:
             lines.append(f"Matched {matched} runnable job(s) in DB.")
         if resolved:
             lines.append(f"Resolved tags: {', '.join(resolved)}")
+        if respawn_template:
+            lines.append(f"Respawn template: {respawn_template} (chain auto-resubmits at walltime)")
         return "\n".join(lines)
     else:
         error_msg = status.get("error", "Unknown error")
@@ -149,7 +154,9 @@ def submit_pbs_job(params: QSubSchema) -> str:
         "Takes configuration (system config name, job name, partition, nodes, walltime, project) "
         "plus optional run directory, apps, tags, retries, and sched_opts for extra SLURM directives. "
         "Walltime defaults to minutes; supports h/d suffixes (e.g., 90, 4.25h, 3.5d). "
-        "Returns a short message describing whether submission succeeded."
+        "Set respawn=N to enable a self-respawn chain: at walltime, in-flight jobs are "
+        "marked Restart and the next link is auto-submitted, until all jobs finish or "
+        "respawn reaches 0. Returns a short message describing whether submission succeeded."
     ),
 )
 def submit_slurm_job(params: SBatchSchema) -> str:
@@ -165,6 +172,7 @@ def submit_slurm_job(params: SBatchSchema) -> str:
         run_dir = status.get("run_dir", "UNKNOWN")
         matched = status.get("matched_jobs")
         resolved = status.get("resolved_tags")
+        respawn_template = status.get("respawn_template_file")
         lines = [
             f"SLURM job was submitted successfully.",
             f"SLURM job ID: {job_id}",
@@ -174,6 +182,8 @@ def submit_slurm_job(params: SBatchSchema) -> str:
             lines.append(f"Matched {matched} runnable job(s) in DB.")
         if resolved:
             lines.append(f"Resolved tags: {', '.join(resolved)}")
+        if respawn_template:
+            lines.append(f"Respawn template: {respawn_template} (chain auto-resubmits at walltime)")
         return "\n".join(lines)
     else:
         error_msg = status.get("error", "Unknown error")
@@ -190,10 +200,14 @@ def submit_slurm_job(params: SBatchSchema) -> str:
     description=(
         "Gracefully cancel a running ParslBox PBS batch job.\n\n"
         "Sends SIGTERM via qsig, waits `grace` seconds (default 30) so the orchestrator "
-        "can mark in-flight jobs as Killed in the database, then runs qdel to terminate. "
+        "can reconcile in-flight jobs in the database, then runs qdel to terminate. "
+        "After the scheduler kill, pbx reconciles the DB per state for any jobs still "
+        "non-terminal under this batch (matched by sched_job_id): Running→Killed, "
+        "Submitted→Ready, Resubmitted→Restart, so the DB ends up consistent even when "
+        "the orchestrator's signal handler doesn't complete cleanly. Scoped by "
+        "sched_job_id, so concurrent batch jobs are unaffected. "
         "Always prefer this over a raw qdel for ParslBox jobs — raw qdel only gives the "
-        "orchestrator the cluster's default kill grace (often ~2s), which may leave jobs "
-        "stuck in 'Running' state in the database."
+        "orchestrator the cluster's default kill grace (often ~2s) and does no DB cleanup."
     ),
 )
 def cancel_pbs_job(params: CancelJobSchema) -> str:
@@ -203,11 +217,18 @@ def cancel_pbs_job(params: CancelJobSchema) -> str:
     except Exception as e:
         return f"Exception occurred when cancelling PBS job. Exception: {e}"
 
+    reconciled = result.get("reconciled_count", 0)
+    recon_suffix = (
+        f" Reconciled {reconciled} non-terminal job(s) (Running→Killed, Submitted→Ready, Resubmitted→Restart)."
+        if reconciled else ""
+    )
+
     if result.get("success"):
         return (f"PBS job {result['jobid']} cancelled cleanly "
-                f"(grace: {result.get('grace', '?')}s).")
+                f"(grace: {result.get('grace', '?')}s).{recon_suffix}")
     return (f"Failed to cancel PBS job {result.get('jobid', '?')} "
-            f"at stage '{result.get('stage', '?')}': {result.get('error', 'unknown')}")
+            f"at stage '{result.get('stage', '?')}': {result.get('error', 'unknown')}."
+            f"{recon_suffix}")
 
 
 @mcp.tool(
@@ -215,10 +236,14 @@ def cancel_pbs_job(params: CancelJobSchema) -> str:
     description=(
         "Gracefully cancel a running ParslBox SLURM batch job.\n\n"
         "Sends SIGTERM to the batch script via `scancel --signal=TERM --batch`, waits "
-        "`grace` seconds (default 30) so the orchestrator can mark in-flight jobs as Killed "
-        "in the database, then runs scancel to terminate. Always prefer this over a raw "
-        "scancel for ParslBox jobs — raw scancel only gives the orchestrator the cluster's "
-        "default kill grace, which may leave jobs stuck in 'Running' state in the database."
+        "`grace` seconds (default 30) so the orchestrator can reconcile in-flight jobs "
+        "in the database, then runs scancel to terminate. After the scheduler kill, pbx "
+        "reconciles the DB per state for any jobs still non-terminal under this batch "
+        "(matched by sched_job_id): Running→Killed, Submitted→Ready, Resubmitted→Restart, "
+        "so the DB ends up consistent even when the orchestrator's signal handler doesn't "
+        "complete cleanly. Scoped by sched_job_id, so concurrent batch jobs are "
+        "unaffected. Always prefer this over a raw scancel for ParslBox jobs — raw "
+        "scancel does no DB cleanup."
     ),
 )
 def cancel_slurm_job(params: CancelJobSchema) -> str:
@@ -228,11 +253,18 @@ def cancel_slurm_job(params: CancelJobSchema) -> str:
     except Exception as e:
         return f"Exception occurred when cancelling SLURM job. Exception: {e}"
 
+    reconciled = result.get("reconciled_count", 0)
+    recon_suffix = (
+        f" Reconciled {reconciled} non-terminal job(s) (Running→Killed, Submitted→Ready, Resubmitted→Restart)."
+        if reconciled else ""
+    )
+
     if result.get("success"):
         return (f"SLURM job {result['jobid']} cancelled cleanly "
-                f"(grace: {result.get('grace', '?')}s).")
+                f"(grace: {result.get('grace', '?')}s).{recon_suffix}")
     return (f"Failed to cancel SLURM job {result.get('jobid', '?')} "
-            f"at stage '{result.get('stage', '?')}': {result.get('error', 'unknown')}")
+            f"at stage '{result.get('stage', '?')}': {result.get('error', 'unknown')}."
+            f"{recon_suffix}")
 
 
 @mcp.tool(
@@ -383,12 +415,17 @@ def get_jobs(params: GetJobsByIdsSchema) -> str:
 app = mcp.streamable_http_app()
 
 if __name__ == "__main__":
-    import sys
+    import argparse
 
-    if "--stdio" in sys.argv:
-        # stdio mode: Claude Code launches and manages the process
+    parser = argparse.ArgumentParser(description="ParslBox MCP server")
+    parser.add_argument("--stdio", action="store_true", help="Run in stdio mode (the harness launches and manages the process)")
+    parser.add_argument("--port", type=int, default=9795, help="Port for HTTP mode (default: 9795)")
+    args = parser.parse_args()
+
+    if args.stdio:
+        # stdio mode: the harness launches and manages the process
         mcp.run(transport="stdio")
     else:
         # HTTP mode: run as a standalone server
         import uvicorn
-        uvicorn.run(app, host="127.0.0.1", port=9795)
+        uvicorn.run(app, host="127.0.0.1", port=args.port)

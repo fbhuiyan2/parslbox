@@ -12,6 +12,12 @@ from parslbox.commands.helpers.run_cmd_helpers import parse_parents
 
 logger = logging.getLogger(__name__)
 
+# A parent satisfies a child's dependency once it has completed — successfully
+# (`Done`) or with caveats (`Warning`). `Failed`/`Killed`/non-terminal statuses
+# never satisfy, so a child of a failed parent simply never becomes runnable
+# (and the no-idle exit rule then ends the run cleanly rather than hanging).
+SATISFYING_PARENT_STATUSES = frozenset({'Done', 'Warning'})
+
 
 class JobTracker:
     """
@@ -106,41 +112,56 @@ class JobTracker:
     def are_parents_done(self, job_id: int) -> bool:
         """
         Check if all parent dependencies are satisfied for a job.
-        
+
+        Parent statuses are read FRESH from the database on every call, not from
+        the in-memory registry: under the shared-DB model a parent may be run by
+        a different orchestrator (or flipped by the user), so a cached copy would
+        be stale. A dependency is satisfied when the parent is `Done` or
+        `Warning` (see SATISFYING_PARENT_STATUSES).
+
         Args:
             job_id: Job ID to check dependencies for
-            
+
         Returns:
-            True if all parents are done, False otherwise
+            True if all parents are satisfied, False otherwise
         """
         job = self.jobs.get(job_id)
         if not job:
             logger.warning(f"Job {job_id} not found in JobTracker")
             return False
-            
+        return self.parents_satisfied(job)
+
+    def parents_satisfied(self, job: dict) -> bool:
+        """Dict-based dependency check — same semantics as are_parents_done but
+        takes the job dict directly, so a candidate can be gated before it is
+        registered in the tracker (used by the dispatch loop pre-claim)."""
+        job_id = job.get('job_id')
         parents_str = job.get('parents')
         if not parents_str:
             return True  # No dependencies
-        
+
         try:
             parent_ids = parse_parents(parents_str)
         except Exception as e:
             logger.error(f"Error parsing parents for job {job_id}: {e}")
             return False
-        
+
+        if not parent_ids:
+            return True
+
+        from parslbox.database import database
+        parent_rows = database.get_jobs_by_ids(self.db_path, parent_ids)
+        parent_status = {row['job_id']: row['status'] for row in parent_rows}
+
         for parent_id in parent_ids:
-            parent_job = self.jobs.get(parent_id)
-            if not parent_job:
-                # Try to load parent from database (lazy loading)
-                parent_job = self._load_job_from_database(parent_id)
-                if not parent_job:
-                    logger.error(f"Job {job_id} has non-existent parent {parent_id}")
-                    return False
-            
-            if parent_job['status'] != 'Done':
-                return False  # At least one parent is not done
-        
-        return True  # All parents are done
+            status = parent_status.get(parent_id)
+            if status is None:
+                logger.error(f"Job {job_id} has non-existent parent {parent_id}")
+                return False
+            if status not in SATISFYING_PARENT_STATUSES:
+                return False  # At least one parent not yet satisfied
+
+        return True  # All parents satisfied
     
     def get_dependency_ready_jobs(self, job_ids: List[int]) -> List[dict]:
         """

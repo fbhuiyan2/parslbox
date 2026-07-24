@@ -21,12 +21,12 @@ ParslBox provides a CLI (`pbx`), a Python API, and an MCP server for AI-agent in
 - **Resource-aware execution:**
   - Pack multiple sub-node jobs onto shared nodes (GPU or CPU)
   - Run multi-node MPI jobs with exclusive node allocation
-  - Resource constraining for non-MPI apps (Python, Julia) via resource launcher
   - CPU-GPU affinity-aware placement
   - MPI backends: MPICH, OpenMPI, srun
 - **Scheduler support:** PBS (`pbx qsub`) and SLURM (`pbx sbatch`) with configurable `--sched-opts`
 - **Pre-configured HPC systems:** Polaris, Aurora (GPU & Tile modes), Sophia, Crux, LCRC Swing, LCRC Improv, Pinnacles-CenvalArc, Perlmutter (GPU & CPU), plus `*-mpi`/`*-srun` launcher variants for large-scale (>10k worker) runs
-- **Dynamic job discovery:** `--dynamic` (default) polls for newly added jobs during a run session. New jobs matching the same `--apps`/`--tags` filters are picked up every 60s. Failed jobs reset to Ready by the user (via `pbx update --status Ready` from another terminal) are also re-discovered and re-run. Use `--static` for collect-once behavior
+- **Dynamic job discovery:** `--dynamic` (default) re-queries the DB for runnable jobs on every dispatch pass. New jobs matching the same `--apps`/`--tags` filters, and jobs the user flips back to `Ready`/`Restart` from another terminal (via `pbx update --status … <ids>`), are picked up automatically — jobs re-dispatched via `Restart` go through the app's `restart()` hook just like any other `Restart` job. Because each run atomically claims only what it dispatches, multiple `pbx run` allocations can safely share one DB in dynamic mode. Use `--static` for collect-once behavior (claim the runnable set once up front; no re-query)
+- **Self-respawn chain:** `pbx qsub --respawn N` produces a self-perpetuating submission chain that auto-resubmits at every walltime boundary. Running jobs preempted at walltime are marked `Restart`; the next link calls each app's `restart()` hook lazily as each `Restart` job is dispatched, so apps can decide how to resume. See [`docs/pbx-run-details.md`](docs/pbx-run-details.md)
 - **Fault tolerance:** Node health tracking, quarantine, and auto-recovery
 - **Script-driven status reporting:** Python/Julia scripts report success/failure via `report_status()` utility
 - **Python API and MCP server** for programmatic and AI-agent integration
@@ -38,36 +38,76 @@ Requirements:
 - Python >= 3.11, < 3.14
 - Parsl >= 2025.9.8
 
-### Using Poetry
+Clone the repo first:
+
 ```bash
-conda create --name parslbox python=3.11.9
+git clone https://github.com/fbhuiyan2/parslbox.git
+cd parslbox
+```
+
+Then pick a Python environment manager below. Poetry (recommended) installs into the active environment and uses the committed `poetry.lock` for reproducible dependency resolution. pip is offered as an alternative.
+
+### conda
+
+```bash
+conda create -n parslbox python=3.11.9
 conda activate parslbox
 pip install poetry
-
-git clone https://github.com/fbhuiyan2/parslbox.git
-cd parslbox
-poetry install                          # core dependencies only
+poetry install                          # core dependencies
 # poetry install --extras "simulation"  # + ase, pymatgen
-# poetry install --extras "agentic"    # + uvicorn, mcp, pydantic
-# poetry install --extras "simulation agentic"  # both extras
-# poetry install --all-extras          # all optional packages
+# poetry install --extras "agentic"     # + uvicorn, mcp, pydantic
+# poetry install --extras "simulation agentic"  # both
+# poetry install --all-extras
 ```
 
-### Using pip
+<details><summary>Or with pip</summary>
+
 ```bash
-conda create --name parslbox python=3.11.9
-conda activate parslbox
-
-git clone https://github.com/fbhuiyan2/parslbox.git
-cd parslbox
-pip install .                           # core dependencies only
-# pip install ".[simulation]"           # + ase, pymatgen
-# pip install ".[agentic]"             # + uvicorn, mcp, pydantic
-# pip install ".[simulation,agentic]"  # both extras
-# pip install ".[all]"                 # all optional packages
+pip install .                         # core
+# pip install ".[simulation]"
+# pip install ".[agentic]"
+# pip install ".[simulation,agentic]"
+# pip install ".[all]"
 ```
+</details>
+
+### Python venv
+
+```bash
+# First confirm a suitable Python is on PATH:
+#   which python           # or `which python3.11`
+#   python --version       # should be >= 3.11, < 3.14
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install poetry
+poetry install                          # (same extras options as above)
+```
+
+<details><summary>Or with pip</summary>
+
+```bash
+pip install .                         # (same extras options as above)
+```
+</details>
+
+### uv
+
+```bash
+uv venv -p 3.11.9 .uvenv
+source .uvenv/bin/activate
+uv pip install poetry
+poetry install                          # (same extras options as above)
+```
+
+<details><summary>Or with uv pip</summary>
+
+```bash
+uv pip install .                      # (same extras options as above)
+```
+</details>
 
 ### Setup
+
 Run `pbx config` to interactively create a configuration file. Edit the generated config to set correct executable paths and environment setup before running jobs.
 
 ## Quick Start
@@ -75,7 +115,7 @@ Run `pbx config` to interactively create a configuration file. Edit the generate
 Add jobs:
 ```bash
 # Add a single LAMMPS job (requires system config name)
-pbx add /path/to/sim --app lammps --config polaris --ngpus 2 --tag run1
+pbx add /path/to/sim --app lammps-kk --config polaris --ngpus 2 --tag run1
 
 # Add all subdirectories in current folder as VASP jobs
 pbx add all --app vasp --config polaris --tag ManyVaspCalc
@@ -94,20 +134,22 @@ pbx add /path/to/calc2 --app vasp --config polaris --parent-tag stage1
 Submit via PBS or SLURM:
 ```bash
 # Short flags
-pbx qsub -c sophia -N myrun -q gpu --select 2 -T 90 -A myproject -a lammps -t production
-pbx sbatch -c polaris -N myrun -p gpu --nodes 2 -T 90 -A myproject -a lammps -t production
+pbx qsub -c sophia -N myrun -q gpu --select 2 -T 90 -A myproject -a lammps-kk -t production
+pbx sbatch -c polaris -N myrun -p gpu --nodes 2 -T 90 -A myproject -a lammps-kk -t production
 
 # Long flags
-pbx qsub --config sophia --job-name myrun --queue gpu --select 2 --walltime 90 --project myproject --apps lammps --tags production
-pbx sbatch --config polaris --job-name myrun --partition gpu --nodes 2 --walltime 90 --account myproject --apps lammps --tags production
+pbx qsub --config sophia --job-name myrun --queue gpu --select 2 --walltime 90 --project myproject --apps lammps-kk --tags production
+pbx sbatch --config polaris --job-name myrun --partition gpu --nodes 2 --walltime 90 --account myproject --apps lammps-kk --tags production
 
 # Glob tags: use `*` to match a substring. Quote to prevent shell expansion.
-pbx qsub -c sophia -N myrun -q gpu --select 2 -T 90 -A myproject -a lammps -t '*nomix,prod-run'
+pbx qsub -c sophia -N myrun -q gpu --select 2 -T 90 -A myproject -a lammps-kk -t '*nomix,prod-run'
+
+# Self-respawn chain: auto-resubmit at every walltime boundary, up to 3 times
+pbx qsub -c sophia -N sweep -q gpu --select 4 -T 4h -A myproject -a lammps-kk -t sweep \
+  --respawn 3
 ```
 
-> **Tag globs:** `--tag` / `--tags` accept `*`-style globs (e.g. `*test`, `film*mix`, `*3c*`).
-> `qsub` and `sbatch` resolve globs against the DB at submission time and error out if any
-> token (glob or literal) matches no existing tag. Quote globs to stop the shell from expanding `*`.
+**New to pbx?** See [Example usage](#example-usage) below — [`job_test/create_test_jobs.py`](job_test/create_test_jobs.py) generates a batch of tiny throwaway jobs so you can exercise the whole pipeline end-to-end in a few minutes without preparing real workloads.
 
 ## Supported Applications
 
@@ -127,12 +169,11 @@ Built-in: **lammps-kk**, **vasp**, **orca**, **python**, **julia**. Custom apps 
 | **pinnacles-cenvalarc** | SLURM | 0 or 2 (auto-detected) | NVIDIA L40S / H200 NVL | 64 | srun |
 | **perlmutter-gpu** | SLURM | 4 | NVIDIA A100 | 128 | srun |
 | **perlmutter-cpu** | SLURM | 0 (CPU-only) | — | 128 | srun |
-| **aurora-tile-mpi** | PBS | 12 (6x2 tiles) | Intel Max 1550 | 208 | MPICH |
 | **perlmutter-gpu-srun** | SLURM | 4 | NVIDIA A100 | 128 | srun |
 
 Each system defines its own MPI defaults, scheduler templates, and resource detection methods. New systems can be added by creating a config class inheriting from `BaseSystemConfig`.
 
-**Launcher variants** (`*-mpi` / `*-srun`): hardware-identical to their base configs (`aurora-tile`, `perlmutter-gpu`) but use `MpiExecLauncher` / `SrunLauncher` instead of `SimpleLauncher`. This places one Parsl manager per compute node (workers distributed across nodes) rather than concentrating all workers on the head node. Use for runs above ~10k workers, where head-node RAM would otherwise be the scaling ceiling. The base configs remain the default and are recommended for smaller runs.
+**Launcher placement:** most configs use `SimpleLauncher`, which concentrates all workers on the head node. For very large runs (above ~10k workers) head-node RAM becomes the scaling ceiling, so some configs instead place one Parsl manager per compute node (workers distributed across nodes): `perlmutter-gpu-srun` is a `SrunLauncher` variant of `perlmutter-gpu` for this purpose, and `aurora-tile` uses `MpiExecLauncher` per-node placement by default.
 
 ## Programmatic API (Python)
 
@@ -154,49 +195,60 @@ Exceptions: `ParslBoxError`, `ValidationError`, `JobNotFoundError`
 
 Full per-method reference with examples: [`docs/api-details.md`](docs/api-details.md).
 
-## MCP Server
+## Agentic usage
 
-ParslBox includes an MCP server for AI-agent integration. Install with `pip install ".[agentic]"` and start:
+ParslBox ships an **MCP server** and two **agent skills** (`parslbox-cli`, `parslbox-api`) that drop into any agentic harness — [Claude Code](https://claude.com/claude-code), [OpenCode](https://opencode.ai), or anything that speaks MCP. The MCP server exposes job add/submit/query/cancel as callable tools; the skills teach the agent the `pbx` CLI and the Python API. Install the MCP dependencies with `pip install ".[agentic]"`.
 
-```bash
-# HTTP mode (standalone server on port 9795)
-python -m parslbox.mcp.mcp_server
-
-# stdio mode (for Claude Code integration)
-python -m parslbox.mcp.mcp_server --stdio
-```
-
-Exposed tools: `add_jobs`, `submit_pbs_job`, `submit_slurm_job`, `cancel_pbs_job`, `cancel_slurm_job`, `remove_job`, `update_job`, `filter_jobs`, `list_jobs`, `get_job`, `get_jobs`.
-
-### Claude Code Integration
-
-The project ships a [`.mcp.json`](.mcp.json) for automatic discovery — Claude Code launched from the repo directory will offer to connect. For global access, copy that file to `~/.claude/.mcp.json` and edit the two `/path/to/...` placeholders.
-
-See [`examples/chemgraph_parslbox_example/`](examples/chemgraph_parslbox_example/) for an HTTP client example.
+See [`docs/agentic_usage.md`](docs/agentic_usage.md) for full setup — adding the MCP server and skills to Claude Code and OpenCode — plus best practices for driving parslbox from an agent.
 
 ## Commands Overview
 
 Full per-command reference with examples lives in [`docs/commands.md`](docs/commands.md).
 
-## Configuration
+## Environment variables
 
-Environment variables:
-- `PBX_DB_PATH` — database file or directory path
-- `PBX_CONFIG_PATH` — config file or directory path
-- `PBX_RUN_DELAY` — seconds to sleep between consecutive job submissions (default: `0.2`). Bump up on systems like Perlmutter where rapid `srun` invocations can overload `slurmctld`.
+pbx reads three **shell** environment variables to locate its config, database, and pace job submissions. These are set in your shell (via `export`) — **not** inside `config.yaml`. `pbx config` prints copy-paste-ready `export` lines at the end of its output when relevant.
 
-Defaults (when env vars are not set):
-- Database: `~/.parslbox/job_database_pbx.db`
-- Config: `~/.parslbox/config.yaml`
-- Runs: `~/.parslbox/runs/<timestamp>/`
+| Variable | Purpose | Default when unset |
+|---|---|---|
+| `PBX_CONFIG_PATH` | Location of `config.yaml` | `~/.parslbox/config.yaml` |
+| `PBX_DB_PATH` | Location of the SQLite job database | `~/.parslbox/job_database_pbx.db` |
+| `PBX_RUN_DELAY` | Seconds to sleep between consecutive job submissions | `0.2` — bump up on systems like Perlmutter where rapid `srun` invocations can overload `slurmctld` |
+
+If you `echo $PBX_DB_PATH` in a fresh shell and get an empty line, that's the intended "not set" state — pbx falls back to the defaults above. Nothing is wrong.
+
+### How to set them
 
 ```bash
-export PBX_DB_PATH=/scratch/mydbs/pbx.db
-export PBX_CONFIG_PATH=/scratch/mycfgs/config.yaml
+# In your current shell (temporary — must re-export in each new shell):
+export PBX_CONFIG_PATH=/scratch/mycfgs                # dir → <dir>/config.yaml
+export PBX_DB_PATH=/scratch/mydbs                     # dir → <dir>/job_database_pbx.db
 export PBX_RUN_DELAY=0.5
 ```
 
-Using separate `PBX_DB_PATH` and/or `PBX_CONFIG_PATH` allows multiple isolated databases and configurations. All three env vars are automatically propagated into the qsub/sbatch submission script.
+For persistence across shells, add the same lines to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.).
+
+### `PBX_DB_PATH` accepts three forms
+
+pbx normalizes the value at read time:
+
+```bash
+export PBX_DB_PATH=$(pwd)                             # current dir  → <cwd>/job_database_pbx.db
+export PBX_DB_PATH=/path/to/project/dir               # any dir      → <dir>/job_database_pbx.db
+export PBX_DB_PATH=/path/to/project/mydb.db           # explicit .db file name (must end in .db)
+```
+
+`PBX_CONFIG_PATH` similarly accepts either a directory (pbx appends `config.yaml`) or a full path to a `.yml`/`.yaml` file.
+
+> **Note:** these are shell env vars — they are not read from, or set inside, `config.yaml`.
+
+### Propagation
+
+All three env vars are automatically forwarded into the `pbx qsub`/`pbx sbatch` submission scripts, so the batch job sees the same config/DB paths as your login shell.
+
+### Run directory
+
+The default run directory (`~/.parslbox/runs/<timestamp>/`) is not env-var-controlled. Override per-run via the `--run-dir /custom/path` CLI flag on `pbx qsub` / `pbx sbatch` / `pbx run`.
 
 ## Resource Manager
 
@@ -204,8 +256,8 @@ Using separate `PBX_DB_PATH` and/or `PBX_CONFIG_PATH` allows multiple isolated d
 - **CPU-only jobs:** Use `--nocc` for fractional node occupancy (e.g., 0.25); multiple jobs co-reside up to 1.0
 - **Multi-node jobs:** Exclusive free nodes with MPI hostlist generation
 - **Non-MPI apps:** Resource launcher constrains execution to assigned node/resources
-- **Backlog scheduling:** Dependency-aware rescheduling as resources free up
-- **Node health tracking:** Quarantine nodes after repeated failures, auto-recover when healthy
+- **Dependency-aware scheduling:** Jobs dispatch once their parents finish and resources free up (parents satisfy on `Done`/`Warning`)
+- **Node health tracking:** Quarantine a node only after multiple *distinct* jobs fail on it (a single job's crash — even a multi-node one — never quarantines a node), auto-recover when healthy
 
 ### MPI CPU Binding
 
@@ -220,11 +272,39 @@ Details: [`parslbox/resource_manager/README.md`](parslbox/resource_manager/READM
 
 Statuses:
 - Ready → Submitted → Running → Done | Failed | Killed
-- Restart — for recoverable errors / re-runs
-- Warning — if an app returns an invalid/unknown status
-- Killed — when walltime is exceeded, or when the user runs `pbx qdel`/`pbx scancel` (SIGTERM handler marks active jobs before the hard kill)
+- Restart → Resubmitted → Running → … — the restart path. `Submitted`/`Resubmitted` are the *claimed* states: a `pbx run` atomically flips a job to `Submitted` (from `Ready`) or `Resubmitted` (from `Restart`), stamping its batch id (`sched_job_id`) so multiple concurrent runs sharing one DB never double-claim.
+- Warning — if an app returns an invalid/unknown status (satisfies dependencies like `Done`)
+- Killed — when walltime is exceeded **in a no-respawn run**, or whenever the user runs `pbx qdel`/`pbx scancel`. At shutdown the orchestrator reconciles its own jobs per state: `Running → Killed` (or `Restart`/`Failed` in a `--respawn` run), and claimed-but-not-yet-running jobs go back to the pool (`Submitted → Ready`, `Resubmitted → Restart`). If the signal handler can't finish its DB writes in time, a post-kill reconciliation step in `pbx qdel`/`scancel` applies the same per-state rules, scoped to the killed batch's `sched_job_id`.
+- Restart — set by either the user (`pbx update --status Restart`) or by the orchestrator in a `--respawn` chain at walltime. Either way, the next `pbx run` calls the app's `restart()` hook lazily per-job as each `Restart` row is dispatched (patch fields and re-run / re-run as-is / mark Failed), right after resources are assigned.
 
-## Examples
+Full state-transition table and end-to-end chain walkthrough: [`docs/pbx-run-details.md`](docs/pbx-run-details.md).
+
+## Example usage
+
+### First-time test drive (`job_test/`)
+
+The fastest way to verify a fresh install and see the whole pipeline in action:
+
+```bash
+cd job_test
+python create_test_jobs.py <config_name> --python hello_affinity.py 3 --tag firstrun
+```
+
+This creates 3 tiny Python jobs (using [`hello_affinity.py`](job_test/hello_affinity.py), which just prints per-rank CPU/GPU affinity) under `job_test/tests/python/` and registers them with pbx. Then submit them:
+
+```bash
+pbx ls -t firstrun               # confirm the jobs got registered
+pbx qsub -c <config_name> -N firstrun -q <queue> --select 1 -T 15 -A <project> -t firstrun
+```
+
+`create_test_jobs.py` supports LAMMPS, Python, Julia, and VASP job creation with varied resources and dependencies — see its `--help` for the full menu. Other useful files in [`job_test/`](job_test/):
+
+- `hello_affinity.py` / `hello_affinity_julia.jl` — affinity-printing scripts; drop-in `--input` targets for the `python` / `julia` apps
+- `test_dynamic_jobs/` — self-spawning workload for exercising the `--dynamic` job-discovery flow
+
+### Realistic workflows (`examples/`)
+
+Longer, production-style orchestrations with their own READMEs and analysis scripts:
 
 - [`examples/strong_scaling/`](examples/strong_scaling/) — LAMMPS strong scaling orchestration with automated analysis and publication-ready plots
 - [`examples/weak_scaling/`](examples/weak_scaling/) — LAMMPS weak scaling orchestration with intelligent system replication

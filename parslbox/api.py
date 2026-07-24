@@ -451,6 +451,7 @@ class ParslBox:
         retries: int = 0,
         loglevel: str = "info",
         sched_opts: Optional[List[str]] = None,
+        respawn: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Generate and submit a PBS job script.
@@ -468,12 +469,19 @@ class ParslBox:
             retries: Number of retries for failed tasks
             loglevel: Logging level
             sched_opts: List of extra PBS directive strings
+            respawn: Enable the self-respawn chain. When set, at walltime the
+                orchestrator marks in-flight jobs Restart and auto-resubmits the
+                next link. The integer is the number of remaining auto-resubmissions
+                in the chain (decremented per link; 0 = no resubmit, chain ends).
+                Pass None (default) to disable the chain entirely.
 
         Returns:
-            Dictionary with submission details including job_id and run_dir
+            Dictionary with submission details including job_id and run_dir.
+            When respawn is set, also includes 'respawn_template_file'.
 
         Raises:
-            ValidationError: If configuration is invalid
+            ValidationError: If configuration is invalid, or if respawn is
+                negative.
             FileNotFoundError: If qsub command is not found
         """
         try:
@@ -493,6 +501,7 @@ class ParslBox:
                 loglevel=loglevel,
                 config_path=self.config_path,
                 sched_opts=sched_opts,
+                respawn=respawn,
             )
             return result
         except Exception as e:
@@ -516,6 +525,7 @@ class ParslBox:
         retries: int = 0,
         loglevel: str = "info",
         sched_opts: Optional[List[str]] = None,
+        respawn: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Generate and submit a SLURM job script.
@@ -533,12 +543,19 @@ class ParslBox:
             retries: Number of retries for failed tasks
             loglevel: Logging level
             sched_opts: List of extra SLURM directive strings
+            respawn: Enable the self-respawn chain. When set, at walltime the
+                orchestrator marks in-flight jobs Restart and auto-resubmits the
+                next link. The integer is the number of remaining auto-resubmissions
+                in the chain (decremented per link; 0 = no resubmit, chain ends).
+                Pass None (default) to disable the chain entirely.
 
         Returns:
-            Dictionary with submission details including job_id and run_dir
+            Dictionary with submission details including job_id and run_dir.
+            When respawn is set, also includes 'respawn_template_file'.
 
         Raises:
-            ValidationError: If configuration is invalid
+            ValidationError: If configuration is invalid, or if respawn is
+                negative.
             FileNotFoundError: If sbatch command is not found
         """
         try:
@@ -557,6 +574,7 @@ class ParslBox:
                 loglevel=loglevel,
                 config_path=self.config_path,
                 sched_opts=sched_opts,
+                respawn=respawn,
             )
             return result
         except Exception as e:
@@ -570,32 +588,40 @@ class ParslBox:
         Gracefully cancel a ParslBox PBS job.
 
         Sends SIGTERM via `qsig`, waits `grace` seconds for the orchestrator
-        to mark in-flight jobs as Killed in the database, then runs `qdel`.
+        to reconcile in-flight jobs in the database, then runs `qdel`. After
+        the scheduler-level kill, any non-terminal jobs under this batch
+        (signal handler did not complete cleanly) are reconciled per state:
+        Running→Killed, Submitted→Ready, Resubmitted→Restart.
 
         Args:
             jobid: PBS job ID.
             grace: Seconds between SIGTERM and hard kill (default 30).
 
         Returns:
-            Dict with keys: success (bool), jobid (str), grace (int) on success;
-            success (False), jobid, stage, error on failure.
+            Dict with keys: success (bool), jobid (str), grace (int),
+            reconciled_count (int) on success; success (False), jobid, stage,
+            error, reconciled_count on failure.
         """
-        return cancel_pbs_job(jobid, grace=grace)
+        return cancel_pbs_job(jobid, grace=grace, db_path=self.db_path)
 
     def scancel(self, jobid: str, grace: int = 30) -> Dict[str, Any]:
         """
         Gracefully cancel a ParslBox SLURM job.
 
         Sends SIGTERM to the batch script via `scancel --signal=TERM --batch`,
-        waits `grace` seconds for the orchestrator to mark in-flight jobs as
-        Killed in the database, then runs `scancel` to terminate.
+        waits `grace` seconds for the orchestrator to reconcile in-flight jobs
+        in the database, then runs `scancel` to terminate. After the
+        scheduler-level kill, any non-terminal jobs under this batch (signal
+        handler did not complete cleanly) are reconciled per state:
+        Running→Killed, Submitted→Ready, Resubmitted→Restart.
 
         Args:
             jobid: SLURM job ID.
             grace: Seconds between SIGTERM and hard cancel (default 30).
 
         Returns:
-            Dict with keys: success (bool), jobid (str), grace (int) on success;
-            success (False), jobid, stage, error on failure.
+            Dict with keys: success (bool), jobid (str), grace (int),
+            reconciled_count (int) on success; success (False), jobid, stage,
+            error, reconciled_count on failure.
         """
-        return cancel_slurm_job(jobid, grace=grace)
+        return cancel_slurm_job(jobid, grace=grace, db_path=self.db_path)

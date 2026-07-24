@@ -89,9 +89,9 @@ class StatusBuffer:
                 )
                 total_updated += len(job_ids)
                 
+                fields_str = ", ".join(f"{k}={v}" for k, v in update_kwargs.items())
                 self.logger.info(
-                    f"Batch updated {len(job_ids)} jobs with fields {field_combo}: "
-                    f"{update_kwargs}"
+                    f"StatusBuffer: updated {len(job_ids)} job(s) with {fields_str}"
                 )
                 
             except Exception as e:
@@ -104,10 +104,7 @@ class StatusBuffer:
         
         # Clear buffer after successful flush
         self.status_updates.clear()
-        
-        if total_updated > 0:
-            self.logger.info(f"StatusBuffer: Successfully flushed updates for {total_updated} out of {total_jobs_attempted} jobs")
-        
+
         return total_updated
     
     def _group_updates_by_fields(self) -> Dict[tuple, Dict[int, Dict[str, Any]]]:

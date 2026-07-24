@@ -87,7 +87,7 @@ class TestSchemaGlobDocs:
 # ----------------- Submit MCP tools surface new result fields -------------- #
 
 
-def _success_status(matched=None, resolved=None):
+def _success_status(matched=None, resolved=None, respawn_template=None):
     s = {
         "success": True,
         "job_id": "12345",
@@ -99,6 +99,8 @@ def _success_status(matched=None, resolved=None):
         s["matched_jobs"] = matched
     if resolved is not None:
         s["resolved_tags"] = resolved
+    if respawn_template is not None:
+        s["respawn_template_file"] = respawn_template
     return s
 
 
@@ -133,3 +135,36 @@ class TestSubmitMcpSurfacesNewFields:
                                     "select": "1", "walltime": 10}))
         assert "Matched 2 runnable job(s)" in out
         assert "Resolved tags: foo" in out
+
+    def test_pbs_surfaces_respawn_template_when_present(self):
+        from parslbox.mcp import mcp_server as m
+        path = "/tmp/run/respawn_template.sh"
+        with patch.object(m.pbx, "qsub",
+                          return_value=_success_status(matched=5, respawn_template=path)):
+            out = m.submit_pbs_job(MagicMock(
+                model_dump=lambda: {"config": "x", "job_name": "j", "queue": "q",
+                                    "select": "1", "walltime": 10,
+                                    "respawn": 3}))
+        assert "Respawn template" in out
+        assert path in out
+        assert "auto-resubmits at walltime" in out
+
+    def test_slurm_surfaces_respawn_template_when_present(self):
+        from parslbox.mcp import mcp_server as m
+        path = "/tmp/run/respawn_template.sh"
+        with patch.object(m.pbx, "sbatch",
+                          return_value=_success_status(respawn_template=path)):
+            out = m.submit_slurm_job(MagicMock(
+                model_dump=lambda: {"config": "x", "job_name": "j", "queue": "q",
+                                    "select": "1", "walltime": 10,
+                                    "respawn": 2}))
+        assert "Respawn template" in out
+        assert path in out
+
+    def test_pbs_omits_respawn_template_when_absent(self):
+        from parslbox.mcp import mcp_server as m
+        with patch.object(m.pbx, "qsub", return_value=_success_status()):
+            out = m.submit_pbs_job(MagicMock(
+                model_dump=lambda: {"config": "x", "job_name": "j", "queue": "q",
+                                    "select": "1", "walltime": 10}))
+        assert "Respawn template" not in out

@@ -8,7 +8,8 @@ To create a new app, you only need to:
 1. Inherit from AppBase
 2. Set INPUT_REQUIRED and DFLT_INPUT class attributes
 3. Implement get_command_template() method
-4. Optionally set USES_MPI = False for non-MPI apps (default is True)
+4. Optionally set RUN_HOOKS_ON_COMPUTE = True to dispatch preprocess/postprocess
+   on the assigned compute node (default False runs them on the head node)
 5. Optionally override get_additional_setup(), check_success(), or postprocess()
 
 That's it! All the common logic (environment setup, resource handling, 
@@ -31,7 +32,10 @@ class ExampleApp(AppBase):
     # App configuration (REQUIRED)
     INPUT_REQUIRED = True  # Does this app require an input file?
     DFLT_INPUT = "input.txt"  # Default input filename (or None)
-    # USES_MPI = True  # (default) Set to False for non-MPI apps like Python scripts
+    # RUN_HOOKS_ON_COMPUTE = False  # (default) Set to True to run
+    #     preprocess()/postprocess() on the assigned compute node instead of
+    #     the head node. Requires a side-effect-free __init__ (the app is
+    #     re-instantiated on the compute node).
     
     def get_command_template(self, **kwargs) -> str:
         """
@@ -154,8 +158,7 @@ class MinimalApp(AppBase):
 
     INPUT_REQUIRED = True
     DFLT_INPUT = "input.txt"
-    # USES_MPI = True  # Default. Set to False if your app doesn't use {mpi_prefix}.
-    
+
     def get_command_template(self, **kwargs) -> str:
         """Just run a simple command with MPI support."""
         mpi_prefix = kwargs['mpi_prefix']
@@ -176,38 +179,6 @@ class MinimalApp(AppBase):
     # - Status updates and database management
     # - Success checking (assumes exit code 0 = success)
     # - Post-processing (returns 'Done' by default)
-
-
-# ============================================================================
-# NON-MPI APP EXAMPLE: Apps that don't use MPI for parallelization
-# ============================================================================
-
-class NonMPIApp(AppBase):
-    """
-    Example of a non-MPI application.
-
-    Set USES_MPI = False for apps that don't include {mpi_prefix} in their
-    command template. ParslBox will automatically prepend a resource launcher
-    (e.g., mpiexec -n 1 --ppn 1 -host <node>) to ensure the process runs on
-    the assigned node with assigned CPU/GPU resources, rather than on the head
-    node where the Parsl worker lives.
-
-    - GPU binding is handled via CUDA_VISIBLE_DEVICES environment variable,
-      which is automatically set by the base class.
-    - CPU binding uses the MPI launcher's native mechanism (rankfile/list/depth),
-      consolidating all assigned cores for the single process.
-    - The full MPI prefix is still available via the PBX_MPI_PREFIX env var
-      for scripts that want to launch MPI sub-processes internally.
-    """
-
-    INPUT_REQUIRED = True
-    DFLT_INPUT = "run.py"
-    USES_MPI = False  # This app doesn't use MPI for parallelization
-
-    def get_command_template(self, **kwargs) -> str:
-        """Just run a Python script. No {mpi_prefix} needed."""
-        in_file = kwargs['in_file']
-        return f"python {in_file}"
 
 
 # ============================================================================

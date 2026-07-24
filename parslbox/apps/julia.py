@@ -18,8 +18,6 @@ class JuliaApp(AppBase):
     # App configuration
     INPUT_REQUIRED = True
     DFLT_INPUT = None
-    USES_MPI = True   # Launches via srun/mpirun so scripts are constrained
-                      # to assigned nodes. Works with or without MPI.jl.
 
     @classmethod
     def get_default_ranks_per_node(cls, ngpus, num_nodes, system_config):

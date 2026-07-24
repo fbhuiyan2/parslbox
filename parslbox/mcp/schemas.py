@@ -8,13 +8,17 @@ class AddJobSchema(BaseModel):
     """Schema for adding job(s)"""
 
     paths: List[str] = Field(
-        description="One or more paths to job directories, or 'all' to add all subdirectories in the current location.",
+        description=(
+            "One or more paths to job directories. Use 'all:<dir>' to add every subdirectory of <dir> "
+            "(pass an absolute <dir>). Bare 'all' resolves against the MCP server's working directory, "
+            "which is usually not the caller's location, so prefer 'all:<dir>'."
+        ),
     )
     app: str = Field(
         description="The application type. Built-in options are 'lammps-kk', 'vasp', 'python' and 'julia'. Custom apps may also be available.",
     )
     config: str = Field(
-        description="The name of the configuration to use. Options are 'crux', 'polaris', 'sophia', 'aurora-gpu' and 'aurora-tile'",
+        description="The name of the configuration to use. Options are 'polaris', 'sophia', 'crux', 'aurora-tile', 'aurora-gpu', 'lcrc-swing', 'lcrc-improv', 'pinnacles-cenvalarc', 'perlmutter-gpu', 'perlmutter-cpu' and 'perlmutter-gpu-srun'",
     )
     tag: Optional[str] = Field(
         default=None,
@@ -66,7 +70,7 @@ class AddJobSchema(BaseModel):
     )
     status: str = Field(
         default="Ready",
-        description="Initial status for the job(s). Valid statuses: Ready, Done, Failed, Restart, Running, Submitted, Warning.",
+        description="Initial status for the job(s). Valid statuses: Ready, Done, Failed, Killed, Restart, Running, Submitted, Resubmitted, Warning.",
     )
 
 
@@ -152,7 +156,7 @@ class QSubSchema(BaseModel):
     """Schema for generating and submitting a PBS job via ParslBox."""
 
     config: str = Field(
-        description="The name of the configuration to use. Options are 'crux', 'polaris', 'sophia', 'aurora-gpu' and 'aurora-tile'",
+        description="The name of the configuration to use. Options are 'polaris', 'sophia', 'crux', 'aurora-tile', 'aurora-gpu', 'lcrc-swing', 'lcrc-improv', 'pinnacles-cenvalarc', 'perlmutter-gpu', 'perlmutter-cpu' and 'perlmutter-gpu-srun'",
     )
 
     job_name: str = Field(
@@ -209,6 +213,18 @@ class QSubSchema(BaseModel):
         description=(
             "List of extra PBS scheduler directives (e.g., ['#PBS -l filesystems=home:eagle', '#PBS -l place=scatter']). "
             "Directives matching a template key override it; new directives are appended."
+        ),
+    )
+
+    respawn: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Enable the self-respawn chain. The integer is the number of remaining "
+            "auto-resubmissions; decremented each link. At walltime the orchestrator "
+            "marks in-flight jobs Restart and auto-submits the next link, continuing "
+            "until all jobs reach Done/Failed or respawn reaches 0. Pass None "
+            "(default) to disable the chain entirely."
         ),
     )
 
@@ -275,6 +291,18 @@ class SBatchSchema(BaseModel):
         ),
     )
 
+    respawn: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Enable the self-respawn chain. The integer is the number of remaining "
+            "auto-resubmissions; decremented each link. At walltime the orchestrator "
+            "marks in-flight jobs Restart and auto-submits the next link, continuing "
+            "until all jobs reach Done/Failed or respawn reaches 0. Pass None "
+            "(default) to disable the chain entirely."
+        ),
+    )
+
 
 class CancelJobSchema(BaseModel):
     """Schema for gracefully cancelling a running ParslBox batch job."""
@@ -289,7 +317,8 @@ class CancelJobSchema(BaseModel):
         description=(
             "Seconds between SIGTERM (sent via qsig / scancel --signal=TERM) "
             "and the hard kill. The grace period lets the running `pbx run` "
-            "orchestrator mark in-flight jobs as Killed in the database before "
+            "orchestrator reconcile its in-flight jobs in the database "
+            "(Running→Killed, Submitted→Ready, Resubmitted→Restart) before "
             "SIGKILL. Default: 30."
         ),
     )
@@ -312,7 +341,7 @@ class UpdateJobSchema(BaseModel):
 
     status: Optional[str] = Field(
         default=None,
-        description="New status for the job. Valid statuses: Ready, Done, Failed, Restart, Running, Submitted, Warning.",
+        description="New status for the job. Valid statuses: Ready, Done, Failed, Killed, Restart, Running, Submitted, Resubmitted, Warning.",
     )
 
     tag: Optional[str] = Field(

@@ -73,6 +73,14 @@ class ConfigGenerator:
 # Systems: {systems_str}
 # Apps: {apps_str}
 # ---------------------------------------------------------------------------
+# This file holds per-system and per-app settings (scheduler templates,
+# executable paths, MPI defaults, environment_setup blocks, ...).
+#
+# It does NOT hold pbx runtime environment variables (PBX_CONFIG_PATH,
+# PBX_DB_PATH, PBX_RUN_DELAY). Those are SHELL variables — set with
+# `export PBX_...=...` in your shell or profile, not here. Run `pbx config`
+# in a fresh shell for a copy-paste-ready export block.
+# ---------------------------------------------------------------------------
 '''
 
     def _generate_schedulers(self) -> str:

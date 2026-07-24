@@ -355,13 +355,20 @@ def validate_paths(paths: List[str]) -> Tuple[List[Path], List[Tuple[str, str]]]
     paths_to_add: List[Path] = []
     failed_jobs: List[Tuple[str, str]] = []
     
-    if len(paths) == 1 and paths[0].lower() == 'all':
-        current_dir = Path.cwd()
-        subdirectories = [p for p in current_dir.iterdir() if p.is_dir()]
-        
+    token = paths[0].lower() if len(paths) == 1 else None
+    if token == 'all' or (token is not None and token.startswith('all:')):
+        if token == 'all':
+            base_dir = Path.cwd()
+        else:
+            base_dir = Path(paths[0][4:]).expanduser()
+
+        if not base_dir.is_dir():
+            raise ValidationError(f"Base directory '{base_dir}' does not exist or is not a directory")
+
+        subdirectories = [p for p in base_dir.iterdir() if p.is_dir()]
         if not subdirectories:
-            raise ValidationError("No subdirectories found in the current directory")
-            
+            raise ValidationError(f"No subdirectories found in '{base_dir}'")
+
         paths_to_add = [p.resolve() for p in subdirectories]
     else:
         # Validate user-provided paths - collect failures instead of raising immediately

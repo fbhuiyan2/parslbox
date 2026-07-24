@@ -12,7 +12,7 @@ from typing import List, Dict, Optional, TYPE_CHECKING
 from .models import NodeResource, JobResourceSpec, ResourceAssignment, create_job_resource_spec
 from .exceptions import InsufficientResources, JobNotFound, InvalidResourceSpec
 from .cpu_affinity import CPUAffinityManager
-from .node_failure_tracker import NodeFailureTracker
+from .node_failure_tracker import NodeFailureTracker, NodeHealth
 from .job_tracker import JobTracker
 
 if TYPE_CHECKING:
@@ -61,9 +61,6 @@ class ResourceManager:
         
         # Initialize nodes from system configuration
         self._initialize_nodes()
-        
-        logger.info(f"Initialized resource manager with {len(self.nodes)} nodes")
-        logger.info(f"Fault tolerance: max_failures={max_failures}, quarantine_duration={quarantine_duration}s")
     
     def _initialize_nodes(self) -> None:
         """Initialize node resources from system configuration."""
@@ -200,8 +197,9 @@ class ResourceManager:
             return assignment
             
         except InsufficientResources:
-            # Add to backlog using centralized method
-            self.add_to_backlog(resource_spec.job_id)
+            # No side effects here: the caller decides what to do with a job
+            # that doesn't fit (static → keep in backlog; dynamic → revert the
+            # claim). Silently backlogging here conflated the two modes.
             raise
     
     def _validate_resource_spec(self, spec: JobResourceSpec) -> None:
@@ -517,13 +515,28 @@ class ResourceManager:
     def add_to_backlog(self, job_id: int) -> None:
         """
         Add a job to the backlog queue.
-        
+
         Args:
             job_id: The job ID to add to backlog
         """
         if job_id not in self._backlogged_jobs_set:
             self._backlogged_jobs_set.add(job_id)
-            logger.info(f"Job {job_id} added to backlog")
+
+    def free_node_capacity(self) -> int:
+        """Lax, node-level count of how many more jobs could currently be placed.
+
+        Counts healthy nodes with any free capacity (CPU headroom or a free
+        GPU). Used ONLY to bound the dispatch pick so we don't claim the whole
+        Ready pool — `assign_resources` remains the real fit authority, so this
+        number is deliberately coarse (it ignores exact sub-node packing).
+        """
+        capacity = 0
+        for node in self.nodes:
+            if not node.health_tracker.can_accept_jobs():
+                continue
+            if node.cpu_occupancy < 1.0 or len(node.available_gpu_ids) > 0:
+                capacity += 1
+        return capacity
 
     
     def free_resources(self, job_id: int) -> None:
@@ -690,21 +703,53 @@ class ResourceManager:
         if job_id not in self.job_assignments:
             logger.warning(f"Cannot record failure for job {job_id}: no resource assignment found")
             return
-        
+
         assignment = self.job_assignments[job_id]
-        
-        # Record failure for each node used by the job
+
+        # Record the failure against every node the job used, then emit ONE
+        # aggregated line — a multi-node job used to log a warning per node.
+        counted_nodes = 0
+        newly_suspected = []
+        newly_quarantined = []
+        error_type = None
         for node_id in assignment.node_ids:
             node = self._get_node_by_id(node_id)
-            if node:
-                # Record failure in node's health tracker
-                should_quarantine = node.health_tracker.record_failure(error_message)
-                
-                if should_quarantine:
-                    logger.error(f"Node {node_id} ({node.hostname}) quarantined after job {job_id} failure")
-                    
-                    # Also record in the centralized failure tracker
-                    self.failure_tracker.record_job_failure(node_id, job_id, error_message)
+            if not node:
+                continue
+            outcome = node.health_tracker.record_failure(job_id, error_message)
+            error_type = outcome.error_type
+            if outcome.counted:
+                counted_nodes += 1
+            if (outcome.old_status != NodeHealth.QUARANTINED
+                    and outcome.new_status == NodeHealth.QUARANTINED):
+                newly_quarantined.append(node_id)
+                # Keep the centralized tracker in sync for the system summary.
+                self.failure_tracker.record_job_failure(node_id, job_id, error_message)
+            elif (outcome.old_status == NodeHealth.HEALTHY
+                    and outcome.new_status == NodeHealth.SUSPECTED):
+                newly_suspected.append(node_id)
+
+        et = error_type.value if error_type else "unknown"
+        if newly_quarantined:
+            msg = (f"Job {job_id} failed ({et}); quarantined {len(newly_quarantined)} "
+                   f"node(s) after distinct-job failures: {newly_quarantined}")
+            if newly_suspected:
+                msg += f"; {len(newly_suspected)} node(s) now suspected"
+            logger.error(msg)
+        elif newly_suspected:
+            logger.warning(
+                f"Job {job_id} failed ({et}); {len(newly_suspected)} node(s) now "
+                f"suspected (multiple distinct jobs failed there): {newly_suspected}"
+            )
+        elif counted_nodes:
+            logger.info(
+                f"Job {job_id} failed ({et}); recorded against {counted_nodes} node(s), "
+                f"none escalated (a single job cannot quarantine a node)"
+            )
+        else:
+            logger.info(
+                f"Job {job_id} failed ({et}); treated as job-specific — node health unaffected"
+            )
     
     def record_job_success(self, job_id: int) -> None:
         """
@@ -839,10 +884,8 @@ class ResourceManager:
             logger.warning(f"Node {node_id} is not quarantined (status: {node.health_tracker.health_status.value})")
             return False
         
-        node.health_tracker.health_status = node.health_tracker.health_status.HEALTHY
-        node.health_tracker.consecutive_failures = 0
-        node.health_tracker.quarantine_start_time = None
-        
+        node.health_tracker.reset_health()
+
         # Also record in centralized tracker
         self.failure_tracker.force_recover_node(node_id)
         
