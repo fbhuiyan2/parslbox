@@ -8,7 +8,7 @@ ParslBox ships with built-in support for a small set of HPC apps, and lets you r
 |---|---|---|---|---|---|
 | **LAMMPS (Kokkos)** | `lammps-kk` | Yes | Yes | `in.lammps` | "Total wall time:" in `log.lammps` |
 | **VASP** | `vasp` | Yes | No | — | Auto-selects `vasp_gpu` or `vasp_std` based on system |
-| **ORCA** | `orca` | Internal (bundled OpenMPI) | Yes | `input.inp` | "ORCA TERMINATED NORMALLY" in `.out` files |
+| **ORCA** | `orca` | Internal (bundled OpenMPI) | Yes | `input.inp` | `****ORCA TERMINATED NORMALLY****` in any `.out` file |
 | **Python** | `python` | Yes (1 rank/node default) | Yes | — | Reads `PBX_JOB_STATUS_REPORT` via `report_status()` |
 | **Julia** | `julia` | Yes (1 rank/node default) | Yes | — | Reads `PBX_JOB_STATUS_REPORT` |
 
@@ -109,6 +109,8 @@ Optional overrides:
 | `preprocess(job_id, job_path, db_path, app_config, config_name)` | One-time setup (file copies, validation) before submission |
 | `check_success(job_id, job_path, db_path, error_message)` | Custom success determination beyond status file / exit code |
 | `postprocess(job_id, job_path, db_path)` | Cleanup or analysis after the job finishes |
+| `restart(job_dict) -> dict \| None` | Resume a `Restart`-status job. Base raises `NotImplementedError`; override to patch `in_file`/`env_file`/`tag` and re-run, return `None`/`{}` to re-run as-is, or leave unimplemented to mark the job `Failed`. See [`pbx-run-details.md`](pbx-run-details.md). |
+| `min_remaining_walltime(job_dict) -> int` | Minimum remaining batch walltime (seconds) required to dispatch a fresh job; default `0` (no gate). |
 | `RUN_HOOKS_ON_COMPUTE: bool` | When `True`, `preprocess`/`postprocess` run on the assigned compute node via a subprocess wrapped with the resource launcher, instead of in-process in `pbx run` on the head node. Default `False`. Does not affect `restart()`. |
 
 Set `RUN_HOOKS_ON_COMPUTE = True` when your hooks do non-trivial work (file staging on node-local scratch, NumPy/HDF5 post-analysis, anything that imports the heavy modules the job uses). The app class is re-instantiated on the compute node, so its `__init__` must be side-effect-free. The hook's return value (the status string from `postprocess`) is communicated back via a `PBX_HOOK_RETURN` file in the job directory, mirroring the `PBX_JOB_STATUS_REPORT` pattern.

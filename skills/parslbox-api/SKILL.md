@@ -34,7 +34,7 @@ pbx = ParslBox(config_path="...", db_path="...")
 | `sbatch(...)` | `dict` | Same as `qsub` for SLURM. Same `respawn` semantics. |
 | `qdel(jobid, grace=30)` | `dict` | Graceful PBS cancel (SIGTERM → grace → `qdel`). Returns dict with `success`, `reconciled_count`, etc. |
 | `scancel(jobid, grace=30)` | `dict` | Same for SLURM. |
-| `run(...)` | — | Run the orchestrator in-process (rarely needed — `qsub`/`sbatch` wrap this for you). |
+| `run(...)` | — | Reserved / not implemented (raises `NotImplementedError`). Use the `pbx run` CLI for in-allocation execution. |
 
 ## Exceptions
 

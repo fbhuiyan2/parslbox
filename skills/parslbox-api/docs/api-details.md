@@ -227,7 +227,7 @@ Pass extra PBS directives verbatim:
 pbx.qsub(
     config="polaris", job_name="x", queue="debug",
     select="1", walltime=30, project="MYPROJ",
-    sched_opts=["-l filesystems=home:eagle", "-M me@example.com", "-m bea"],
+    sched_opts=["#PBS -l filesystems=home:eagle", "#PBS -M me@example.com", "#PBS -m bea"],
 )
 ```
 
@@ -258,7 +258,7 @@ result = pbx.sbatch(
     project="m1234",
     apps=["lammps-kk", "vasp"],
     tags=["prod-*"],
-    sched_opts=["--qos=regular", "--constraint=gpu"],
+    sched_opts=["#SBATCH --qos=regular", "#SBATCH --constraint=gpu"],
     respawn=2,  # optional self-respawn chain
 )
 print(result["job_id"], result["run_dir"])

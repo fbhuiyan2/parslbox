@@ -24,7 +24,7 @@ ParslBox provides a CLI (`pbx`), a Python API, and an MCP server for AI-agent in
   - CPU-GPU affinity-aware placement
   - MPI backends: MPICH, OpenMPI, srun
 - **Scheduler support:** PBS (`pbx qsub`) and SLURM (`pbx sbatch`) with configurable `--sched-opts`
-- **Pre-configured HPC systems:** Polaris, Aurora (GPU & Tile modes), Sophia, Crux, LCRC Swing, LCRC Improv, Pinnacles-CenvalArc, Perlmutter (GPU & CPU), plus `*-mpi`/`*-srun` launcher variants for large-scale (>10k worker) runs
+- **Pre-configured HPC systems:** Polaris, Aurora (GPU & Tile modes), Sophia, Crux, LCRC Swing, LCRC Improv, Pinnacles-CenvalArc, Perlmutter (GPU & CPU), plus per-node launcher variants (`aurora-tile`'s `MpiExecLauncher`, `perlmutter-gpu-srun`'s `SrunLauncher`) for large-scale (>10k worker) runs
 - **Dynamic job discovery:** `--dynamic` (default) re-queries the DB for runnable jobs on every dispatch pass. New jobs matching the same `--apps`/`--tags` filters, and jobs the user flips back to `Ready`/`Restart` from another terminal (via `pbx update --status … <ids>`), are picked up automatically — jobs re-dispatched via `Restart` go through the app's `restart()` hook just like any other `Restart` job. Because each run atomically claims only what it dispatches, multiple `pbx run` allocations can safely share one DB in dynamic mode. Use `--static` for collect-once behavior (claim the runnable set once up front; no re-query)
 - **Self-respawn chain:** `pbx qsub --respawn N` produces a self-perpetuating submission chain that auto-resubmits at every walltime boundary. Running jobs preempted at walltime are marked `Restart`; the next link calls each app's `restart()` hook lazily as each `Restart` job is dispatched, so apps can decide how to resume. See [`docs/pbx-run-details.md`](docs/pbx-run-details.md)
 - **Fault tolerance:** Node health tracking, quarantine, and auto-recovery
@@ -135,11 +135,11 @@ Submit via PBS or SLURM:
 ```bash
 # Short flags
 pbx qsub -c sophia -N myrun -q gpu --select 2 -T 90 -A myproject -a lammps-kk -t production
-pbx sbatch -c polaris -N myrun -p gpu --nodes 2 -T 90 -A myproject -a lammps-kk -t production
+pbx sbatch -c perlmutter-gpu -N myrun -q regular --select 2 -T 90 -A myproject -a lammps-kk -t production
 
 # Long flags
 pbx qsub --config sophia --job-name myrun --queue gpu --select 2 --walltime 90 --project myproject --apps lammps-kk --tags production
-pbx sbatch --config polaris --job-name myrun --partition gpu --nodes 2 --walltime 90 --account myproject --apps lammps-kk --tags production
+pbx sbatch --config perlmutter-gpu --job-name myrun --queue regular --select 2 --walltime 90 --project myproject --apps lammps-kk --tags production
 
 # Glob tags: use `*` to match a substring. Quote to prevent shell expansion.
 pbx qsub -c sophia -N myrun -q gpu --select 2 -T 90 -A myproject -a lammps-kk -t '*nomix,prod-run'
