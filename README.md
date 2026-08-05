@@ -13,6 +13,8 @@ Your autopilot for HPC job orchestration. ParslBox manages multi-application wor
 
 ParslBox provides a CLI (`pbx`), a Python API, and an MCP server for AI-agent integration.
 
+Check out a quick [demo!](https://www.youtube.com/watch?v=DOu2VRQMVRU)
+
 ## Highlights
 
 - **Job database:** Persistent SQLite tracking for job paths, resource requirements, dependencies, and status across sessions. Multiple isolated databases via `PBX_DB_PATH`
