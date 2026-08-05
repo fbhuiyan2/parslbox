@@ -55,8 +55,8 @@ Notes:
 
 ```bash
 # Single LAMMPS job (long + short flags)
-pbx add /path/to/sim --app lammps --config polaris --ngpus 2 --tag run1
-pbx add /path/to/sim -a lammps -c polaris -g 2 -t run1
+pbx add /path/to/sim --app lammps-kk --config polaris --ngpus 2 --tag run1
+pbx add /path/to/sim -a lammps-kk -c polaris -g 2 -t run1
 
 # All subdirectories as VASP jobs — cwd, or an explicit base dir
 pbx add all -a vasp -c polaris -t ManyVaspCalc
@@ -91,8 +91,8 @@ Auto-paginates (first 10 + last 10) when more than 25 jobs match.
 
 ```bash
 pbx ls
-pbx ls --status Running --app lammps --tag production
-pbx ls -s Running -a lammps -t production
+pbx ls --status Running --app lammps-kk --tag production
+pbx ls -s Running -a lammps-kk -t production
 pbx ls --all
 pbx ls -n 15        # first 15
 pbx ls -n -20       # last 20
@@ -171,7 +171,7 @@ pbx filter -s failed -a lammps -t test -p /path/part -i input.lammps
 
 # Exclude composition
 pbx filter -s Ready --xtag '*test'
-pbx filter -a lammps --xapp vasp --xstatus Failed
+pbx filter -a lammps-kk --xapp vasp --xstatus Failed
 
 # Compose with other commands
 pbx rm   $(pbx filter --status done)
@@ -217,8 +217,11 @@ pbx rm $(pbx filter --status done)
 
 Generate a `submit.sh` and submit it to PBS / SLURM. Both commands share most flags.
 
-**Required**:
-- `--config/-c`, `--job-name/-N`, `--queue/-q` (PBS) or `--partition/-p` (SLURM), `--select` (PBS) or `--nodes` (SLURM), `--walltime/-T`, `--project/-A` or `--account/-A`
+**Required**: `--config/-c`, `--job-name/-N`, `--queue/-q`, `--select`, `--walltime/-T`, `--project/-A`
+
+Both commands share identical flag names — there is no `--partition`, `--nodes`, or `--account`. The meaning of two flags differs by scheduler:
+- `--queue/-q` — PBS queue name (qsub) / SLURM partition name (sbatch).
+- `--select` — PBS select spec (qsub), e.g. `4` or `2:ncpus=32:ngpus=4` / number of nodes (sbatch), e.g. `2`.
 
 **Optional**: `--run-dir`, `--apps/-a`, `--tags/-t`, `--retries`, `--sched-opts`, `--dynamic`/`--static`, `--respawn N`, `--loglevel`
 
@@ -234,23 +237,23 @@ Notes:
 
 ```bash
 # Short flags
-pbx qsub   -c sophia  -N myrun -q gpu --select 2 -T 90 -A myproject -a lammps -t production
-pbx sbatch -c polaris -N myrun -p gpu --nodes 2  -T 90 -A myproject -a lammps -t production
+pbx qsub   -c sophia        -N myrun -q gpu     --select 2 -T 90 -A myproject -a lammps-kk -t production
+pbx sbatch -c perlmutter-gpu -N myrun -q regular --select 2 -T 90 -A myproject -a lammps-kk -t production
 
 # Long flags
 pbx qsub --config sophia --job-name myrun --queue gpu --select 2 \
-  --walltime 90 --project myproject --apps lammps --tags production
-pbx sbatch --config polaris --job-name myrun --partition gpu --nodes 2 \
-  --walltime 90 --account myproject --apps lammps --tags production
+  --walltime 90 --project myproject --apps lammps-kk --tags production
+pbx sbatch --config perlmutter-gpu --job-name myrun --queue regular --select 2 \
+  --walltime 90 --project myproject --apps lammps-kk --tags production
 
 # Tag glob (quote to dodge shell expansion)
-pbx qsub -c sophia -N myrun -q gpu --select 2 -T 90 -A myproject -a lammps -t '*nomix,prod-run'
+pbx qsub -c sophia -N myrun -q gpu --select 2 -T 90 -A myproject -a lammps-kk -t '*nomix,prod-run'
 
 # Extra scheduler directives (full directive lines, repeatable)
 pbx qsub -c polaris -N myrun -q prod --select 4 -T 4h -A myproject \
   --sched-opts '#PBS -l filesystems=home:eagle' \
   --sched-opts '#PBS -l place=scatter'
-pbx sbatch -c perlmutter-gpu -N myrun -p regular --nodes 2 -T 2h -A m1234 \
+pbx sbatch -c perlmutter-gpu -N myrun -q regular --select 2 -T 2h -A m1234 \
   --sched-opts '#SBATCH --qos=regular' \
   --sched-opts '#SBATCH --constraint=gpu'
 
@@ -260,7 +263,7 @@ pbx qsub ... -T 4.25h  # 4h 15m
 pbx qsub ... -T 3.5d   # 3d 12h
 
 # Self-respawn chain (auto-resubmit at every walltime, up to 3 more times)
-pbx qsub -c sophia -N sweep -q gpu --select 4 -T 4h -A myproject -a lammps -t sweep \
+pbx qsub -c sophia -N sweep -q gpu --select 4 -T 4h -A myproject -a lammps-kk -t sweep \
   --respawn 3
 ```
 
