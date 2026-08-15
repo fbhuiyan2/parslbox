@@ -109,6 +109,10 @@ pbx.update_jobs(
 
 # Add / remove dependency edges without rewriting the parent list
 pbx.update_jobs(job_ids=[200], add_deps=[10, 11], rm_deps=[7])
+
+# Change app arguments (mirrors CLI --args). Rebuilds in_file as
+# "<base script> <app_args>", replacing any args already set.
+pbx.update_jobs(job_ids=[101, 102], app_args="-var T 300")
 ```
 
 ---

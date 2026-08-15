@@ -24,7 +24,7 @@ python -m parslbox.mcp.mcp_server --port 8080
 python -m parslbox.mcp.mcp_server --stdio
 ```
 
-Exposed tools: `add_jobs`, `submit_pbs_job`, `submit_slurm_job`, `cancel_pbs_job`, `cancel_slurm_job`, `remove_job`, `update_job`, `filter_jobs`, `list_jobs`, `get_job`, `get_jobs`.
+Exposed tools: `add_jobs`, `submit_pbs_job`, `submit_slurm_job`, `cancel_pbs_job`, `cancel_slurm_job`, `remove_jobs`, `update_job`, `filter_jobs`, `list_jobs`, `get_job`, `get_jobs`.
 
 For an HTTP client example, see [`examples/chemgraph_parslbox_example/`](../examples/chemgraph_parslbox_example/).
 

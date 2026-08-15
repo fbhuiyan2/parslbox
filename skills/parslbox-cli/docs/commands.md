@@ -41,7 +41,7 @@ pbx config /custom/path     # writes to custom path
 
 ## `pbx add`
 
-Add jobs to the database.
+Add jobs to the database. New IDs print as a compressed range (`✅ Added 5000 job(s), IDs: 1-5000`); failures are grouped by error message with the affected paths listed under each.
 
 **Required**: `--app/-a`, `--config/-c`
 **Resource**: `--ngpus/-g`, `--nnodes/-n`, `--nocc/-o`, `--ranks-per-node/-rpn`, `--mpiopts`
@@ -190,7 +190,9 @@ pbx info $(pbx filter -s Ready --xtag '*test')
 
 ## `pbx update`
 
-Update one or more job fields. Accepts ID ranges.
+Update one or more job fields. Accepts ID ranges as separate shell words (`pbx update 1-5 8 14-20`) — do not quote the whole list.
+
+Successful IDs print as compressed ranges (`1-5 8 14-20`). Failures are grouped by error message, one line per distinct error.
 
 **Fields**: `--status/-s`, `--tag/-t`, `--input/-i`, `--args`, `--envfile/-e`, `--ngpus/-g`, `--nnodes/-n`, `--nocc/-o`, `--ranks-per-node/-rpn`
 **Dependencies**: `--add_deps/--padd "8 9"`, `--rm_deps/--parm "7"`
@@ -300,4 +302,5 @@ Engine used by qsub/sbatch — not for direct use. Full runtime reference: [`pbx
 
 - `--dynamic` (default) re-queries the DB for runnable jobs each dispatch pass (and lets multiple runs share one DB); `--static` claims the runnable set once up front. Neither idles — a run exits when nothing runnable remains.
 - Triggers a graceful shutdown automatically before walltime (30s grace, 90s under `--respawn`) so in-flight jobs are reconciled cleanly: `Running` → `Killed` by default (or `Restart`/`Failed` under `--respawn`), and claimed-but-not-yet-running jobs revert to `Ready`/`Restart`.
+- `--walltime-seconds` (required) is injected by the generated batch script; it is what the shutdown timing above is measured against. `--flush-interval` (default 150s) controls how often buffered status updates are written to the DB.
 - `--respawn N` is set internally by `pbx qsub --respawn N` / `pbx sbatch --respawn N`. It turns on the walltime-time auto-resubmission step. Do not invoke `pbx run` with it directly — use `pbx qsub --respawn N`. The `restart()` hook runs lazily per-job as each `Restart`-status job is dispatched, at every `pbx run` invocation, regardless of `--respawn`.

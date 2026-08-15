@@ -28,7 +28,7 @@ pbx = ParslBox(config_path="...", db_path="...")
 | `filter_jobs(status=, app=, tag=, path=, in_file=, num_nodes=, exclude_status=, exclude_app=, exclude_tag=)` | `List[int]` | Just the job IDs matching the filters (note: IDs only, not full rows) |
 | `get_job(job_id)` | `dict` | Full row for one job |
 | `get_jobs_by_ids(ids)` | `List[dict]` | Full rows for a list of IDs |
-| `update_jobs(job_ids, status=, tag=, input_file=, ngpus=, env_file=, nnodes=, node_occupancy=, ranks_per_node=, add_deps=, rm_deps=)` | `(ids, failures, msg_log)` | Edit any of the listed fields. CLI `--args` is *not* a separate API param — append args to `input_file` instead. |
+| `update_jobs(job_ids, status=, tag=, input_file=, ngpus=, env_file=, nnodes=, node_occupancy=, ranks_per_node=, add_deps=, rm_deps=, app_args=)` | `(ids, failures, msg_log)` | Edit any of the listed fields. `app_args` mirrors CLI `--args`: it rebuilds each job's `in_file` as `<base script> <app_args>`, replacing any args already there. |
 | `remove_job(id)` / `remove_jobs(ids)` / `remove_all_jobs()` | `bool` / `int` / `int` | Delete |
 | `qsub(config, job_name, queue, select, walltime, project=, apps=, tags=, sched_opts=, respawn=, ...)` | `dict` | Build + submit a PBS batch. With `respawn=N` set, returns includes `respawn_template_file`. |
 | `sbatch(...)` | `dict` | Same as `qsub` for SLURM. Same `respawn` semantics. |

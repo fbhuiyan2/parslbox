@@ -72,6 +72,10 @@ class AddJobSchema(BaseModel):
         default="Ready",
         description="Initial status for the job(s). Valid statuses: Ready, Done, Failed, Killed, Restart, Running, Submitted, Resubmitted, Warning.",
     )
+    app_args: Optional[str] = Field(
+        default=None,
+        description="Extra arguments appended to the application command (e.g. '-var T 300'). Requires input_file — the job's input file becomes '<input_file> <app_args>'.",
+    )
 
 
 class FilterJobsSchema(BaseModel):
@@ -400,4 +404,9 @@ class UpdateJobSchema(BaseModel):
     rm_deps: Optional[List[int]] = Field(
         default=None,
         description="Parent job IDs to remove from dependencies.",
+    )
+
+    app_args: Optional[str] = Field(
+        default=None,
+        description="Extra arguments appended to the application command (e.g. '-var T 300'). Rebuilds the job's input file as '<base script> <app_args>', replacing any args already set. Combine with input_file to change the base script at the same time.",
     )

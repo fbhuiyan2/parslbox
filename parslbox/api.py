@@ -128,6 +128,7 @@ class ParslBox:
         parents: Optional[List[int]] = None,
         parent_tag: Optional[str] = None,
         status: str = "Ready",
+        app_args: Optional[str] = None,
     ) -> Tuple[List[int], List[Tuple[str, str]], Dict[str, List[str]]]:
         """
         Add one or more jobs to the database.
@@ -147,6 +148,7 @@ class ParslBox:
             parents: List of parent job IDs
             parent_tag: Tag to wait for (all jobs with this tag must be Done)
             status: Initial job status (default: 'Ready')
+            app_args: Extra arguments appended to the application command (requires input_file)
 
         Returns:
             Tuple of (successful_job_ids, failed_jobs, msg_log) where:
@@ -185,6 +187,7 @@ class ParslBox:
                 parents=parents,
                 parent_tag=parent_tag,
                 status=status,
+                app_args=app_args,
                 db_path=self.db_path,
             )
             return successful_job_ids, failed_jobs, msg_log
@@ -242,6 +245,7 @@ class ParslBox:
         ranks_per_node: Optional[int] = None,
         add_deps: Optional[List[int]] = None,
         rm_deps: Optional[List[int]] = None,
+        app_args: Optional[str] = None,
     ) -> Tuple[List[int], List[Tuple[int, str]], Dict[str, List[str]]]:
         """
         Update one or more jobs' fields.
@@ -258,6 +262,8 @@ class ParslBox:
             ranks_per_node: New ranks per node
             add_deps: Parent job IDs to add
             rm_deps: Parent job IDs to remove
+            app_args: Extra arguments appended to the application command; rebuilds
+                each job's in_file from its existing base script
 
         Returns:
             Tuple of (successful_job_ids, failed_jobs, msg_log) where:
@@ -295,6 +301,7 @@ class ParslBox:
                 ranks_per_node=ranks_per_node,
                 add_deps=add_deps,
                 rm_deps=rm_deps,
+                app_args=app_args,
                 db_path=self.db_path,
             )
             return updated_job_ids, failed_jobs, msg_log

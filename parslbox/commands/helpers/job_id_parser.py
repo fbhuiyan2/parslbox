@@ -1,4 +1,41 @@
-from typing import List
+from typing import Dict, Iterable, List, Tuple
+
+
+def format_job_ids(job_ids: Iterable[int]) -> str:
+    """Compress job IDs into range notation. Inverse of `parse_job_ids`.
+
+    [1,2,3,4,5]        -> "1-5"
+    [1,2,3,8,14,15,16] -> "1-3 8 14-16"
+
+    Space-separated so the result can be pasted straight back into
+    `pbx update`/`rm`/`info` (which take ranges as separate shell words).
+    """
+    ids = sorted(set(job_ids))
+    if not ids:
+        return ""
+
+    tokens = []
+    start = prev = ids[0]
+    for jid in ids[1:]:
+        if jid == prev + 1:
+            prev = jid
+            continue
+        tokens.append(str(start) if start == prev else f"{start}-{prev}")
+        start = prev = jid
+    tokens.append(str(start) if start == prev else f"{start}-{prev}")
+    return " ".join(tokens)
+
+
+def group_failures(failed: List[Tuple[object, str]]) -> Dict[str, list]:
+    """Group (key, error_message) failure tuples by error message.
+
+    Preserves first-seen message order. Callers render the keys themselves —
+    job IDs compress via `format_job_ids`, paths are listed verbatim.
+    """
+    grouped: Dict[str, list] = {}
+    for key, msg in failed:
+        grouped.setdefault(msg, []).append(key)
+    return grouped
 
 
 def parse_job_ids(raw_ids: List[str]) -> List[int]:

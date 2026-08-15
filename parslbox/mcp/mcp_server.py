@@ -1,6 +1,7 @@
 from mcp.server.fastmcp import FastMCP
 
 from parslbox.api import ParslBox
+from parslbox.commands.helpers.job_id_parser import format_job_ids, group_failures
 from parslbox.mcp.schemas import (
     AddJobSchema,
     CancelJobSchema,
@@ -79,12 +80,13 @@ def add_jobs(params: AddJobSchema) -> str:
     response_parts = []
     
     if successful_job_ids:
-        response_parts.append(f"Successfully added {len(successful_job_ids)} job(s) with IDs: {', '.join(map(str, successful_job_ids))}")
-    
+        response_parts.append(f"Successfully added {len(successful_job_ids)} job(s), IDs: {format_job_ids(successful_job_ids)}")
+
     if failed_jobs:
         response_parts.append(f"Failed to add {len(failed_jobs)} job(s):")
-        for path, error in failed_jobs:
-            response_parts.append(f"  - {path}: {error}")
+        for error, paths in group_failures(failed_jobs).items():
+            response_parts.append(f"[{len(paths)} job(s)] {error}:")
+            response_parts.extend(f"  {p}" for p in sorted(paths))
     
     # Add warnings and info messages
     for warning in msg_log.get('warnings', []):

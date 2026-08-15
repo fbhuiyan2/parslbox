@@ -224,7 +224,7 @@ class TestAddCommand:
             ])
             
             assert result.exit_code == 0
-            assert "✅ Added 1 job(s) with IDs:" in result.stdout
+            assert "✅ Added 1 job(s), IDs:" in result.stdout
             assert "Resource specification: n:1-r:2-g:2-nocc:NA" in result.stdout
             
             # Verify database entry
@@ -270,7 +270,7 @@ class TestAddCommand:
             ])
             
             assert result.exit_code == 0
-            assert "✅ Added 1 job(s) with IDs:" in result.stdout
+            assert "✅ Added 1 job(s), IDs:" in result.stdout
             assert "Resource specification: n:1-r:1-g:0-nocc:0.5" in result.stdout
 
             # Verify database entry
@@ -303,7 +303,7 @@ class TestAddCommand:
             ])
             
             assert result.exit_code == 0
-            assert "✅ Added 1 job(s) with IDs:" in result.stdout
+            assert "✅ Added 1 job(s), IDs:" in result.stdout
             assert "Multi-node job will use 8 total GPUs (4 per node)" in result.stdout
             assert "Resource specification: n:2-r:8-g:8-nocc:NA" in result.stdout
             
@@ -473,7 +473,8 @@ class TestAddCommand:
             
             assert result.exit_code == 1
             assert "❌ Failed to add 1 job(s):" in result.stdout
-            assert "- /nonexistent/path: Path '/nonexistent/path' does not exist" in result.stdout
+            assert "[1 job(s)] Path '/nonexistent/path' does not exist:" in result.stdout
+            assert "/nonexistent/path" in result.stdout
     
     def test_duplicate_job_path(self, temp_db, temp_job_dirs, mock_system_config):
         """Test handling of duplicate job paths."""
@@ -690,7 +691,7 @@ class TestAddCommand:
             ])
 
             assert result.exit_code == 0
-            assert "✅ Added 1 job(s) with IDs:" in result.stdout
+            assert "✅ Added 1 job(s), IDs:" in result.stdout
 
             # Verify in_file contains script name + args
             jobs = database.get_jobs(temp_db)

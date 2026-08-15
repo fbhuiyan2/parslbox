@@ -16,8 +16,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`-n` / `--nnodes` on `pbx ls` now filters by node count**, matching its meaning on `add`, `update`, and `info`. This is a silent semantic change: `pbx ls -n 10` used to show the first 10 jobs and now shows jobs requiring 10 nodes.
 - `pbx ls` sets `ignore_unknown_options` so `-20` parses as a count rather than a flag; unparseable counts (including mistyped flags) raise a clear `Invalid count` error.
 
+#### Bulk `add` / `update` output no longer scales with job count
+- **Job IDs print as compressed ranges** — `✅ Added 5000 job(s), IDs: 1-5000` instead of a 29,000-character comma list. Non-contiguous sets collapse to `1-3 8 14-16`, which pastes straight back into `pbx update`/`rm`/`info`. Applies to `pbx add`, `pbx update`, the `--nocc` warning, and the MCP `add_jobs` response.
+- **Failures group by error message** instead of repeating it per job:
+  - `pbx update` — `[4990 job(s)] 1-4990: <message>`, one line per distinct error
+  - `pbx add` — `[5000 job(s)] <message>:` followed by the affected paths, sorted
+- **`update --args` emits one summary line per resulting input file** rather than one per job, and writes each group in a single DB call instead of one call per job.
+- **Update failure messages no longer embed the job ID** (it is redundant with the ID list, and prevented grouping). `pbx info` output is unchanged.
+- Measured at 5,000 jobs: `add` success 29,100 → 211 bytes, `update` success 28,931 → 46 bytes, duplicate-`add` failures 524,024 → 94,120 bytes.
+
+### Fixed
+
+- **`pbx update --args` reported "No jobs were updated" after successfully updating.** `app_args` was missing from the `non_dependency_updates` check in `commands/update.py`, so an args-only update wrote to the DB but returned an empty `updated_job_ids`. The IDs are now counted, and `update_jobs` returns them sorted rather than in `set()` order.
+- **`skills/parslbox-cli/SKILL.md` documented a job-ID syntax that does not work.** Positional ID ranges must be separate shell words (`pbx update 1-5 8 14-20`); quoting a multi-token list (`"1-5 8 14-20"`) fails to parse. `add --parents` is the opposite and does require quotes.
+
 ### Added
 
+- **`format_job_ids` / `group_failures`** in `commands/helpers/job_id_parser.py` — range compression (inverse of `parse_job_ids`) and failure grouping, shared by CLI and MCP.
+- **`tests/test_job_id_format.py`** — range compression, round-trip through `parse_job_ids`, failure grouping, and the resulting `add`/`update` output.
+- **`app_args` exposed on the API and MCP.** It was CLI-only: `pbx add --args` / `pbx update --args` reached the shared core, but `ParslBox.add_jobs`, `ParslBox.update_jobs`, `AddJobSchema` and `UpdateJobSchema` had no such parameter, so no API or MCP caller could set app arguments. Now available on all four.
+- **Layer-alignment guard tests** in `tests/test_mcp_server.py` — assert every MCP `AddJobSchema`/`UpdateJobSchema` field exists as an API parameter, so a schema field the API cannot accept fails the suite.
 - **`num_nodes` filter across every layer** — `database.get_jobs`, `ParslBox.list_jobs`, `ParslBox.filter_jobs`, the `list_jobs` / `filter_jobs` MCP schemas, and `pbx filter -n/--nnodes`. Exact match.
 - **`tests/test_ls_command.py`** — first test coverage for `pbx ls` (count parsing, pagination, node filter, and the shared-layer/API/MCP wiring).
 
