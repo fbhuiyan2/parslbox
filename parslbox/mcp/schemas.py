@@ -97,6 +97,10 @@ class FilterJobsSchema(BaseModel):
         default=None,
         description="Filter jobs by input file (partial match).",
     )
+    num_nodes: Optional[int] = Field(
+        default=None,
+        description="Filter jobs by number of nodes required (exact match).",
+    )
     exclude_status: Optional[str] = Field(
         default=None,
         description="Drop jobs with this status.",
@@ -133,6 +137,10 @@ class ListJobsSchema(BaseModel):
     in_file: Optional[str] = Field(
         default=None,
         description="Filter jobs by input file (partial match).",
+    )
+    num_nodes: Optional[int] = Field(
+        default=None,
+        description="Filter jobs by number of nodes required (exact match).",
     )
 
 

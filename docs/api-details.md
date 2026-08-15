@@ -127,9 +127,12 @@ for j in ready_lammps:
 # Substring match on path / input file
 in_scratch = pbx.list_jobs(path="/scratch")
 plot_jobs  = pbx.list_jobs(in_file="plot.py")
+
+# Exact node count
+two_node = pbx.list_jobs(num_nodes=2)
 ```
 
-> `list_jobs` filters use exact match for `status`/`app`/`tag` and substring match for `path`/`in_file`. For **tag glob support** (`*test`, `prod*`, `*3c*`) and exclude filters, use `filter_jobs`.
+> `list_jobs` filters use exact match for `status`/`app`/`tag`/`num_nodes` and substring match for `path`/`in_file`. For **tag glob support** (`*test`, `prod*`, `*3c*`) and exclude filters, use `filter_jobs`.
 
 ---
 

@@ -79,23 +79,30 @@ pbx add /path/to/calc2 -a vasp -c polaris --parent-tag stage1
 
 List jobs as a Rich table.
 
+Takes an optional positional `COUNT`: `N` for the first N rows, `-N` for the last N, or
+`all` for everything. Omit it and the table auto-paginates (first 10 + last 10) when more
+than 25 jobs match.
+
+| Argument | Purpose |
+|---|---|
+| `COUNT` | `N` first N, `-N` last N, `all` everything; omit for the paginated view |
+
 | Flag | Short | Purpose |
 |---|---|---|
 | `--status` | `-s` | filter by status |
 | `--app` | `-a` | filter by app |
 | `--tag` | `-t` | filter by tag (supports `*` glob) |
-| `--all` | — | show all rows |
-| `-n N` | — | first N rows; negative for last N; `0` for all |
-
-Auto-paginates (first 10 + last 10) when more than 25 jobs match.
+| `--nnodes` | `-n` | filter by number of nodes (exact match) |
 
 ```bash
 pbx ls
+pbx ls all
+pbx ls 15           # first 15
+pbx ls -20          # last 20
 pbx ls --status Running --app lammps-kk --tag production
 pbx ls -s Running -a lammps-kk -t production
-pbx ls --all
-pbx ls -n 15        # first 15
-pbx ls -n -20       # last 20
+pbx ls -n 2         # only 2-node jobs
+pbx ls -20 -n 2     # last 20 of the 2-node jobs
 pbx ls -t '*test'   # tag glob
 ```
 
@@ -154,6 +161,7 @@ Output space-separated job IDs for shell composition. Silent on no match.
 | `--tag` | `-t` | exact, or `*` glob (e.g., `'*prod'`) |
 | `--path` | `-p` | substring |
 | `--in-file` | `-i` | substring |
+| `--nnodes` | `-n` | exact number of nodes |
 
 **Exclude**:
 

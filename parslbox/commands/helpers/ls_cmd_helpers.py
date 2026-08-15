@@ -84,42 +84,70 @@ def format_job_id_with_parents(job_id: int, parents: List[int]) -> str:
         return f"{job_id} ({first_parents},...,{last_parent})"
 
 
-def select_jobs_to_display(job_list: List[Dict[str, Any]], all_jobs_flag: bool, n_flag: Optional[int]) -> Tuple[List[Any], List[str]]:
+def parse_ls_count(raw: Optional[str]) -> Tuple[bool, Optional[int]]:
     """
-    Select which jobs to display based on flags and return info messages.
+    Parse the optional positional count argument of `pbx ls`.
+
+    Accepts 'all', a positive integer (first N) or a negative integer (last N).
+    Returns: (show_all, count)
+
+    Raises ValueError with a user-facing message on anything else. Because the
+    command enables `ignore_unknown_options` (so `-20` parses as an argument
+    rather than a flag), a mistyped flag lands here as the count — rejecting
+    unparseable values is what turns it back into a clear error.
+    """
+    if raw is None:
+        return False, None
+
+    token = raw.strip()
+    if token.lower() == "all":
+        return True, None
+
+    try:
+        count = int(token)
+    except ValueError:
+        raise ValueError(
+            f"Invalid count '{raw}'. Expected an integer (e.g. 10, -20) or 'all'."
+        )
+
+    if count == 0:
+        raise ValueError("Invalid count '0'. Use 'all' to show every job.")
+
+    return False, count
+
+
+def select_jobs_to_display(job_list: List[Dict[str, Any]], show_all: bool, count: Optional[int]) -> Tuple[List[Any], List[str]]:
+    """
+    Select which jobs to display and return info messages.
     Returns: (jobs_to_display, info_messages)
-    
+
     The jobs_to_display list may contain job dictionaries or the string "SEPARATOR"
     to indicate where to show "..." in the table.
     """
     total_jobs = len(job_list)
     info_messages = []
-    
-    # Handle --all flag
-    if all_jobs_flag:
+
+    if show_all:
         return job_list, info_messages
-    
-    # Handle -n flag
-    if n_flag is not None:
-        if n_flag == 0:
-            return job_list, info_messages
-        elif n_flag > 0:
-            if n_flag >= total_jobs:
+
+    if count is not None:
+        if count > 0:
+            if count >= total_jobs:
                 info_messages.append(f"Found {total_jobs} jobs in the database")
                 return job_list, info_messages
             else:
-                info_messages.append(f"Showing the first {n_flag} jobs")
-                return job_list[:n_flag], info_messages
-        else:  # negative n_flag
-            abs_n = abs(n_flag)
+                info_messages.append(f"Showing the first {count} jobs")
+                return job_list[:count], info_messages
+        else:  # negative count
+            abs_n = abs(count)
             if abs_n >= total_jobs:
                 info_messages.append(f"Found {total_jobs} jobs in the database")
                 return job_list, info_messages
             else:
                 info_messages.append(f"Showing the last {abs_n} jobs")
                 return job_list[-abs_n:], info_messages
-    
-    # Default behavior (no flags)
+
+    # Default behavior (no count given)
     if total_jobs <= 25:
         return job_list, info_messages
     else:

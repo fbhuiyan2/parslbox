@@ -312,6 +312,7 @@ class ParslBox:
         tag: Optional[str] = None,
         path: Optional[str] = None,
         in_file: Optional[str] = None,
+        num_nodes: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """
         List jobs from the database with optional filtering.
@@ -322,12 +323,14 @@ class ParslBox:
             tag: Filter by tag
             path: Filter by path (partial match)
             in_file: Filter by input file (partial match)
+            num_nodes: Filter by number of nodes (exact match)
 
         Returns:
             List of job dictionaries
         """
         return database.get_jobs(
-            self.db_path, status=status, app=app, tag=tag, path=path, in_file=in_file
+            self.db_path, status=status, app=app, tag=tag, path=path,
+            in_file=in_file, num_nodes=num_nodes
         )
     
     def filter_jobs(
@@ -337,6 +340,7 @@ class ParslBox:
         tag: Optional[str] = None,
         path: Optional[str] = None,
         in_file: Optional[str] = None,
+        num_nodes: Optional[int] = None,
         exclude_status: Optional[str] = None,
         exclude_app: Optional[str] = None,
         exclude_tag: Optional[str] = None,
@@ -350,6 +354,7 @@ class ParslBox:
             tag: Filter by tag (supports `*` glob)
             path: Filter by path (partial match)
             in_file: Filter by input file (partial match)
+            num_nodes: Filter by number of nodes (exact match)
             exclude_status: Drop jobs with this status
             exclude_app: Drop jobs with this app
             exclude_tag: Drop jobs with this tag (supports `*` glob)
@@ -359,7 +364,8 @@ class ParslBox:
         """
         from parslbox.commands.helpers.filter_helpers import apply_excludes
         jobs = self.list_jobs(
-            status=status, app=app, tag=tag, path=path, in_file=in_file
+            status=status, app=app, tag=tag, path=path, in_file=in_file,
+            num_nodes=num_nodes
         )
         jobs = apply_excludes(
             jobs,

@@ -24,8 +24,8 @@ pbx = ParslBox(config_path="...", db_path="...")
 | Method | Returns | Purpose |
 |---|---|---|
 | `add_jobs(paths, app, config, ...)` | `(ids, failures, msg_log)` | Register one or many jobs. `paths` is always `List[str]`. |
-| `list_jobs(status=, app=, tag=, path=, in_file=)` | `List[dict]` | Job rows with optional filters |
-| `filter_jobs(status=, app=, tag=, path=, in_file=, exclude_status=, exclude_app=, exclude_tag=)` | `List[int]` | Just the job IDs matching the filters (note: IDs only, not full rows) |
+| `list_jobs(status=, app=, tag=, path=, in_file=, num_nodes=)` | `List[dict]` | Job rows with optional filters (`num_nodes` is an exact match) |
+| `filter_jobs(status=, app=, tag=, path=, in_file=, num_nodes=, exclude_status=, exclude_app=, exclude_tag=)` | `List[int]` | Just the job IDs matching the filters (note: IDs only, not full rows) |
 | `get_job(job_id)` | `dict` | Full row for one job |
 | `get_jobs_by_ids(ids)` | `List[dict]` | Full rows for a list of IDs |
 | `update_jobs(job_ids, status=, tag=, input_file=, ngpus=, env_file=, nnodes=, node_occupancy=, ranks_per_node=, add_deps=, rm_deps=)` | `(ids, failures, msg_log)` | Edit any of the listed fields. CLI `--args` is *not* a separate API param — append args to `input_file` instead. |

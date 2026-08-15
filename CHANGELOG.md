@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+#### `pbx ls` — row count is now a positional argument, `-n` means nodes
+- **Breaking: `--all` and `-n <count>` removed from `pbx ls`.** Row count moves to an optional positional `COUNT`: `pbx ls 10` (first 10), `pbx ls -20` (last 20), `pbx ls all` (everything). Bare `pbx ls` is unchanged (first 10 + last 10 once more than 25 jobs match). `-n 0` as an alias for "all" is gone — use `all`.
+- **`-n` / `--nnodes` on `pbx ls` now filters by node count**, matching its meaning on `add`, `update`, and `info`. This is a silent semantic change: `pbx ls -n 10` used to show the first 10 jobs and now shows jobs requiring 10 nodes.
+- `pbx ls` sets `ignore_unknown_options` so `-20` parses as a count rather than a flag; unparseable counts (including mistyped flags) raise a clear `Invalid count` error.
+
+### Added
+
+- **`num_nodes` filter across every layer** — `database.get_jobs`, `ParslBox.list_jobs`, `ParslBox.filter_jobs`, the `list_jobs` / `filter_jobs` MCP schemas, and `pbx filter -n/--nnodes`. Exact match.
+- **`tests/test_ls_command.py`** — first test coverage for `pbx ls` (count parsing, pagination, node filter, and the shared-layer/API/MCP wiring).
+
+---
+
 ## [1.0.1] - 2026-07-24
 
 ### Added
