@@ -12,6 +12,8 @@ pbx = ParslBox()                               # uses default DB + config
 
 `ParslBox.__init__` creates the DB if missing but **requires the config file to already exist** — run `pbx config` first (or pass `config_path=` to an existing one).
 
+`db_path` and `config_path` govern every method on the instance, `qsub`/`sbatch` included: they select the database that tag globs and the runnable-jobs guard are checked against, and both paths are written into the generated `submit.sh` so `pbx run` opens the same ones inside the allocation. Setting `PBX_DB_PATH` / `PBX_CONFIG_PATH` in the environment stays equivalent — it just supplies the defaults. Pass the arguments when one process needs to target several databases, since the environment is only read once, at import.
+
 ## Exceptions
 
 ```python

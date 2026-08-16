@@ -515,6 +515,7 @@ class ParslBox:
                 config_path=self.config_path,
                 sched_opts=sched_opts,
                 respawn=respawn,
+                db_path=self.db_path,
             )
             return result
         except Exception as e:
@@ -588,6 +589,7 @@ class ParslBox:
                 config_path=self.config_path,
                 sched_opts=sched_opts,
                 respawn=respawn,
+                db_path=self.db_path,
             )
             return result
         except Exception as e:

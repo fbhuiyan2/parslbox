@@ -30,6 +30,7 @@ def submit_to_slurm(
     sched_opts: Optional[List[str]] = None,
     dynamic: bool = True,
     respawn: Optional[int] = None,
+    db_path: Optional[Path] = None,
 ):
     """
     Submit a SLURM job via sbatch. Thin wrapper around submit_job().
@@ -52,6 +53,7 @@ def submit_to_slurm(
         submit_command="sbatch",
         dynamic=dynamic,
         respawn=respawn,
+        db_path=db_path,
     )
 
 

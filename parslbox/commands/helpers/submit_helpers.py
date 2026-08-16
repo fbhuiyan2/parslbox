@@ -124,6 +124,7 @@ def submit_job(
     dynamic: bool = True,
     respawn: Optional[int] = None,
     validate_runnable: bool = True,
+    db_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """
     Core scheduler submission logic - used by both PBS (qsub) and SLURM (sbatch).
@@ -144,6 +145,8 @@ def submit_job(
         sched_opts: List of extra scheduler directive strings from CLI
         scheduler_type: "pbs" or "slurm"
         submit_command: "qsub" or "sbatch"
+        db_path: Database to validate against and to bake into the generated
+            script's PBX_DB_PATH export. Defaults to path_utils.DB_FILE.
         respawn: When set, generate a respawn_template.sh alongside submit.sh and
             embed --respawn N in both scripts' pbx run line so the chain
             self-perpetuates at every walltime boundary. The integer is the
@@ -164,18 +167,23 @@ def submit_job(
             f"--respawn must be >= 0, got {respawn}."
         )
 
+    from parslbox.utils import path_utils
+    if db_path is None:
+        db_path = path_utils.DB_FILE
+    if config_path is None:
+        config_path = path_utils.PBX_CONFIG_FILE
+
     # Tag glob expansion + runnable-jobs guard (skipped when caller has already
     # validated, e.g. unit tests that bypass the DB).
     matched_count = None
     if validate_runnable:
-        from parslbox.utils import path_utils
         if tags:
             from parslbox.utils.tag_match import expand_tag_patterns
             try:
-                tags = expand_tag_patterns(path_utils.DB_FILE, list(tags))
+                tags = expand_tag_patterns(db_path, list(tags))
             except ValueError as e:
                 raise ValidationError(str(e))
-        matched_count = count_matching_runnable_jobs(path_utils.DB_FILE, list(apps) if apps else None, list(tags) if tags else None)
+        matched_count = count_matching_runnable_jobs(db_path, list(apps) if apps else None, list(tags) if tags else None)
         if matched_count == 0:
             raise ValidationError(
                 "No Ready/Restart jobs match the given --apps/--tags filters. "
@@ -245,12 +253,11 @@ def submit_job(
 
     run_options_str = " ".join(run_options)
 
-    # Capture environment variables for parslbox paths
-    pbx_env_vars = ""
-    if os.getenv("PBX_DB_PATH"):
-        pbx_env_vars += f'export PBX_DB_PATH="{os.getenv("PBX_DB_PATH")}"\n'
-    if os.getenv("PBX_CONFIG_PATH"):
-        pbx_env_vars += f'export PBX_CONFIG_PATH="{os.getenv("PBX_CONFIG_PATH")}"\n'
+    # Pin the resolved db/config into the script so `pbx run` inside the
+    # allocation opens exactly what was validated here, rather than
+    # re-resolving against whatever environment the batch job inherits.
+    pbx_env_vars = f'export PBX_DB_PATH="{db_path}"\n'
+    pbx_env_vars += f'export PBX_CONFIG_PATH="{config_path}"\n'
     if os.getenv("PBX_RUN_DELAY"):
         pbx_env_vars += f'export PBX_RUN_DELAY="{os.getenv("PBX_RUN_DELAY")}"\n'
 

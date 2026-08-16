@@ -25,8 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Update failure messages no longer embed the job ID** (it is redundant with the ID list, and prevented grouping). `pbx info` output is unchanged.
 - Measured at 5,000 jobs: `add` success 29,100 → 211 bytes, `update` success 28,931 → 46 bytes, duplicate-`add` failures 524,024 → 94,120 bytes.
 
+#### Generated batch scripts pin the resolved DB and config paths
+- `submit.sh` now always contains `export PBX_DB_PATH` and `export PBX_CONFIG_PATH`, resolved by `submit_job`. Previously each line was written only when the corresponding environment variable happened to be set in the submitting shell, and carried the raw variable value rather than the resolved path. `pbx run` inside the allocation now opens exactly the database that was validated at submit time instead of re-resolving against whatever environment the batch job inherits.
+- No change for the common case: with `PBX_DB_PATH` set, the value is the same; with it unset, the script now states the default (`~/.parslbox/job_database_pbx.db`) that `pbx run` would have resolved on its own. Sites where `$HOME` differs between the submit host and the compute nodes will now get the submit host's path.
+
 ### Fixed
 
+- **`ParslBox(db_path=...)` / `ParslBox(config_path=...)` were ignored by `qsub` and `sbatch`.** Every other API method routes through `self.db_path`, but `submit_job` had no `db_path` parameter and read the module-global `path_utils.DB_FILE` directly (`submit_helpers.py:175,178`), so tag-glob expansion, the zero-runnable-jobs guard, and the script's `PBX_DB_PATH` export all used the environment-derived default. `db_path` is now threaded through `submit_to_scheduler` / `submit_to_slurm` into `submit_job`, which falls back to `path_utils.DB_FILE` when unset. Unreachable via CLI or MCP — both construct against the same default — but it blocked any caller wanting per-instance DB selection without mutating the process environment, which `path_utils.py:39` binds at import.
 - **`pbx update --args` reported "No jobs were updated" after successfully updating.** `app_args` was missing from the `non_dependency_updates` check in `commands/update.py`, so an args-only update wrote to the DB but returned an empty `updated_job_ids`. The IDs are now counted, and `update_jobs` returns them sorted rather than in `set()` order.
 - **`skills/parslbox-cli/SKILL.md` documented a job-ID syntax that does not work.** Positional ID ranges must be separate shell words (`pbx update 1-5 8 14-20`); quoting a multi-token list (`"1-5 8 14-20"`) fails to parse. `add --parents` is the opposite and does require quotes.
 

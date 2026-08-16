@@ -19,6 +19,8 @@ pbx = ParslBox(config_path="...", db_path="...")
 
 `ParslBox.__init__` checks (does not create) the config; if missing, raises. Run `pbx config` from the shell first, or call `parslbox.commands.config.config_setup(...)` programmatically.
 
+`db_path` / `config_path` apply to every method including `qsub` and `sbatch` — they pick the DB that tag globs and the runnable-jobs guard resolve against, and both are baked into the generated `submit.sh`. `PBX_DB_PATH` / `PBX_CONFIG_PATH` do the same job as defaults, but are read once at import, so pass the arguments if one process must target more than one DB.
+
 ## Methods at a glance
 
 | Method | Returns | Purpose |
