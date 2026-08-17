@@ -9,7 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+#### `pbx run` — one DB write per job during completion drain
+- **The status buffer never batched on the completion side.** The orchestrator loop handled exactly one finished future per pass and then flushed, so every flush carried a single row. `database.update_jobs` is one `UPDATE ... WHERE job_id IN (...)` — one connection, one commit — regardless of how many IDs it carries, so the cost is per *write*, not per row. A 24,000-job run performed 24,000 connection-opens and WAL commits instead of a handful. Dispatch was unaffected (it buffers in bulk and flushed correctly).
+- `schedule_helpers.drain_completions` now processes every future that has already finished before returning to dispatch, so one flush carries the whole batch. Batch size self-tunes: slower flushes let more completions accumulate, which shrinks the flush count. Falls back to the original bounded blocking wait when nothing is ready, so walltime is still re-checked at the poll cadence.
+- Trade-off: freed capacity is not re-dispatched until the drain returns. Resources are released progressively inside `handle_completion`, so nothing is lost, only deferred. The drain aborts early if it crosses `shutdown_at`, keeping the graceful-shutdown grace period intact.
+
+#### `pbx run` — no-idle exit can no longer skip a job on buffered parent state
+- **Fan-in jobs could be silently dropped.** Dependency checks read parent status from the DB, not the status buffer. If the last running job was a parent, its completion sat in the buffer, its child looked un-ready, and the no-idle exit rule fired and ended the run — reporting success while leaving the child `Ready`. Previously this was prevented only incidentally, by flushing on every single pass.
+- `schedule_helpers.check_run_complete` now flushes pending updates before concluding the run is over, and takes one more dispatch pass if it wrote anything. Terminates after at most one extra pass. Static-orphan reverting moved onto its terminal path.
+
 ### Changed
+
+#### `pbx run --flush-interval` is inactive
+- The timer-based periodic flush was redundant: the unconditional flush before each dispatch pass already bounds buffer residency to one iteration, and nothing between the two produces buffer entries. The block is commented out rather than deleted in case a conditional flush is introduced later. The flag remains accepted but has no effect, and is no longer documented.
 
 #### `pbx ls` — row count is now a positional argument, `-n` means nodes
 - **Breaking: `--all` and `-n <count>` removed from `pbx ls`.** Row count moves to an optional positional `COUNT`: `pbx ls 10` (first 10), `pbx ls -20` (last 20), `pbx ls all` (everything). Bare `pbx ls` is unchanged (first 10 + last 10 once more than 25 jobs match). `-n 0` as an alias for "all" is gone — use `all`.

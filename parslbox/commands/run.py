@@ -9,7 +9,6 @@ import sys
 from pathlib import Path
 from typing import Optional
 from typing_extensions import Annotated
-from concurrent.futures import as_completed, TimeoutError as FutureTimeoutError
 
 from parslbox.system_configs.loader import load_config, get_system_config
 from parslbox.utils import path_utils
@@ -29,9 +28,10 @@ from parslbox.commands.helpers.run_cmd_helpers import (
 )
 from parslbox.commands.helpers.schedule_helpers import (
     SchedulerContext,
+    check_run_complete,
     dispatch_dynamic,
     dispatch_static,
-    handle_completion,
+    drain_completions,
 )
 from parslbox.database.status_buffer import StatusBuffer
 
@@ -77,7 +77,7 @@ def run(
     ] = 0,
     flush_interval: Annotated[
         int,
-        typer.Option("--flush-interval", help="Interval in seconds for periodic status buffer flush (default: 150).")
+        typer.Option("--flush-interval", help="Currently inactive — the status buffer is flushed once per dispatch pass. Retained for a future timer-based flush.")
     ] = 150,
     loglevel: Annotated[
         str,
@@ -266,7 +266,7 @@ def run(
     # Register atexit handler for normal termination
     atexit_handler = create_atexit_handler(status_buffer, logger)
     atexit.register(atexit_handler)
-    logger.info(f"Registered cleanup handlers (periodic flush interval: {flush_interval}s)")
+    logger.info("Registered cleanup handlers (status buffer flushes once per dispatch pass)")
 
     # Pre-load full YAML config for MPI settings
     try:
@@ -364,7 +364,7 @@ def run(
     # Periodic maintenance timers
     last_recovery_attempt = time.time()
     recovery_interval = 60  # Attempt node recovery every 60 seconds
-    last_flush_time = time.time()
+    last_flush_time = time.time()  # retained for the disabled periodic-flush block below
     poll_interval = 10  # Max seconds to wait on a future before re-checking state
 
     while True:
@@ -389,12 +389,21 @@ def run(
             )
             sys.exit(0)
 
-        # Periodic status buffer flush (safety net for walltime termination)
-        if current_time - last_flush_time >= flush_interval:
-            flushed = status_buffer.flush_all()
-            if flushed > 0:
-                logger.info(f"Periodic flush: Updated {flushed} job(s) in database")
-            last_flush_time = current_time
+        # Periodic status buffer flush (safety net for walltime termination).
+        #
+        # DISABLED: redundant. The unconditional `status_buffer.flush_all()`
+        # below runs on every pass, so the buffer is never held longer than one
+        # iteration and this timer can only ever move the same write a few lines
+        # earlier within the same pass. Nothing between here and there produces
+        # buffer entries (the node-recovery block touches health trackers only).
+        # Kept commented rather than deleted: if the flush below is ever made
+        # conditional, this becomes load-bearing again.
+        #
+        # if current_time - last_flush_time >= flush_interval:
+        #     flushed = status_buffer.flush_all()
+        #     if flushed > 0:
+        #         logger.info(f"Periodic flush: Updated {flushed} job(s) in database")
+        #     last_flush_time = current_time
 
         # Periodically attempt to recover quarantined nodes
         if current_time - last_recovery_attempt >= recovery_interval:
@@ -406,9 +415,23 @@ def run(
         # Flush BEFORE dispatch: Running/Done/Failed ride the status buffer, but
         # dependency checks (parents_satisfied) read parent status fresh from the
         # DB. If a parent's completion is still buffered when dispatch runs, its
-        # child looks un-ready and — if it's the last work — the no-idle exit
-        # below fires and the child is skipped (fan-in / aggregator jobs). Claims
+        # child looks un-ready and is not dispatched this pass. Claims
         # (Submitted/Resubmitted) are written synchronously and are unaffected.
+        #
+        # This is the ONLY periodic flush point — the timer-based one above is
+        # disabled as redundant. Keeping it unconditional holds dependency
+        # latency at one pass for every workload shape (chains, fan-in, fan-out,
+        # mixed); deferring it to a timer would stall each link of a dependency
+        # chain by up to that interval whenever other work keeps the run alive.
+        #
+        # It is cheap because `drain_completions` below batches: one flush per
+        # pass carrying every completion since the last one, written as a single
+        # `UPDATE ... WHERE job_id IN (...)`. On an empty buffer it is a no-op
+        # (flush_all short-circuits to 0 without opening a connection).
+        #
+        # The last-work case — where a buffered parent completion would let the
+        # no-idle exit fire before its child could be seen — is handled by
+        # check_run_complete below, not here.
         status_buffer.flush_all()
 
         # Dispatch as much as currently fits.
@@ -429,33 +452,29 @@ def run(
                 f"backlog={status['backlogged_jobs']}"
             )
 
-        # Exit rule (no idling): if nothing is running, this pass placed nothing,
-        # so there is no runnable+fitting work for this run right now. Finish.
-        if not fut_to_item:
-            if not dynamic and resource_manager.get_resource_status()['backlogged_jobs'] > 0:
-                # Static orphans — claimed up front but never became runnable
-                # (e.g. a failed parent, or too big to ever fit). Return them to
-                # the pool rather than stranding them in Submitted/Resubmitted.
-                orphans = list(resource_manager._backlogged_jobs_set)
-                reverted = database.revert_claims(db_path, orphans, owner=owner)
-                logger.info(
-                    f"Static: reverted {reverted} un-runnable claimed job(s) to Ready/Restart."
-                )
+        # Exit rule (no idling): if nothing is running and this pass placed
+        # nothing, there is no runnable+fitting work for this run right now.
+        #
+        # check_run_complete flushes pending buffered updates before concluding
+        # that, and asks for one more pass if it wrote anything. A buffered
+        # parent completion is invisible to the DB-backed dependency check, so
+        # exiting on it would silently skip the child (fan-in / aggregator).
+        # Static-orphan reverting happens on the terminal path inside the helper.
+        outcome = check_run_complete(sched_ctx, dynamic)
+        if outcome == 'continue':
+            continue
+        if outcome == 'break':
             logger.info("No active futures and no runnable work remaining — run complete.")
             break
 
-        # Wait for a future to complete (frees resources → next pass refills).
-        try:
-            for fut in as_completed(list(fut_to_item.keys()), timeout=poll_interval):
-                if fut not in fut_to_item:
-                    continue
-                handle_completion(fut, sched_ctx)
-                # Break to re-dispatch with freed resources.
-                break
-        except FutureTimeoutError:
-            # No future completed within poll_interval — loop to re-check
-            # walltime, flush, and re-query for new work (dynamic).
-            pass
+        # Handle every future that has already finished, then loop to refill the
+        # freed capacity. Draining the whole done-set instead of a single future
+        # per pass is what lets the flush above batch — one write per pass rather
+        # than one per job. See drain_completions for the reasoning and for the
+        # re-dispatch latency it trades away. Falls back to a bounded blocking
+        # wait when nothing is done yet, so walltime is still re-checked at the
+        # poll_interval cadence.
+        drain_completions(sched_ctx, poll_interval)
 
     logger.info("All runnable jobs processed.")
 
