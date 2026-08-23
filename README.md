@@ -232,15 +232,20 @@ For persistence across shells, add the same lines to your shell profile (`~/.bas
 
 ### `PBX_DB_PATH` accepts three forms
 
-pbx normalizes the value at read time:
+pbx normalizes the value at read time. **The value must be an absolute path** —
+a relative one would resolve against whatever directory you happen to be in, and
+against the allocation's working directory inside a batch job. pbx errors out
+instead of guessing. `~` is expanded.
 
 ```bash
 export PBX_DB_PATH=$(pwd)                             # current dir  → <cwd>/job_database_pbx.db
 export PBX_DB_PATH=/path/to/project/dir               # any dir      → <dir>/job_database_pbx.db
 export PBX_DB_PATH=/path/to/project/mydb.db           # explicit .db file name (must end in .db)
+export PBX_DB_PATH=./mydb.db                          # ✗ error: must be absolute
 ```
 
-`PBX_CONFIG_PATH` similarly accepts either a directory (pbx appends `config.yaml`) or a full path to a `.yml`/`.yaml` file.
+`PBX_CONFIG_PATH` similarly accepts either a directory (pbx appends `config.yaml`)
+or a full path to a `.yml`/`.yaml` file, and is held to the same absolute-path rule.
 
 > **Note:** these are shell env vars — they are not read from, or set inside, `config.yaml`.
 

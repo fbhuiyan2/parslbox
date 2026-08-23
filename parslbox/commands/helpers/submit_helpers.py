@@ -173,6 +173,14 @@ def submit_job(
     if config_path is None:
         config_path = path_utils.PBX_CONFIG_FILE
 
+    # Both are exported into submit.sh, where they are resolved against the
+    # allocation's working directory rather than this one.
+    try:
+        db_path = path_utils.require_absolute("db_path", db_path)
+        config_path = path_utils.require_absolute("config_path", config_path)
+    except path_utils.PbxPathError as e:
+        raise ValidationError(str(e))
+
     # Tag glob expansion + runnable-jobs guard (skipped when caller has already
     # validated, e.g. unit tests that bypass the DB).
     matched_count = None

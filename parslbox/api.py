@@ -88,13 +88,21 @@ class ParslBox:
             config_path: Optional path to config file. If None, uses default.
         
         Raises:
+            PbxPathError: If PBX_DB_PATH / PBX_CONFIG_PATH, or an explicitly
+                passed db_path / config_path, is a relative path.
             FileNotFoundError: If config file does not exist.
         """
         # Set paths
+        path_utils.validate_env_paths()
+
         if db_path is None:
             db_path = path_utils.DB_FILE
+        else:
+            db_path = path_utils.require_absolute("db_path", db_path)
         if config_path is None:
             config_path = path_utils.PBX_CONFIG_FILE
+        else:
+            config_path = path_utils.require_absolute("config_path", config_path)
 
         self.db_path = db_path
         self.config_path = config_path

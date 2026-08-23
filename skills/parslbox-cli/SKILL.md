@@ -46,6 +46,7 @@ Use `--help` on any command to see flags.
 
 - `PBX_CONFIG_PATH`: dir or `.yml`/`.yaml` file (dir → `<dir>/config.yaml`)
 - `PBX_DB_PATH`: dir or `.db` file (dir → `<dir>/job_database_pbx.db`)
+- Both must be **absolute** paths (`~` is expanded); a relative value is a hard error
 - Defaults: `~/.parslbox/config.yaml`, `~/.parslbox/job_database_pbx.db`, runs in `~/.parslbox/runs/<timestamp>/`
 
 ## When asked something specific

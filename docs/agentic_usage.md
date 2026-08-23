@@ -77,7 +77,7 @@ Restart OpenCode, then run `opencode mcp list` to confirm `parslbox` is connecte
 
 The harness starts the MCP server for you, so get a few things ready **before** you launch Claude Code or OpenCode.
 
-1. **Set the environment variables parslbox needs** (e.g. `PBX_DB_PATH`, `PBX_CONFIG_PATH`) in the shell you launch the harness from — the MCP server inherits that environment:
+1. **Set the environment variables parslbox needs** (e.g. `PBX_DB_PATH`, `PBX_CONFIG_PATH`) in the shell you launch the harness from — the MCP server inherits that environment. Both must be absolute paths:
 
    ```bash
    export PBX_DB_PATH=/path/to/job_database_pbx.db
