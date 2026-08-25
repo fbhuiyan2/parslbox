@@ -1,3 +1,5 @@
+
+
 ```
  ███████████                              ████  ███████████
 ▒▒███▒▒▒▒▒███                            ▒▒███ ▒▒███▒▒▒▒▒███
@@ -38,7 +40,7 @@ Check out a quick [demo!](https://www.youtube.com/watch?v=DOu2VRQMVRU)
 
 Requirements:
 - Python >= 3.11, < 3.14
-- Parsl >= 2025.9.8
+- Parsl >= 2025.9.8, < 2027.0.0
 
 Clone the repo first:
 
@@ -322,3 +324,4 @@ Issues and PRs welcome at:
 Author and developer: Fakhrul Hasan Bhuiyan
 
 Copyright Argonne UChicago LLC, 2026. All rights reserved.
+```
