@@ -14,6 +14,8 @@ from parslbox.commands.qsub import app as qsub_jobs
 from parslbox.commands.sbatch import app as sbatch_jobs
 from parslbox.commands.qdel import app as qdel_cmd
 from parslbox.commands.scancel import app as scancel_cmd
+from parslbox.commands.local import app as local_cmd
+from parslbox.local.project import check_db_name, LocalProjectError
 
 app = typer.Typer(help="A CLI tool to manage parsl workflows and jobs.",
                   no_args_is_help=True,)
@@ -34,6 +36,15 @@ def main_callback(ctx: typer.Context):
     if ctx.invoked_subcommand == "config":
         return
     
+    # Before anything is created: a local project's database is the -local
+    # one, and exporting the directory instead of the file resolves to
+    # job_database_pbx.db, which initialize_database would go on to create.
+    try:
+        check_db_name(path_utils.DB_FILE)
+    except LocalProjectError as e:
+        typer.secho(f"❌ Error: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
     # Initialize database in default location (always needed)
     database.initialize_database(path_utils.DB_FILE)
     
@@ -81,6 +92,8 @@ app.add_typer(qsub_jobs)
 app.add_typer(sbatch_jobs)
 app.add_typer(qdel_cmd)
 app.add_typer(scancel_cmd)
+app.add_typer(local_cmd, name="local",
+              help="Author jobs locally, run them on a remote machine")
 
 
 if __name__ == "__main__":

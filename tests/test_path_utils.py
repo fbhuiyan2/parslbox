@@ -136,3 +136,20 @@ class TestCliCallback:
         assert result.exit_code == 1
         assert "PBX_CONFIG_PATH must be an absolute path" in result.output
         assert list(tmp_path.iterdir()) == []
+
+    def test_directory_of_a_local_project_aborts(self, monkeypatch, tmp_path):
+        """PBX_DB_PATH naming the project directory resolves to the wrong file."""
+        from typer.testing import CliRunner
+        from parslbox.main import app
+        from parslbox.local.project import LOCAL_DB_NAME, init_project
+
+        init_project(tmp_path, remote_root="/lus/flare/projects/x/proj1")
+        stray = tmp_path / "job_database_pbx.db"
+        monkeypatch.setattr(path_utils, "DB_FILE", stray)
+        monkeypatch.setenv("PBX_DB_PATH", str(tmp_path))
+
+        result = CliRunner().invoke(app, ["ls"], env={"COLUMNS": "400"})
+        assert result.exit_code == 1
+        assert "is a local project" in result.output
+        assert str(tmp_path / LOCAL_DB_NAME) in result.output
+        assert not stray.exists()

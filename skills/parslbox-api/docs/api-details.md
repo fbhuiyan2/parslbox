@@ -41,6 +41,10 @@ from parslbox.api import ParslBoxError, ValidationError, JobNotFoundError
 | `sbatch(...)` | Generate and submit a SLURM batch script |
 | `qdel(jobid, grace=30)` | Graceful PBS cancel (SIGTERM → wait → hard kill) |
 | `scancel(jobid, grace=30)` | Graceful SLURM cancel |
+| `local_init(directory, remote_root, ...)` | Create or adopt a local project (jobs authored here, run on a remote machine). `transfer_remote_root` overrides the collection root that the first directory push otherwise detects |
+| `local_status(check_remote=True)` | Report which side of a local project is ahead |
+| `local_push(force=False, with_dirs=False, ...)` | Send the local project's database to the remote machine, and optionally the job directories |
+| `local_pull(force=False)` | Bring the remote database back down |
 | `run(...)` | (Reserved — use `pbx run` CLI for full execution control) |
 
 ---
@@ -285,6 +289,54 @@ pbx.scancel("789012", grace=60)
 ```
 
 Both return a dict — `{"success": True, "jobid": ..., "grace": ..., "reconciled_count": N}` on success, `{"success": False, "jobid": ..., "stage": ..., "error": ..., "reconciled_count": N}` on failure. `reconciled_count` is the number of stuck jobs cleaned up (typically `0` when the signal handler finished cleanly).
+
+---
+
+## Local projects — `local_init` / `local_status` / `local_push` / `local_pull`
+
+A **local project** is a directory holding `job_database_pbx-local.db` and a `.pbxlocal.yaml` beside it. Its database stores the paths jobs will have on a remote HPC machine, from the first row, so nothing is rewritten at handover. Full walkthrough: [`remote-workflow.md`](remote-workflow.md).
+
+`ParslBox` needs some database to be constructed, but `local_init` creates the real one — so bootstrap it from a path *outside* the project. Put it inside and every later call on that instance raises `ValidationError`, because the instance is still pointed at a non-local database sitting in a local project.
+
+```python
+pbx = ParslBox(db_path="/tmp/bootstrap.db")   # throwaway; local_init makes the real one
+pbx.local_init(
+    directory="/home/you/work/proj1",
+    remote_root="/lus/flare/projects/PROJ/you/proj1",
+    compute_endpoint="bbe3ea0e-90c7-431a-87c8-77a201e2a567",
+    remote_config="/home/you/.parslbox/config.yaml",
+)
+# -> {'action': 'created', 'db_path': '.../job_database_pbx-local.db',
+#     'export_line': 'export PBX_DB_PATH="..."', 'notes': []}
+
+pbx = ParslBox(db_path="/home/you/work/proj1/job_database_pbx-local.db")
+```
+
+`local_init` writes files and touches no network. It raises `ValidationError` when the directory cannot hold a project: a populated `-local.db` with no project file (the remote root it belonged to is unrecoverable), a project file with no database, a relative `remote_root`, or a project in a parent directory with `nested_ok` left `False`. Re-running on an existing project returns `action='existing'` and changes nothing.
+
+`local_status(check_remote=False)` stays offline. The return always has `is_local_project`; when `True` it also carries `local_root`, `remote_root`, `job_count`, `created`, `export_line`, a `local` block with a `drift` phrase, a `remote` block (`reachable`, `fingerprint`, `drift`, `endpoint_info`), and a `recommendation` when the two sides disagree. An unreachable endpoint is not an error — the remote block reports `reachable: False` alongside the last known figures.
+
+`local_push` and `local_pull` each refuse to overwrite a side that changed since the last sync, raising `ValidationError`; there is no merge. `force=True` overrides. The comparison is `MAX(timestamp)` and `COUNT(*)`, not file mtime — the database is in WAL mode, so a commit leaves the `.db` file's mtime untouched.
+
+A collection that publishes a subtree needs `transfer_remote_root`, but it is detected on the first directory push and saved: `push()` returns `transfer_remote_root` and `transfer_remote_root_detected` when that happens, and raises `ValidationError` (carrying the `TransferError` text) listing every path tried when no prefix of `remote_root` resolves to the database it just wrote. Passing `local_init(..., transfer_remote_root='/lus/flare/projects')` overrides detection. Transfer destinations are rewritten relative to that root while every other layer keeps the absolute path.
+
+`local_push` moves the database only, unless `with_dirs=True`, which also sends the matching jobs' directories over Globus Transfer — narrowed by `apps` and `tags`, one recursive item per directory, batched 500 items per Transfer task. `sync_level` (`'exists'`, `'size'`, `'mtime'`, or `'checksum'`, the default) decides how Globus treats a file already at the destination; `checksum` reads every file on both ends, so `'mtime'` is the cheaper choice once runs have written large outputs into those directories. `wait_for_dirs=False` returns as soon as the tasks are submitted. `local_pull` has no directory equivalent — result files stay on the remote machine.
+
+```python
+report = pbx.local_status()
+if report["remote"].get("drift") not in (None, "unchanged"):
+    pbx.local_pull()
+
+pbx.add_jobs(paths=["/home/you/work/proj1/run_a"], app="python",
+             config="aurora-gpu", input_file="run.py", env_file="pass")
+# stored as /lus/flare/projects/PROJ/you/proj1/run_a
+
+pbx.qsub(config="aurora-gpu", job_name="run1", queue="debug",
+         select="1", walltime="30", project="PROJ")
+# pushes, submits on the endpoint, pulls back
+```
+
+`qsub` and `sbatch` take `no_local=True` to submit from this machine anyway, and `push_dirs=True` to send the matching jobs' directories over Globus Transfer first.
 
 ---
 

@@ -125,6 +125,8 @@ def submit_job(
     respawn: Optional[int] = None,
     validate_runnable: bool = True,
     db_path: Optional[Path] = None,
+    no_local: bool = False,
+    push_dirs: bool = False,
 ) -> Dict[str, Any]:
     """
     Core scheduler submission logic - used by both PBS (qsub) and SLURM (sbatch).
@@ -147,6 +149,9 @@ def submit_job(
         submit_command: "qsub" or "sbatch"
         db_path: Database to validate against and to bake into the generated
             script's PBX_DB_PATH export. Defaults to path_utils.DB_FILE.
+        no_local: Submit here even if the database belongs to a local project.
+        push_dirs: In a local project, also send the matching jobs' directories
+            over Globus Transfer before submitting.
         respawn: When set, generate a respawn_template.sh alongside submit.sh and
             embed --respawn N in both scripts' pbx run line so the chain
             self-perpetuates at every walltime boundary. The integer is the
@@ -197,6 +202,43 @@ def submit_job(
                 "No Ready/Restart jobs match the given --apps/--tags filters. "
                 "Refusing to submit (would waste the allocation)."
             )
+
+    # A local project's database holds remote paths, and the scheduler that
+    # can act on them is on the other machine. Hand the whole submission over.
+    if not no_local:
+        from parslbox.local.project import find_project, LocalProjectError
+        try:
+            local_proj = find_project(db_path)
+        except LocalProjectError as e:
+            raise ValidationError(str(e))
+        if local_proj is not None:
+            from parslbox.local import sync as local_sync
+            remote_kwargs = {
+                "config_name": config_name,
+                "job_name": job_name,
+                "queue": queue,
+                "select": select,
+                "walltime": walltime,
+                "project": project,
+                "apps": list(apps) if apps else None,
+                "tags": list(tags) if tags else None,
+                "retries": retries,
+                "loglevel": loglevel,
+                "sched_opts": list(sched_opts) if sched_opts else None,
+                "scheduler_type": scheduler_type,
+                "submit_command": submit_command,
+                "dynamic": dynamic,
+                "respawn": respawn,
+                "validate_runnable": validate_runnable,
+            }
+            from parslbox.local.guard import SyncConflict
+            try:
+                return local_sync.submit_remote(
+                    db_path, remote_kwargs, run_dir=run_dir,
+                    push_dirs=push_dirs,
+                )
+            except (LocalProjectError, SyncConflict) as e:
+                raise ValidationError(str(e))
 
     # Load configuration
     try:
@@ -395,3 +437,51 @@ def submit_job(
             f"{submit_command} command not found. "
             f"Make sure {'PBS' if scheduler_type == 'pbs' else 'SLURM'} is available."
         )
+
+
+def render_remote_result(result: Dict[str, Any], monitor_cmd: str = "qstat") -> bool:
+    """Print the outcome of a submission that ran on the remote machine.
+
+    The submit script and run directory named in `result` live over there, so
+    there is nothing local to open -- only paths to report.
+
+    Returns True when the remote scheduler accepted the job.
+    """
+    import typer
+
+    push = result.get("push") or {}
+    if push.get("bytes"):
+        typer.secho(
+            f"⬆️  Pushed the database to {push.get('remote_db_path')} "
+            f"({push.get('fingerprint', {}).get('count')} jobs)",
+            fg=typer.colors.BLUE,
+        )
+    dirs = result.get("dirs")
+    if dirs:
+        from parslbox.commands.local import render_dir_report
+        render_dir_report(dirs)
+
+    typer.secho(f"\U0001f30e Submitted on endpoint {str(result.get('endpoint'))[:8]}…",
+                fg=typer.colors.CYAN)
+    typer.secho(f"\U0001f4c1 Remote run directory: {result.get('remote_run_dir')}",
+                fg=typer.colors.BLUE)
+    typer.secho(f"\U0001f4dd Remote submit script: {result.get('submit_file')}",
+                fg=typer.colors.BLUE)
+
+    if result.get("pull_error"):
+        typer.secho(f"⚠  Could not pull afterwards: {result['pull_error']}",
+                    fg=typer.colors.YELLOW)
+
+    if result.get("success"):
+        job_id = result.get("job_id", "UNKNOWN")
+        typer.secho(f"\U0001f680 Job submitted successfully! Job ID: {job_id}",
+                    fg=typer.colors.GREEN)
+        typer.secho(f"\U0001f4ca Monitor on the remote with: {monitor_cmd} {job_id}",
+                    fg=typer.colors.BLUE)
+        typer.secho("\U0001f4a1 Run 'pbx local pull' to bring progress back here.",
+                    fg=typer.colors.CYAN)
+        return True
+
+    typer.secho(f"❌ The remote scheduler refused the job: {result.get('error')}",
+                fg=typer.colors.RED)
+    return False

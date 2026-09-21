@@ -241,3 +241,249 @@ class TestLayerAlignment:
                 "job_id": 1, "app_args": "-var T 300",
             }))
         assert mock_upd.call_args.kwargs["app_args"] == "-var T 300"
+
+
+# ----------------- Local projects: schema reaches the API ------------------ #
+
+
+class TestLocalInitSchema:
+    """The MCP caller sees only the schema, so a setting missing from it is
+    a setting that layer cannot use, even though CLI and API can."""
+
+    def test_transfer_remote_root_is_offered(self):
+        from parslbox.mcp.schemas import LocalInitSchema
+        assert "transfer_remote_root" in LocalInitSchema.model_fields
+
+    def test_its_description_explains_the_rewrite(self):
+        # The LLM caller has nothing but this text to work out that a facility
+        # collection publishes a subtree rather than the whole filesystem.
+        from parslbox.mcp.schemas import LocalInitSchema
+        desc = LocalInitSchema.model_fields["transfer_remote_root"].description
+        assert "root" in desc.lower()
+        assert "/lus/flare/projects" in desc
+
+    def test_it_is_passed_through_to_the_api(self):
+        from parslbox.mcp.schemas import LocalInitSchema
+        dumped = LocalInitSchema(
+            directory="/home/me/p1", remote_root="/lus/flare/projects/ABC/me/p1",
+            transfer_remote_root="/lus/flare/projects",
+        ).model_dump()
+        assert dumped["transfer_remote_root"] == "/lus/flare/projects"
+
+    def test_the_api_accepts_every_schema_field(self):
+        # local_init is called as pbx.local_init(**params.model_dump()), so any
+        # schema field the API does not take is an immediate TypeError.
+        import inspect
+        from parslbox.api import ParslBox
+        from parslbox.mcp.schemas import LocalInitSchema
+        accepted = set(inspect.signature(ParslBox.local_init).parameters)
+        assert set(LocalInitSchema.model_fields) <= accepted
+
+
+class TestLocalToolRendering:
+    """The MCP renderers for pbx local.
+
+    These had no tests, which is how a KeyError on a perfectly ordinary report
+    shape survived: sync.status() returns early with an 'error' key and no
+    'local' block when the project's database has gone missing, and the
+    renderer read report['local']['drift'] unconditionally.
+    """
+
+    def _status(self, report, monkeypatch):
+        from parslbox.mcp import mcp_server
+        monkeypatch.setattr(mcp_server.pbx, "local_status", lambda **kw: report)
+        from parslbox.mcp.schemas import LocalStatusSchema
+        return mcp_server.local_status(LocalStatusSchema())
+
+    def test_a_missing_database_is_reported_not_crashed(self, monkeypatch):
+        out = self._status({"is_local_project": True, "local_root": "/home/me/p1",
+                            "error": "no such file: job_database_pbx-local.db"}, monkeypatch)
+        assert "could not be read" in out
+        assert "no such file" in out
+
+    def test_a_misconfigured_project_says_why(self, monkeypatch):
+        out = self._status({"is_local_project": False, "misconfigured": True,
+                            "message": "PBX_DB_PATH names the directory"}, monkeypatch)
+        assert "PBX_DB_PATH names the directory" in out
+
+    def test_a_healthy_project_reports_the_collection_root(self, monkeypatch):
+        out = self._status({
+            "is_local_project": True, "local_root": "/home/me/p1",
+            "remote_root": "/lus/flare/projects/ABC/me/p1",
+            "db_path": "/home/me/p1/job_database_pbx-local.db", "job_count": 3,
+            "compute_endpoint": "abc", "last_sync": None, "export_line": "export X=1",
+            "local": {"drift": "unchanged"}, "remote": {"checked": False},
+            "transfer_remote": "dst-uuid",
+            "transfer_remote_root": "/lus/flare/projects",
+        }, monkeypatch)
+        assert "/lus/flare/projects" in out
+        assert "3 jobs" in out
+
+    def test_an_undetected_collection_root_says_so(self, monkeypatch):
+        out = self._status({
+            "is_local_project": True, "local_root": "/home/me/p1",
+            "remote_root": "/r", "db_path": "/d", "job_count": 0,
+            "compute_endpoint": "abc", "last_sync": None, "export_line": "export X=1",
+            "local": {"drift": "unchanged"}, "remote": {"checked": False},
+            "transfer_remote": "dst-uuid", "transfer_remote_root": None,
+        }, monkeypatch)
+        assert "not detected yet" in out
+
+    def _push(self, result, monkeypatch):
+        from parslbox.mcp import mcp_server
+        monkeypatch.setattr(mcp_server.pbx, "local_push", lambda **kw: result)
+        from parslbox.mcp.schemas import LocalPushSchema
+        return mcp_server.local_push(LocalPushSchema())
+
+    def test_push_reports_a_detected_collection_root(self, monkeypatch):
+        out = self._push({
+            "bytes": 4096, "remote_db_path": "/r/db", "fingerprint": {"count": 2},
+            "transfer_remote_root": "/lus/flare/projects",
+            "transfer_remote_root_detected": True,
+        }, monkeypatch)
+        assert "/lus/flare/projects" in out
+
+    def test_push_surfaces_nice_status(self, monkeypatch):
+        # The field that names why Globus is stuck; an agent has nothing else.
+        out = self._push({
+            "bytes": 1, "remote_db_path": "/r/db", "fingerprint": {"count": 1},
+            "transfer": {"submitted": True, "count": 2, "batches": 1,
+                         "task_ids": ["t1"],
+                         "outcome": {"status": "ACTIVE", "files_transferred": 0,
+                                     "bytes_transferred": 0,
+                                     "nice_status": "PERMISSION_DENIED"}},
+        }, monkeypatch)
+        assert "PERMISSION_DENIED" in out
+
+    def test_push_says_when_there_was_nothing_to_transfer(self, monkeypatch):
+        out = self._push({
+            "bytes": 1, "remote_db_path": "/r/db", "fingerprint": {"count": 1},
+            "transfer": {"submitted": False, "reason": "nothing to transfer"},
+        }, monkeypatch)
+        assert "nothing to transfer" in out
+
+    def test_a_validation_error_becomes_a_message_not_a_traceback(self, monkeypatch):
+        from parslbox.mcp import mcp_server
+        from parslbox.api import ValidationError
+        from parslbox.mcp.schemas import LocalPushSchema
+
+        def boom(**kw):
+            raise ValidationError("the remote database has changed")
+        monkeypatch.setattr(mcp_server.pbx, "local_push", boom)
+        out = mcp_server.local_push(LocalPushSchema())
+        assert "the remote database has changed" in out
+
+
+class TestRemoteSubmissionIsVisibleToTheAgent:
+    """A submission inside a local project runs on another machine.
+
+    Rendered like a local one it is actively misleading: the run directory
+    does not exist here, and a failed post-submit pull -- which leaves the
+    local database behind the remote -- would be silent.
+    """
+
+    def _submit(self, status, monkeypatch):
+        from parslbox.mcp import mcp_server
+        from parslbox.mcp.schemas import QSubSchema
+        monkeypatch.setattr(mcp_server.pbx, "qsub", lambda **kw: status)
+        return mcp_server.submit_pbs_job(
+            QSubSchema(config="aurora", job_name="j", queue="debug", select="1",
+                       walltime=30))
+
+    BASE = {"success": True, "job_id": "8819271.aurora", "run_dir": "/lus/x/run",
+            "remote": True, "endpoint": "ep-uuid",
+            "remote_run_dir": "/lus/flare/projects/ABC/me/p1/pbx_runs/1",
+            "push": {"bytes": 4096}}
+
+    def test_it_names_the_endpoint_and_the_remote_run_dir(self, monkeypatch):
+        out = self._submit(dict(self.BASE), monkeypatch)
+        assert "ep-uuid" in out
+        assert "/lus/flare/projects/ABC/me/p1/pbx_runs/1" in out
+
+    def test_a_failed_pull_back_is_a_warning(self, monkeypatch):
+        out = self._submit(dict(self.BASE, pull_error="endpoint went away"), monkeypatch)
+        assert "WARNING" in out
+        assert "endpoint went away" in out
+
+    def test_a_local_submission_gains_none_of_this(self, monkeypatch):
+        out = self._submit({"success": True, "job_id": "1.local",
+                            "run_dir": "/home/me/run"}, monkeypatch)
+        assert "Compute endpoint" not in out
+        assert "WARNING" not in out
+
+
+class TestEveryLocalSchemaMatchesItsApiMethod:
+    """Each tool calls pbx.<method>(**params.model_dump()); a field the API
+    does not accept is an immediate TypeError at call time."""
+
+    @pytest.mark.parametrize("schema_name,method", [
+        ("LocalInitSchema", "local_init"),
+        ("LocalStatusSchema", "local_status"),
+        ("LocalPushSchema", "local_push"),
+        ("LocalPullSchema", "local_pull"),
+    ])
+    def test_the_api_accepts_every_field(self, schema_name, method):
+        import inspect
+        from parslbox.api import ParslBox
+        from parslbox.mcp import schemas
+        schema = getattr(schemas, schema_name)
+        accepted = set(inspect.signature(getattr(ParslBox, method)).parameters)
+        assert set(schema.model_fields) <= accepted, schema_name
+
+    @pytest.mark.parametrize("schema_name,method", [
+        ("LocalPushSchema", "local_push"),
+        ("LocalPullSchema", "local_pull"),
+    ])
+    def test_defaults_agree_with_the_api(self, schema_name, method):
+        import inspect
+        from parslbox.api import ParslBox
+        from parslbox.mcp import schemas
+        schema = getattr(schemas, schema_name)
+        params = inspect.signature(getattr(ParslBox, method)).parameters
+        for name, field in schema.model_fields.items():
+            if params[name].default is not inspect.Parameter.empty:
+                assert field.default == params[name].default, f"{schema_name}.{name}"
+
+
+class TestStartupFailureIsReadable:
+    """The MCP client shows stderr and nothing else, so it has to say enough."""
+
+    def _start_with(self, monkeypatch, capsys, error):
+        from parslbox.mcp import mcp_server
+
+        def boom(*a, **kw):
+            raise error
+
+        monkeypatch.setattr(mcp_server, "ParslBox", boom)
+        with pytest.raises(SystemExit) as exit_info:
+            mcp_server._start()
+        assert exit_info.value.code == 1
+        return capsys.readouterr().err
+
+    def test_wrong_database_name_is_reported_without_a_traceback(
+            self, monkeypatch, capsys, tmp_path):
+        from parslbox.local.project import LOCAL_DB_NAME, check_db_name, init_project
+        from parslbox.local.project import WrongDatabaseName
+
+        init_project(tmp_path, remote_root="/lus/flare/projects/x/proj1")
+        try:
+            check_db_name(tmp_path / "job_database_pbx.db")
+        except WrongDatabaseName as e:
+            err = self._start_with(monkeypatch, capsys, e)
+        assert "ParslBox MCP server did not start" in err
+        assert str(tmp_path / LOCAL_DB_NAME) in err
+
+    def test_a_missing_config_is_reported_too(self, monkeypatch, capsys):
+        err = self._start_with(
+            monkeypatch, capsys, FileNotFoundError("Config file not found at: /x"))
+        assert "Config file not found" in err
+
+    def test_an_unexpected_error_still_raises(self, monkeypatch):
+        from parslbox.mcp import mcp_server
+
+        def boom(*a, **kw):
+            raise RuntimeError("a real bug")
+
+        monkeypatch.setattr(mcp_server, "ParslBox", boom)
+        with pytest.raises(RuntimeError, match="a real bug"):
+            mcp_server._start()
