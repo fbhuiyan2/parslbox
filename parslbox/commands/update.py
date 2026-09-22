@@ -67,23 +67,30 @@ def update_jobs(
         raise ValidationError("You must provide at least one field to update")
 
     # Handle app_args: reconstruct in_file by appending args
+    args_updated_job_ids = []
     if app_args is not None:
         if input_file is not None:
             # User provided both -i and --args: use the new input_file as base
             input_file = f"{input_file} {app_args}".strip()
         else:
-            # Only --args provided: extract base script name from current in_file per job
+            # Only --args provided: extract base script name from current in_file per job.
+            # Jobs sharing a base share a new in_file, so group them into one write
+            # and one summary line instead of one of each per job.
+            from parslbox.commands.helpers.job_id_parser import format_job_ids
+
             jobs = database.get_jobs_by_ids(db_path, job_ids)
+            by_new_in_file = {}
             for job in jobs:
                 base = job['in_file'].split()[0] if job.get('in_file') else None
                 if base:
-                    new_in_file = f"{base} {app_args}".strip()
-                    database.update_jobs(
-                        db_path=db_path,
-                        job_ids=[job['job_id']],
-                        in_file=new_in_file
-                    )
-                    info_messages.append(f"Job {job['job_id']}: updated args → {new_in_file}")
+                    by_new_in_file.setdefault(f"{base} {app_args}".strip(), []).append(job['job_id'])
+
+            for new_in_file, ids in by_new_in_file.items():
+                database.update_jobs(db_path=db_path, job_ids=ids, in_file=new_in_file)
+                args_updated_job_ids.extend(ids)
+                info_messages.append(
+                    f"Updated args on {len(ids)} job(s) [{format_job_ids(ids)}] → {new_in_file}"
+                )
 
     # Basic parameter validation
     if nnodes is not None and nnodes < 1:
@@ -120,12 +127,12 @@ def update_jobs(
                 
                 # Fail the job if there are any warnings (e.g., input file ignored)
                 if input_warnings:
-                    failed_jobs.append((job_id, f"Cannot update input file to '{input_file}' for job {job_id} app '{job_app}': {'; '.join(input_warnings)}"))
+                    failed_jobs.append((job_id, f"Cannot update input file to '{input_file}' for app '{job_app}': {'; '.join(input_warnings)}"))
 
                 
             except ValidationError as e:
                 # Input file validation failed for this job's app
-                failed_jobs.append((job_id, f"Input file '{input_file}' is not compatible with job {job_id} app '{job_app}': {str(e)}"))
+                failed_jobs.append((job_id, f"Input file '{input_file}' is not compatible with app '{job_app}': {str(e)}"))
     
     # Check for direct conflict: both ngpus and node_occupancy specified
     if ngpus is not None and node_occupancy is not None and ngpus > 0 and node_occupancy > 0:
@@ -139,7 +146,7 @@ def update_jobs(
             job_id = job['job_id']
             current_ngpus = job.get('ngpus', 0)
             if current_ngpus > 0:
-                failed_jobs.append((job_id, f"Cannot set node_occupancy for job {job_id} which currently has {current_ngpus} GPUs. Set ngpus=0 first."))
+                failed_jobs.append((job_id, f"Cannot set node_occupancy: job currently has {current_ngpus} GPUs. Set ngpus=0 first."))
     
     # Handle GPU scaling when nnodes is updated without explicit ngpus
     # This needs to be done per-job since each job may have different GPU configurations
@@ -156,15 +163,15 @@ def update_jobs(
             if current_ngpus > 0:  # This is a GPU job
                 if current_nnodes == 1 and nnodes > 1:
                     # Case 2: Single-node → Multi-node
-                    failed_jobs.append((job_id, 
-                        f"Cannot automatically scale GPU job {job_id} from 1 to {nnodes} nodes. "
+                    failed_jobs.append((job_id,
+                        f"Cannot automatically scale GPU job from 1 to {nnodes} nodes. "
                         f"Please use -g flag to specify total GPUs (total_gpus = nnodes * gpus_per_node)."))
                 elif current_nnodes > 1:
                     # Case 1: Multi-node → different node count
                     gpus_per_node = current_ngpus / current_nnodes
                     if not gpus_per_node.is_integer():
                         failed_jobs.append((job_id,
-                            f"Job {job_id} has {current_ngpus} GPUs across {current_nnodes} nodes "
+                            f"Job has {current_ngpus} GPUs across {current_nnodes} nodes "
                             f"({gpus_per_node:.2f} GPUs per node - not an integer). "
                             f"Cannot auto-scale. Please use -g flag to specify total GPUs."))
                     else:
@@ -286,8 +293,12 @@ def update_jobs(
                 if updated_count > 0:
                     non_dependency_updated_job_ids = existing_job_ids
     
-    # Combine all updated job IDs and remove duplicates
-    all_updated_job_ids = list(set(dependency_updated_job_ids + non_dependency_updated_job_ids))
+    # Combine all updated job IDs and remove duplicates. `--args` writes its own
+    # in_file above, so those IDs must be counted here too — otherwise an
+    # args-only update reports "No jobs were updated" despite having written.
+    all_updated_job_ids = sorted(
+        set(dependency_updated_job_ids + non_dependency_updated_job_ids + args_updated_job_ids)
+    )
     
     # Create message log dictionary
     msg_log = {
@@ -351,7 +362,7 @@ def update(
     """
     Updates one or more fields for a given set of jobs.
     """
-    from parslbox.commands.helpers.job_id_parser import parse_job_ids
+    from parslbox.commands.helpers.job_id_parser import parse_job_ids, format_job_ids, group_failures
     try:
         job_ids = parse_job_ids(job_ids)
     except ValueError as e:
@@ -368,8 +379,8 @@ def update(
             jobs_with_gpus = [job for job in jobs if job.get('ngpus', 0) > 0]
             
             if jobs_with_gpus:
-                job_ids_with_gpus = [str(job['job_id']) for job in jobs_with_gpus]
-                typer.secho(f"⚠️  Warning: Setting node occupancy will set ngpus to 0 for jobs: {', '.join(job_ids_with_gpus)}", fg=typer.colors.YELLOW)
+                job_ids_with_gpus = [job['job_id'] for job in jobs_with_gpus]
+                typer.secho(f"⚠️  Warning: Setting node occupancy will set ngpus to 0 for {len(job_ids_with_gpus)} job(s): {format_job_ids(job_ids_with_gpus)}", fg=typer.colors.YELLOW)
                 typer.secho("Node occupancy is for CPU-only jobs.", fg=typer.colors.YELLOW)
                 
                 proceed = typer.confirm("Do you want to proceed and set ngpus=0 for these jobs?")
@@ -423,16 +434,22 @@ def update(
         for info in msg_log["info"]:
             typer.secho(f"ℹ️  {info}", fg=typer.colors.BLUE)
         
-        # Display failed jobs
-        for job_id, error_msg in failed_jobs:
-            typer.secho(f"❌ {error_msg}", fg=typer.colors.RED)
-        
+        # Display failed jobs, grouped by error message (identical failures are
+        # the norm on bulk updates — one line per job would flood the terminal)
+        if failed_jobs:
+            typer.secho(f"❌ Failed to update {len(failed_jobs)} job(s):", fg=typer.colors.RED)
+            for error_msg, ids in group_failures(failed_jobs).items():
+                typer.secho(
+                    f"  [{len(ids)} job(s)] {format_job_ids(ids)}: {error_msg}",
+                    fg=typer.colors.RED,
+                )
+
         # CLI-specific success output
         if updated_job_ids:
-            typer.secho(f"🔄 Successfully updated {len(updated_job_ids)} job(s): {', '.join(map(str, updated_job_ids))}", fg=typer.colors.BLUE)
+            typer.secho(f"🔄 Successfully updated {len(updated_job_ids)} job(s): {format_job_ids(updated_job_ids)}", fg=typer.colors.BLUE)
         else:
             typer.secho("⚠️ No jobs were updated.", fg=typer.colors.YELLOW)
-        
+
         # Provide summary if there were both successes and failures
         if updated_job_ids and failed_jobs:
             typer.secho(f"ℹ️  Summary: {len(updated_job_ids)} succeeded, {len(failed_jobs)} failed", fg=typer.colors.BLUE)

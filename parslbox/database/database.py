@@ -146,10 +146,11 @@ def add_job(db_path: Path, path: str, app: str, num_nodes: int, ngpus: int, node
         return cur.lastrowid
 
 
-def get_jobs(db_path: Path, status: Optional[str] = None, app: Optional[str] = None, tag: Optional[str] = None, path: Optional[str] = None, in_file: Optional[str] = None) -> List[Dict[str, Any]]:
+def get_jobs(db_path: Path, status: Optional[str] = None, app: Optional[str] = None, tag: Optional[str] = None, path: Optional[str] = None, in_file: Optional[str] = None, num_nodes: Optional[int] = None) -> List[Dict[str, Any]]:
     """
-    Retrieves jobs from the database, allowing for filtering by status, app, tag, path, and in_file.
-    Filters are combined with AND logic. Path and in_file use pattern matching (LIKE).
+    Retrieves jobs from the database, allowing for filtering by status, app, tag, path, in_file,
+    and num_nodes. Filters are combined with AND logic. Path and in_file use pattern matching (LIKE);
+    num_nodes matches exactly.
     """
     with get_configured_connection(db_path) as con:
         con.row_factory = sqlite3.Row  # Access columns by name
@@ -185,7 +186,11 @@ def get_jobs(db_path: Path, status: Optional[str] = None, app: Optional[str] = N
         if in_file:
             conditions.append("in_file LIKE ?")
             params.append(f"%{in_file}%")
-        
+
+        if num_nodes is not None:
+            conditions.append("num_nodes = ?")
+            params.append(num_nodes)
+
         # If any conditions were added, join them with "AND" and append to the query
         if conditions:
             query = f"{base_query} WHERE {' AND '.join(conditions)}"

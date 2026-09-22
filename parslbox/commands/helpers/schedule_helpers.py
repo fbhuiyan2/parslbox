@@ -22,6 +22,7 @@ bounds how much we claim.
 import logging
 import os
 import time
+from concurrent.futures import as_completed, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional
@@ -482,3 +483,103 @@ def _fail_job(job_id: int, ctx: SchedulerContext) -> None:
     )
     ctx.job_tracker.update_job_status(job_id, "Failed")
     ctx.status_buffer.add_status_update(job_id, status="Failed")
+
+
+def drain_completions(ctx: SchedulerContext, poll_interval: float) -> int:
+    """Process every future that has *already* finished; block only if none has.
+
+    Why drain instead of handling one at a time: the caller flushes the status
+    buffer once per loop pass, so the number of DB writes equals the number of
+    passes, not the number of jobs. Handling a single completion per pass made
+    every flush carry exactly one row — `update_jobs` is one
+    `UPDATE ... WHERE job_id IN (...)` (one connection, one commit) regardless
+    of how many ids it carries, so a row is nearly free but a *write* is not.
+    At 24k jobs that was 24k connection-opens + WAL commits on a shared
+    filesystem instead of a handful.
+
+    Batch size self-tunes and needs no tuning knob: slower flushes let more
+    completions pile up, which makes the next batch bigger, which cuts the
+    flush count back down.
+
+    Trade-off — re-dispatch delay: the caller cannot refill freed capacity until
+    this returns, so a large batch keeps newly-freed nodes idle for the length
+    of the drain. Resources are released progressively inside
+    `handle_completion` (see `free_resources_with_health_check`), so nothing is
+    lost, only deferred. This is deliberately unbounded: capping the batch would
+    trade a guaranteed write amplification for a speculative utilisation gain
+    that only materialises when there is backlogged work waiting.
+
+    Returns the number of completions handled.
+    """
+    # Snapshot: handle_completion pops from ctx.fut_to_item, so iterating the
+    # live dict would raise "dictionary changed size during iteration".
+    done_now = [fut for fut in list(ctx.fut_to_item) if fut.done()]
+
+    if not done_now:
+        # Nothing ready — fall back to the original blocking wait so the caller
+        # re-checks walltime / re-queries for new work at a bounded cadence.
+        try:
+            for fut in as_completed(list(ctx.fut_to_item.keys()), timeout=poll_interval):
+                if fut not in ctx.fut_to_item:
+                    continue
+                handle_completion(fut, ctx)
+                return 1
+        except FutureTimeoutError:
+            pass
+        return 0
+
+    handled = 0
+    for fut in done_now:
+        if fut not in ctx.fut_to_item:
+            continue
+        handle_completion(fut, ctx)
+        handled += 1
+        # Walltime guard: the caller's shutdown check only runs between passes,
+        # so a long drain could sail past shutdown_at and lose the grace period
+        # needed to reconcile state. Bail out and let the caller's top-of-loop
+        # check fire; anything handled so far is already in the buffer and gets
+        # flushed by perform_shutdown's STEP 1.
+        if ctx.remaining_walltime() <= 0:
+            break
+    return handled
+
+
+def check_run_complete(ctx: SchedulerContext, dynamic: bool) -> Optional[str]:
+    """Decide whether the run is finished, flushing pending state before giving up.
+
+    Returns:
+        None       - futures still in flight; keep going.
+        'continue' - nothing running, but buffered updates were just written to
+                     the DB. Take one more dispatch pass before concluding.
+        'break'    - nothing running and nothing pending; the run is done.
+
+    The 'continue' case is what makes deferred writes safe. Dependency checks
+    (`parents_satisfied`) read parent status from the DB, not from the buffer.
+    If the last running job is a parent, its completion is buffered and its
+    child still looks un-ready — so without this guard the no-idle exit would
+    fire and the child would be silently skipped (fan-in / aggregator jobs).
+    Flushing here and taking one more pass turns that into a non-event.
+
+    Terminates: the extra pass either dispatches something (futures non-empty,
+    so we never reach this branch) or dispatches nothing, in which case the
+    buffer is now empty, `flush_all()` short-circuits to 0, and we break.
+    """
+    if ctx.fut_to_item:
+        return None
+
+    if ctx.status_buffer.flush_all() > 0:
+        return 'continue'
+
+    # Static orphans — claimed up front but never became runnable (e.g. a
+    # failed parent, or too big to ever fit). Return them to the pool rather
+    # than stranding them in Submitted/Resubmitted. Reads the backlog set
+    # directly; get_resource_status()['backlogged_jobs'] is the same value but
+    # scans every node to build a dict we'd throw away.
+    if not dynamic and ctx.resource_manager._backlogged_jobs_set:
+        orphans = list(ctx.resource_manager._backlogged_jobs_set)
+        reverted = database.revert_claims(ctx.db_path, orphans, owner=ctx.owner)
+        logger.info(
+            f"Static: reverted {reverted} un-runnable claimed job(s) to Ready/Restart."
+        )
+
+    return 'break'

@@ -24,6 +24,12 @@ def main_callback(ctx: typer.Context):
     This function runs BEFORE any command.
     It ensures the database and config are ready.
     """
+    try:
+        path_utils.validate_env_paths()
+    except path_utils.PbxPathError as e:
+        typer.secho(f"❌ Error: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
     # Don't check anything if running 'config' command
     if ctx.invoked_subcommand == "config":
         return

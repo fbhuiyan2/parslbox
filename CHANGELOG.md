@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+#### `pbx run` — one DB write per job during completion drain
+- **The status buffer never batched on the completion side.** The orchestrator loop handled exactly one finished future per pass and then flushed, so every flush carried a single row. `database.update_jobs` is one `UPDATE ... WHERE job_id IN (...)` — one connection, one commit — regardless of how many IDs it carries, so the cost is per *write*, not per row. A 24,000-job run performed 24,000 connection-opens and WAL commits instead of a handful. Dispatch was unaffected (it buffers in bulk and flushed correctly).
+- `schedule_helpers.drain_completions` now processes every future that has already finished before returning to dispatch, so one flush carries the whole batch. Batch size self-tunes: slower flushes let more completions accumulate, which shrinks the flush count. Falls back to the original bounded blocking wait when nothing is ready, so walltime is still re-checked at the poll cadence.
+- Trade-off: freed capacity is not re-dispatched until the drain returns. Resources are released progressively inside `handle_completion`, so nothing is lost, only deferred. The drain aborts early if it crosses `shutdown_at`, keeping the graceful-shutdown grace period intact.
+
+#### `pbx run` — no-idle exit can no longer skip a job on buffered parent state
+- **Fan-in jobs could be silently dropped.** Dependency checks read parent status from the DB, not the status buffer. If the last running job was a parent, its completion sat in the buffer, its child looked un-ready, and the no-idle exit rule fired and ended the run — reporting success while leaving the child `Ready`. Previously this was prevented only incidentally, by flushing on every single pass.
+- `schedule_helpers.check_run_complete` now flushes pending updates before concluding the run is over, and takes one more dispatch pass if it wrote anything. Terminates after at most one extra pass. Static-orphan reverting moved onto its terminal path.
+
+### Changed
+
+#### `pbx run --flush-interval` is inactive
+- The timer-based periodic flush was redundant: the unconditional flush before each dispatch pass already bounds buffer residency to one iteration, and nothing between the two produces buffer entries. The block is commented out rather than deleted in case a conditional flush is introduced later. The flag remains accepted but has no effect, and is no longer documented.
+
+#### `pbx ls` — row count is now a positional argument, `-n` means nodes
+- **Breaking: `--all` and `-n <count>` removed from `pbx ls`.** Row count moves to an optional positional `COUNT`: `pbx ls 10` (first 10), `pbx ls -20` (last 20), `pbx ls all` (everything). Bare `pbx ls` is unchanged (first 10 + last 10 once more than 25 jobs match). `-n 0` as an alias for "all" is gone — use `all`.
+- **`-n` / `--nnodes` on `pbx ls` now filters by node count**, matching its meaning on `add`, `update`, and `info`. This is a silent semantic change: `pbx ls -n 10` used to show the first 10 jobs and now shows jobs requiring 10 nodes.
+- `pbx ls` sets `ignore_unknown_options` so `-20` parses as a count rather than a flag; unparseable counts (including mistyped flags) raise a clear `Invalid count` error.
+
+#### Bulk `add` / `update` output no longer scales with job count
+- **Job IDs print as compressed ranges** — `✅ Added 5000 job(s), IDs: 1-5000` instead of a 29,000-character comma list. Non-contiguous sets collapse to `1-3 8 14-16`, which pastes straight back into `pbx update`/`rm`/`info`. Applies to `pbx add`, `pbx update`, the `--nocc` warning, and the MCP `add_jobs` response.
+- **Failures group by error message** instead of repeating it per job:
+  - `pbx update` — `[4990 job(s)] 1-4990: <message>`, one line per distinct error
+  - `pbx add` — `[5000 job(s)] <message>:` followed by the affected paths, sorted
+- **`update --args` emits one summary line per resulting input file** rather than one per job, and writes each group in a single DB call instead of one call per job.
+- **Update failure messages no longer embed the job ID** (it is redundant with the ID list, and prevented grouping). `pbx info` output is unchanged.
+- Measured at 5,000 jobs: `add` success 29,100 → 211 bytes, `update` success 28,931 → 46 bytes, duplicate-`add` failures 524,024 → 94,120 bytes.
+
+#### Generated batch scripts pin the resolved DB and config paths
+- `submit.sh` now always contains `export PBX_DB_PATH` and `export PBX_CONFIG_PATH`, resolved by `submit_job`. Previously each line was written only when the corresponding environment variable happened to be set in the submitting shell, and carried the raw variable value rather than the resolved path. `pbx run` inside the allocation now opens exactly the database that was validated at submit time instead of re-resolving against whatever environment the batch job inherits.
+- No change for the common case: with `PBX_DB_PATH` set, the value is the same; with it unset, the script now states the default (`~/.parslbox/job_database_pbx.db`) that `pbx run` would have resolved on its own. Sites where `$HOME` differs between the submit host and the compute nodes will now get the submit host's path.
+
+### Fixed
+
+- **`ParslBox(db_path=...)` / `ParslBox(config_path=...)` were ignored by `qsub` and `sbatch`.** Every other API method routes through `self.db_path`, but `submit_job` had no `db_path` parameter and read the module-global `path_utils.DB_FILE` directly (`submit_helpers.py:175,178`), so tag-glob expansion, the zero-runnable-jobs guard, and the script's `PBX_DB_PATH` export all used the environment-derived default. `db_path` is now threaded through `submit_to_scheduler` / `submit_to_slurm` into `submit_job`, which falls back to `path_utils.DB_FILE` when unset. Unreachable via CLI or MCP — both construct against the same default — but it blocked any caller wanting per-instance DB selection without mutating the process environment, which `path_utils.py:39` binds at import.
+- **`pbx update --args` reported "No jobs were updated" after successfully updating.** `app_args` was missing from the `non_dependency_updates` check in `commands/update.py`, so an args-only update wrote to the DB but returned an empty `updated_job_ids`. The IDs are now counted, and `update_jobs` returns them sorted rather than in `set()` order.
+- **`skills/parslbox-cli/SKILL.md` documented a job-ID syntax that does not work.** Positional ID ranges must be separate shell words (`pbx update 1-5 8 14-20`); quoting a multi-token list (`"1-5 8 14-20"`) fails to parse. `add --parents` is the opposite and does require quotes.
+
+### Added
+
+- **`format_job_ids` / `group_failures`** in `commands/helpers/job_id_parser.py` — range compression (inverse of `parse_job_ids`) and failure grouping, shared by CLI and MCP.
+- **`tests/test_job_id_format.py`** — range compression, round-trip through `parse_job_ids`, failure grouping, and the resulting `add`/`update` output.
+- **`app_args` exposed on the API and MCP.** It was CLI-only: `pbx add --args` / `pbx update --args` reached the shared core, but `ParslBox.add_jobs`, `ParslBox.update_jobs`, `AddJobSchema` and `UpdateJobSchema` had no such parameter, so no API or MCP caller could set app arguments. Now available on all four.
+- **Layer-alignment guard tests** in `tests/test_mcp_server.py` — assert every MCP `AddJobSchema`/`UpdateJobSchema` field exists as an API parameter, so a schema field the API cannot accept fails the suite.
+- **`num_nodes` filter across every layer** — `database.get_jobs`, `ParslBox.list_jobs`, `ParslBox.filter_jobs`, the `list_jobs` / `filter_jobs` MCP schemas, and `pbx filter -n/--nnodes`. Exact match.
+- **`tests/test_ls_command.py`** — first test coverage for `pbx ls` (count parsing, pagination, node filter, and the shared-layer/API/MCP wiring).
+
+---
+
 ## [1.0.1] - 2026-07-24
 
 ### Added

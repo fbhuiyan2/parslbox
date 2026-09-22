@@ -8,6 +8,8 @@ The DB, claim/revert, and dependency checks are all real.
 """
 
 import tempfile
+import time
+from concurrent.futures import Future
 from pathlib import Path
 
 import pytest
@@ -19,9 +21,11 @@ from parslbox.resource_manager.exceptions import InsufficientResources
 from parslbox.commands.helpers import schedule_helpers
 from parslbox.commands.helpers.schedule_helpers import (
     SchedulerContext,
+    check_run_complete,
     coarse_pick,
     dispatch_dynamic,
     dispatch_static,
+    drain_completions,
 )
 
 
@@ -370,3 +374,190 @@ class TestFlushBeforeDispatchOrdering:
         assert dispatch_static(ctx) == 1
         assert f'fut-{child}' in ctx.fut_to_item
         assert rm._backlogged_jobs_set == set()
+
+
+# --------------------------------------------------------------------------- #
+# Completion drain + exit guard
+# --------------------------------------------------------------------------- #
+class CompletionApp(FakeApp):
+    """FakeApp plus the two hooks handle_completion calls."""
+
+    def check_success(self, job_id, job_path, db_path, error_message=None):
+        return "Failed" if error_message else "Done"
+
+    def postprocess(self, job_id, job_path, db_path):
+        return "Done"
+
+
+def _mk_completion_ctx(db_path, rm, tracker, owner='A'):
+    ctx = _mk_ctx(db_path, rm, tracker, owner=owner)
+    ctx.app_instances['python'] = CompletionApp()
+    return ctx
+
+
+def _seed_future(ctx, job_id, done=True):
+    """Register a live future for job_id the way create_parsl_future would."""
+    fut = Future()
+    if done:
+        fut.set_result(None)
+    ctx.fut_to_item[fut] = {
+        'job': {'job_id': job_id, 'path': '/tmp', 'app': 'python', 'status': 'Ready'},
+        'app_instance': ctx.app_instances['python'],
+        'resource_manager': ctx.resource_manager,
+        'single_rank_launcher': None,
+        'env_file': None,
+        'gpu_env_vars': None,
+    }
+    ctx.resource_manager.assigned.add(job_id)
+    return fut
+
+
+class TestDrainCompletions:
+    def _setup(self, db, n_jobs, capacity=100):
+        ids = [_add(db, f'/j{i}') for i in range(n_jobs)]
+        tracker = JobTracker(database.get_jobs(db), db)
+        rm = FakeRM(capacity=capacity)
+        rm.job_tracker = tracker
+        ctx = _mk_completion_ctx(db, rm, tracker)
+        for jid in ids:
+            _seed_future(ctx, jid)
+        return ids, rm, ctx
+
+    def test_drains_every_done_future_in_one_call(self, db):
+        ids, rm, ctx = self._setup(db, 5)
+        assert drain_completions(ctx, poll_interval=0.05) == 5
+        assert ctx.fut_to_item == {}
+
+    def test_completions_accumulate_in_buffer_before_any_flush(self, db):
+        """The regression this change exists for: one drain must leave N entries
+        buffered, so the caller's single flush writes them as one batched
+        UPDATE. Handling one completion per pass made every flush carry 1 row."""
+        ids, rm, ctx = self._setup(db, 5)
+        drain_completions(ctx, poll_interval=0.05)
+
+        assert set(ctx.status_buffer.status_updates) == set(ids)
+        # Nothing written yet — the buffer is still holding all five.
+        assert all(_status(db, jid) == 'Ready' for jid in ids)
+
+        assert ctx.status_buffer.flush_all() == 5
+        assert all(_status(db, jid) == 'Done' for jid in ids)
+
+    def test_frees_resources_for_every_handled_future(self, db):
+        ids, rm, ctx = self._setup(db, 4)
+        drain_completions(ctx, poll_interval=0.05)
+        assert rm.assigned == set()
+
+    def test_blocking_path_when_nothing_is_done(self, db):
+        """No future ready → fall back to the bounded wait and handle at most
+        one, so the caller still re-checks walltime at poll_interval cadence."""
+        jid = _add(db, '/pending')
+        tracker = JobTracker(database.get_jobs(db), db)
+        rm = FakeRM(capacity=10)
+        rm.job_tracker = tracker
+        ctx = _mk_completion_ctx(db, rm, tracker)
+        _seed_future(ctx, jid, done=False)
+
+        assert drain_completions(ctx, poll_interval=0.05) == 0
+        assert len(ctx.fut_to_item) == 1
+
+    def test_blocking_path_handles_one_when_future_lands(self, db):
+        jid = _add(db, '/late')
+        tracker = JobTracker(database.get_jobs(db), db)
+        rm = FakeRM(capacity=10)
+        rm.job_tracker = tracker
+        ctx = _mk_completion_ctx(db, rm, tracker)
+        fut = _seed_future(ctx, jid, done=False)
+        fut.set_result(None)  # lands before the wait starts
+
+        assert drain_completions(ctx, poll_interval=0.05) == 1
+        assert ctx.fut_to_item == {}
+
+    def test_walltime_bail_stops_the_drain(self, db):
+        """A long drain must not sail past shutdown_at — the caller's shutdown
+        check only runs between passes."""
+        ids, rm, ctx = self._setup(db, 5)
+        ctx.shutdown_at = time.time() - 1  # already past the deadline
+
+        handled = drain_completions(ctx, poll_interval=0.05)
+        assert handled == 1                      # one, then the guard trips
+        assert len(ctx.fut_to_item) == 4         # the rest stay for reconciliation
+
+    def test_mutation_during_iteration_is_safe(self, db):
+        """handle_completion pops from fut_to_item; drain must iterate a snapshot."""
+        ids, rm, ctx = self._setup(db, 50)
+        assert drain_completions(ctx, poll_interval=0.05) == 50
+
+
+class TestCheckRunComplete:
+    def _setup(self, db, capacity=10):
+        tracker = JobTracker(database.get_jobs(db), db)
+        rm = FakeRM(capacity=capacity)
+        rm.job_tracker = tracker
+        return rm, _mk_completion_ctx(db, rm, tracker)
+
+    def test_none_while_futures_are_active(self, db):
+        jid = _add(db, '/a')
+        rm, ctx = self._setup(db)
+        _seed_future(ctx, jid, done=False)
+        assert check_run_complete(ctx, dynamic=True) is None
+
+    def test_continue_flushes_pending_and_asks_for_another_pass(self, db):
+        jid = _add(db, '/a')
+        rm, ctx = self._setup(db)
+        ctx.status_buffer.add_status_update(jid, status='Done')
+
+        assert check_run_complete(ctx, dynamic=True) == 'continue'
+        assert _status(db, jid) == 'Done'          # flushed on the way through
+
+    def test_break_when_nothing_running_and_nothing_pending(self, db):
+        rm, ctx = self._setup(db)
+        assert check_run_complete(ctx, dynamic=True) == 'break'
+
+    def test_terminates_after_a_single_continue(self, db):
+        """The guard must not loop: the second visit finds an empty buffer."""
+        jid = _add(db, '/a')
+        rm, ctx = self._setup(db)
+        ctx.status_buffer.add_status_update(jid, status='Done')
+
+        assert check_run_complete(ctx, dynamic=True) == 'continue'
+        assert check_run_complete(ctx, dynamic=True) == 'break'
+
+    def test_fan_in_child_survives_the_no_idle_exit(self, db):
+        """The bug the guard exists for: the last running job is a parent, its
+        Done is still buffered, so the DB-backed dependency check cannot see it.
+        Without the guard the run would exit and the child would be skipped."""
+        parent = _add(db, '/p')
+        child = _add(db, '/c', parents=[parent])
+        tracker = JobTracker(database.get_jobs(db), db)
+        rm = FakeRM(capacity=10)
+        rm.job_tracker = tracker
+        ctx = _mk_completion_ctx(db, rm, tracker)
+
+        # Parent is dispatched, runs, and completes as the last active future.
+        database.claim_jobs(db, [parent], [], owner='A')
+        _seed_future(ctx, parent)
+        assert drain_completions(ctx, poll_interval=0.05) == 1
+        assert ctx.fut_to_item == {}
+        assert _status(db, parent) == 'Submitted'   # Done is buffered, not written
+
+        # Child is not yet dispatchable — the DB still shows the parent unfinished.
+        assert dispatch_dynamic(ctx, None, None) == 0
+
+        # Guard flushes and buys one more pass, on which the child dispatches.
+        assert check_run_complete(ctx, dynamic=True) == 'continue'
+        assert _status(db, parent) == 'Done'
+        assert dispatch_dynamic(ctx, None, None) == 1
+        assert f'fut-{child}' in ctx.fut_to_item
+
+    def test_static_orphans_reverted_on_the_break_path(self, db):
+        parent = _add(db, '/p')
+        child = _add(db, '/c', parents=[parent])
+        database.claim_jobs(db, [parent, child], [], owner='A')
+        tracker = JobTracker(database.get_jobs(db), db)
+        rm = FakeRM(capacity=10)
+        rm.job_tracker = tracker
+        rm.add_to_backlog(child)
+        ctx = _mk_completion_ctx(db, rm, tracker)
+
+        assert check_run_complete(ctx, dynamic=False) == 'break'
+        assert _status(db, child) == 'Ready'        # returned to the pool

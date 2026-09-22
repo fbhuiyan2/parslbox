@@ -41,7 +41,7 @@ pbx config /custom/path     # writes to custom path
 
 ## `pbx add`
 
-Add jobs to the database.
+Add jobs to the database. New IDs print as a compressed range (`✅ Added 5000 job(s), IDs: 1-5000`); failures are grouped by error message with the affected paths listed under each.
 
 **Required**: `--app/-a`, `--config/-c`
 **Resource**: `--ngpus/-g`, `--nnodes/-n`, `--nocc/-o`, `--ranks-per-node/-rpn`, `--mpiopts`
@@ -79,23 +79,30 @@ pbx add /path/to/calc2 -a vasp -c polaris --parent-tag stage1
 
 List jobs as a Rich table.
 
+Takes an optional positional `COUNT`: `N` for the first N rows, `-N` for the last N, or
+`all` for everything. Omit it and the table auto-paginates (first 10 + last 10) when more
+than 25 jobs match.
+
+| Argument | Purpose |
+|---|---|
+| `COUNT` | `N` first N, `-N` last N, `all` everything; omit for the paginated view |
+
 | Flag | Short | Purpose |
 |---|---|---|
 | `--status` | `-s` | filter by status |
 | `--app` | `-a` | filter by app |
 | `--tag` | `-t` | filter by tag (supports `*` glob) |
-| `--all` | — | show all rows |
-| `-n N` | — | first N rows; negative for last N; `0` for all |
-
-Auto-paginates (first 10 + last 10) when more than 25 jobs match.
+| `--nnodes` | `-n` | filter by number of nodes (exact match) |
 
 ```bash
 pbx ls
+pbx ls all
+pbx ls 15           # first 15
+pbx ls -20          # last 20
 pbx ls --status Running --app lammps-kk --tag production
 pbx ls -s Running -a lammps-kk -t production
-pbx ls --all
-pbx ls -n 15        # first 15
-pbx ls -n -20       # last 20
+pbx ls -n 2         # only 2-node jobs
+pbx ls -20 -n 2     # last 20 of the 2-node jobs
 pbx ls -t '*test'   # tag glob
 ```
 
@@ -154,6 +161,7 @@ Output space-separated job IDs for shell composition. Silent on no match.
 | `--tag` | `-t` | exact, or `*` glob (e.g., `'*prod'`) |
 | `--path` | `-p` | substring |
 | `--in-file` | `-i` | substring |
+| `--nnodes` | `-n` | exact number of nodes |
 
 **Exclude**:
 
@@ -182,7 +190,9 @@ pbx info $(pbx filter -s Ready --xtag '*test')
 
 ## `pbx update`
 
-Update one or more job fields. Accepts ID ranges.
+Update one or more job fields. Accepts ID ranges as separate shell words (`pbx update 1-5 8 14-20`) — do not quote the whole list.
+
+Successful IDs print as compressed ranges (`1-5 8 14-20`). Failures are grouped by error message, one line per distinct error.
 
 **Fields**: `--status/-s`, `--tag/-t`, `--input/-i`, `--args`, `--envfile/-e`, `--ngpus/-g`, `--nnodes/-n`, `--nocc/-o`, `--ranks-per-node/-rpn`
 **Dependencies**: `--add_deps/--padd "8 9"`, `--rm_deps/--parm "7"`
@@ -292,4 +302,5 @@ Engine used by qsub/sbatch — not for direct use. Full runtime reference: [`pbx
 
 - `--dynamic` (default) re-queries the DB for runnable jobs each dispatch pass (and lets multiple runs share one DB); `--static` claims the runnable set once up front. Neither idles — a run exits when nothing runnable remains.
 - Triggers a graceful shutdown automatically before walltime (30s grace, 90s under `--respawn`) so in-flight jobs are reconciled cleanly: `Running` → `Killed` by default (or `Restart`/`Failed` under `--respawn`), and claimed-but-not-yet-running jobs revert to `Ready`/`Restart`.
+- `--walltime-seconds` (required) is injected by the generated batch script; it is what the shutdown timing above is measured against.
 - `--respawn N` is set internally by `pbx qsub --respawn N` / `pbx sbatch --respawn N`. It turns on the walltime-time auto-resubmission step. Do not invoke `pbx run` with it directly — use `pbx qsub --respawn N`. The `restart()` hook runs lazily per-job as each `Restart`-status job is dispatched, at every `pbx run` invocation, regardless of `--respawn`.

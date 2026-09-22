@@ -19,16 +19,18 @@ pbx = ParslBox(config_path="...", db_path="...")
 
 `ParslBox.__init__` checks (does not create) the config; if missing, raises. Run `pbx config` from the shell first, or call `parslbox.commands.config.config_setup(...)` programmatically.
 
+`db_path` / `config_path` apply to every method including `qsub` and `sbatch` — they pick the DB that tag globs and the runnable-jobs guard resolve against, and both are baked into the generated `submit.sh`. Both must be absolute paths — a relative value is rejected, since it would resolve against the allocation's working directory inside the batch job. `PBX_DB_PATH` / `PBX_CONFIG_PATH` do the same job as defaults, but are read once at import, so pass the arguments if one process must target more than one DB.
+
 ## Methods at a glance
 
 | Method | Returns | Purpose |
 |---|---|---|
 | `add_jobs(paths, app, config, ...)` | `(ids, failures, msg_log)` | Register one or many jobs. `paths` is always `List[str]`. |
-| `list_jobs(status=, app=, tag=, path=, in_file=)` | `List[dict]` | Job rows with optional filters |
-| `filter_jobs(status=, app=, tag=, path=, in_file=, exclude_status=, exclude_app=, exclude_tag=)` | `List[int]` | Just the job IDs matching the filters (note: IDs only, not full rows) |
+| `list_jobs(status=, app=, tag=, path=, in_file=, num_nodes=)` | `List[dict]` | Job rows with optional filters (`num_nodes` is an exact match) |
+| `filter_jobs(status=, app=, tag=, path=, in_file=, num_nodes=, exclude_status=, exclude_app=, exclude_tag=)` | `List[int]` | Just the job IDs matching the filters (note: IDs only, not full rows) |
 | `get_job(job_id)` | `dict` | Full row for one job |
 | `get_jobs_by_ids(ids)` | `List[dict]` | Full rows for a list of IDs |
-| `update_jobs(job_ids, status=, tag=, input_file=, ngpus=, env_file=, nnodes=, node_occupancy=, ranks_per_node=, add_deps=, rm_deps=)` | `(ids, failures, msg_log)` | Edit any of the listed fields. CLI `--args` is *not* a separate API param — append args to `input_file` instead. |
+| `update_jobs(job_ids, status=, tag=, input_file=, ngpus=, env_file=, nnodes=, node_occupancy=, ranks_per_node=, add_deps=, rm_deps=, app_args=)` | `(ids, failures, msg_log)` | Edit any of the listed fields. `app_args` mirrors CLI `--args`: it rebuilds each job's `in_file` as `<base script> <app_args>`, replacing any args already there. |
 | `remove_job(id)` / `remove_jobs(ids)` / `remove_all_jobs()` | `bool` / `int` / `int` | Delete |
 | `qsub(config, job_name, queue, select, walltime, project=, apps=, tags=, sched_opts=, respawn=, ...)` | `dict` | Build + submit a PBS batch. With `respawn=N` set, returns includes `respawn_template_file`. |
 | `sbatch(...)` | `dict` | Same as `qsub` for SLURM. Same `respawn` semantics. |

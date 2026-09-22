@@ -199,7 +199,8 @@ def config(
             )
             typer.secho(
                 "\nAll jobs from all your workflows land in this shared DB unless you\n"
-                "set PBX_DB_PATH to isolate a project. Three accepted forms:\n",
+                "set PBX_DB_PATH to isolate a project. Three accepted forms (the\n"
+                "value must be an absolute path):\n",
                 dim=True,
             )
             typer.secho(

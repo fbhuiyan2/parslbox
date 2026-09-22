@@ -12,6 +12,8 @@ pbx = ParslBox()                               # uses default DB + config
 
 `ParslBox.__init__` creates the DB if missing but **requires the config file to already exist** — run `pbx config` first (or pass `config_path=` to an existing one).
 
+`db_path` and `config_path` govern every method on the instance, `qsub`/`sbatch` included: they select the database that tag globs and the runnable-jobs guard are checked against, and both paths are written into the generated `submit.sh` so `pbx run` opens the same ones inside the allocation. Both must be absolute paths — a relative value is rejected, since it would resolve against the allocation's working directory inside the batch job. Setting `PBX_DB_PATH` / `PBX_CONFIG_PATH` in the environment stays equivalent — it just supplies the defaults. Pass the arguments when one process needs to target several databases, since the environment is only read once, at import.
+
 ## Exceptions
 
 ```python
@@ -109,6 +111,10 @@ pbx.update_jobs(
 
 # Add / remove dependency edges without rewriting the parent list
 pbx.update_jobs(job_ids=[200], add_deps=[10, 11], rm_deps=[7])
+
+# Change app arguments (mirrors CLI --args). Rebuilds in_file as
+# "<base script> <app_args>", replacing any args already set.
+pbx.update_jobs(job_ids=[101, 102], app_args="-var T 300")
 ```
 
 ---
@@ -127,9 +133,12 @@ for j in ready_lammps:
 # Substring match on path / input file
 in_scratch = pbx.list_jobs(path="/scratch")
 plot_jobs  = pbx.list_jobs(in_file="plot.py")
+
+# Exact node count
+two_node = pbx.list_jobs(num_nodes=2)
 ```
 
-> `list_jobs` filters use exact match for `status`/`app`/`tag` and substring match for `path`/`in_file`. For **tag glob support** (`*test`, `prod*`, `*3c*`) and exclude filters, use `filter_jobs`.
+> `list_jobs` filters use exact match for `status`/`app`/`tag`/`num_nodes` and substring match for `path`/`in_file`. For **tag glob support** (`*test`, `prod*`, `*3c*`) and exclude filters, use `filter_jobs`.
 
 ---
 

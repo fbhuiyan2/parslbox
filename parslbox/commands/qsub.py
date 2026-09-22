@@ -30,6 +30,7 @@ def submit_to_scheduler(
     sched_opts: Optional[List[str]] = None,
     dynamic: bool = True,
     respawn: Optional[int] = None,
+    db_path: Optional[Path] = None,
 ):
     """
     Submit a PBS job via qsub. Thin wrapper around submit_job().
@@ -52,6 +53,7 @@ def submit_to_scheduler(
         submit_command="qsub",
         dynamic=dynamic,
         respawn=respawn,
+        db_path=db_path,
     )
 
 

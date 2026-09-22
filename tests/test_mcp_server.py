@@ -168,3 +168,76 @@ class TestSubmitMcpSurfacesNewFields:
                 model_dump=lambda: {"config": "x", "job_name": "j", "queue": "q",
                                     "select": "1", "walltime": 10}))
         assert "Respawn template" not in out
+
+
+# ----------------- CLI / API / MCP parameter alignment --------------------- #
+
+
+class TestLayerAlignment:
+    """Every user-facing field the CLI accepts must also be reachable through
+    the API and the MCP schema. `app_args` was CLI-only for several releases."""
+
+    def _cli_option_names(self, command_module, func_name):
+        import inspect
+        return set(inspect.signature(
+            getattr(command_module, func_name)).parameters)
+
+    def test_add_app_args_reaches_api_and_mcp(self):
+        import inspect
+        from parslbox.api import ParslBox
+        from parslbox.mcp.schemas import AddJobSchema
+        from parslbox.commands import add as add_cmd
+
+        assert "app_args" in inspect.signature(add_cmd.add).parameters
+        assert "app_args" in inspect.signature(ParslBox.add_jobs).parameters
+        assert "app_args" in AddJobSchema.model_fields
+
+    def test_update_app_args_reaches_api_and_mcp(self):
+        import inspect
+        from parslbox.api import ParslBox
+        from parslbox.mcp.schemas import UpdateJobSchema
+        from parslbox.commands import update as update_cmd
+
+        assert "app_args" in inspect.signature(update_cmd.update).parameters
+        assert "app_args" in inspect.signature(ParslBox.update_jobs).parameters
+        assert "app_args" in UpdateJobSchema.model_fields
+
+    def test_update_schema_fields_all_exist_on_api(self):
+        """Guard against a schema field the API cannot accept."""
+        import inspect
+        from parslbox.api import ParslBox
+        from parslbox.mcp.schemas import UpdateJobSchema
+
+        api_params = set(inspect.signature(ParslBox.update_jobs).parameters)
+        schema_fields = set(UpdateJobSchema.model_fields) - {"job_id"}
+        assert schema_fields <= api_params, schema_fields - api_params
+
+    def test_add_schema_fields_all_exist_on_api(self):
+        import inspect
+        from parslbox.api import ParslBox
+        from parslbox.mcp.schemas import AddJobSchema
+
+        api_params = set(inspect.signature(ParslBox.add_jobs).parameters)
+        schema_fields = set(AddJobSchema.model_fields)
+        assert schema_fields <= api_params, schema_fields - api_params
+
+    def test_mcp_add_passes_app_args_through(self):
+        from unittest.mock import patch, MagicMock
+        import parslbox.mcp.mcp_server as m
+
+        with patch.object(m.pbx, "add_jobs", return_value=([1], [], {})) as mock_add:
+            m.add_jobs(MagicMock(model_dump=lambda: {
+                "paths": ["/p"], "app": "lammps-kk", "config": "polaris",
+                "input_file": "in.lammps", "app_args": "-var T 300",
+            }))
+        assert mock_add.call_args.kwargs["app_args"] == "-var T 300"
+
+    def test_mcp_update_passes_app_args_through(self):
+        from unittest.mock import patch, MagicMock
+        import parslbox.mcp.mcp_server as m
+
+        with patch.object(m.pbx, "update_jobs", return_value=([1], [], {})) as mock_upd:
+            m.update_job(MagicMock(model_dump=lambda: {
+                "job_id": 1, "app_args": "-var T 300",
+            }))
+        assert mock_upd.call_args.kwargs["app_args"] == "-var T 300"

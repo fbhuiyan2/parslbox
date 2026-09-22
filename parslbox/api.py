@@ -88,13 +88,21 @@ class ParslBox:
             config_path: Optional path to config file. If None, uses default.
         
         Raises:
+            PbxPathError: If PBX_DB_PATH / PBX_CONFIG_PATH, or an explicitly
+                passed db_path / config_path, is a relative path.
             FileNotFoundError: If config file does not exist.
         """
         # Set paths
+        path_utils.validate_env_paths()
+
         if db_path is None:
             db_path = path_utils.DB_FILE
+        else:
+            db_path = path_utils.require_absolute("db_path", db_path)
         if config_path is None:
             config_path = path_utils.PBX_CONFIG_FILE
+        else:
+            config_path = path_utils.require_absolute("config_path", config_path)
 
         self.db_path = db_path
         self.config_path = config_path
@@ -128,6 +136,7 @@ class ParslBox:
         parents: Optional[List[int]] = None,
         parent_tag: Optional[str] = None,
         status: str = "Ready",
+        app_args: Optional[str] = None,
     ) -> Tuple[List[int], List[Tuple[str, str]], Dict[str, List[str]]]:
         """
         Add one or more jobs to the database.
@@ -147,6 +156,7 @@ class ParslBox:
             parents: List of parent job IDs
             parent_tag: Tag to wait for (all jobs with this tag must be Done)
             status: Initial job status (default: 'Ready')
+            app_args: Extra arguments appended to the application command (requires input_file)
 
         Returns:
             Tuple of (successful_job_ids, failed_jobs, msg_log) where:
@@ -185,6 +195,7 @@ class ParslBox:
                 parents=parents,
                 parent_tag=parent_tag,
                 status=status,
+                app_args=app_args,
                 db_path=self.db_path,
             )
             return successful_job_ids, failed_jobs, msg_log
@@ -242,6 +253,7 @@ class ParslBox:
         ranks_per_node: Optional[int] = None,
         add_deps: Optional[List[int]] = None,
         rm_deps: Optional[List[int]] = None,
+        app_args: Optional[str] = None,
     ) -> Tuple[List[int], List[Tuple[int, str]], Dict[str, List[str]]]:
         """
         Update one or more jobs' fields.
@@ -258,6 +270,8 @@ class ParslBox:
             ranks_per_node: New ranks per node
             add_deps: Parent job IDs to add
             rm_deps: Parent job IDs to remove
+            app_args: Extra arguments appended to the application command; rebuilds
+                each job's in_file from its existing base script
 
         Returns:
             Tuple of (successful_job_ids, failed_jobs, msg_log) where:
@@ -295,6 +309,7 @@ class ParslBox:
                 ranks_per_node=ranks_per_node,
                 add_deps=add_deps,
                 rm_deps=rm_deps,
+                app_args=app_args,
                 db_path=self.db_path,
             )
             return updated_job_ids, failed_jobs, msg_log
@@ -312,6 +327,7 @@ class ParslBox:
         tag: Optional[str] = None,
         path: Optional[str] = None,
         in_file: Optional[str] = None,
+        num_nodes: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """
         List jobs from the database with optional filtering.
@@ -322,12 +338,14 @@ class ParslBox:
             tag: Filter by tag
             path: Filter by path (partial match)
             in_file: Filter by input file (partial match)
+            num_nodes: Filter by number of nodes (exact match)
 
         Returns:
             List of job dictionaries
         """
         return database.get_jobs(
-            self.db_path, status=status, app=app, tag=tag, path=path, in_file=in_file
+            self.db_path, status=status, app=app, tag=tag, path=path,
+            in_file=in_file, num_nodes=num_nodes
         )
     
     def filter_jobs(
@@ -337,6 +355,7 @@ class ParslBox:
         tag: Optional[str] = None,
         path: Optional[str] = None,
         in_file: Optional[str] = None,
+        num_nodes: Optional[int] = None,
         exclude_status: Optional[str] = None,
         exclude_app: Optional[str] = None,
         exclude_tag: Optional[str] = None,
@@ -350,6 +369,7 @@ class ParslBox:
             tag: Filter by tag (supports `*` glob)
             path: Filter by path (partial match)
             in_file: Filter by input file (partial match)
+            num_nodes: Filter by number of nodes (exact match)
             exclude_status: Drop jobs with this status
             exclude_app: Drop jobs with this app
             exclude_tag: Drop jobs with this tag (supports `*` glob)
@@ -359,7 +379,8 @@ class ParslBox:
         """
         from parslbox.commands.helpers.filter_helpers import apply_excludes
         jobs = self.list_jobs(
-            status=status, app=app, tag=tag, path=path, in_file=in_file
+            status=status, app=app, tag=tag, path=path, in_file=in_file,
+            num_nodes=num_nodes
         )
         jobs = apply_excludes(
             jobs,
@@ -502,6 +523,7 @@ class ParslBox:
                 config_path=self.config_path,
                 sched_opts=sched_opts,
                 respawn=respawn,
+                db_path=self.db_path,
             )
             return result
         except Exception as e:
@@ -575,6 +597,7 @@ class ParslBox:
                 config_path=self.config_path,
                 sched_opts=sched_opts,
                 respawn=respawn,
+                db_path=self.db_path,
             )
             return result
         except Exception as e:

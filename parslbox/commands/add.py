@@ -311,11 +311,17 @@ def add(
         for info in msg_log["info"]:
             typer.secho(f"ℹ️  {info}", fg=typer.colors.BLUE)
         
-        # Display failed jobs with better formatting
+        # Display failed jobs, grouped by error message. Bulk adds fail for the
+        # same reason en masse (re-adding an existing tree, say), so repeating
+        # the message per path is what makes the output unreadable.
         if failed_jobs:
+            from parslbox.commands.helpers.job_id_parser import group_failures
+
             typer.secho(f"❌ Failed to add {len(failed_jobs)} job(s):", fg=typer.colors.RED)
-            for path, error_msg in failed_jobs:
-                typer.secho(f"  - {path}: {error_msg}", fg=typer.colors.RED)
+            for error_msg, paths in group_failures(failed_jobs).items():
+                typer.secho(f"[{len(paths)} job(s)] {error_msg}:", fg=typer.colors.RED)
+                for path in sorted(paths):
+                    typer.secho(f"  {path}", fg=typer.colors.RED)
         
         # CLI-specific success output
         success_count = len(job_ids)
@@ -343,7 +349,8 @@ def add(
         # Display job creation results
         if job_ids:
             input_info = f" (input: {final_input_file})" if final_input_file else " (no input file)"
-            typer.secho(f"✅ Added {len(job_ids)} job(s) with IDs: {', '.join(map(str, job_ids))}{input_info}", fg=typer.colors.GREEN)
+            from parslbox.commands.helpers.job_id_parser import format_job_ids
+            typer.secho(f"✅ Added {len(job_ids)} job(s), IDs: {format_job_ids(job_ids)}{input_info}", fg=typer.colors.GREEN)
                 
         if app == "orca" and job_ids:
             typer.secho(

@@ -61,15 +61,18 @@ def db_with_tags(temp_db):
 @pytest.fixture
 def api_pbs(db_with_tags, tmp_path):
     """ParslBox instance whose qsub() exercises the real submit_job (and its
-    new validation). Mocks only the subprocess + config-loading layer."""
+    new validation). Mocks only the subprocess + config-loading layer.
+
+    Deliberately does NOT patch path_utils.DB_FILE — submit_job must honour
+    the instance's db_path on its own.
+    """
     fake_config = tmp_path / "pbx_config.yaml"
     fake_config.write_text("schedulers: {}\n")
     with patch("parslbox.commands.helpers.submit_helpers.load_config",
                return_value=_make_pbs_config()), \
          patch("parslbox.commands.helpers.submit_helpers.subprocess.run") as mock_run, \
          patch("parslbox.commands.helpers.submit_helpers.get_default_run_dir",
-               return_value=tmp_path / "fake_run"), \
-         patch("parslbox.utils.path_utils.DB_FILE", db_with_tags):
+               return_value=tmp_path / "fake_run"):
         mock_run.return_value = MagicMock(stdout="12345.pbs01\n", returncode=0)
         pbx = ParslBox(db_path=db_with_tags, config_path=fake_config)
         yield pbx, mock_run
@@ -83,8 +86,7 @@ def api_slurm(db_with_tags, tmp_path):
                return_value=_make_slurm_config()), \
          patch("parslbox.commands.helpers.submit_helpers.subprocess.run") as mock_run, \
          patch("parslbox.commands.helpers.submit_helpers.get_default_run_dir",
-               return_value=tmp_path / "fake_run"), \
-         patch("parslbox.utils.path_utils.DB_FILE", db_with_tags):
+               return_value=tmp_path / "fake_run"):
         mock_run.return_value = MagicMock(stdout="12345\n", returncode=0)
         pbx = ParslBox(db_path=db_with_tags, config_path=fake_config)
         yield pbx, mock_run
@@ -157,3 +159,60 @@ class TestApiSbatchValidation:
         with pytest.raises(ValidationError, match="No Ready/Restart"):
             pbx.sbatch(apps=["vasp"], tags=["prod-run"], **self._kwargs)
         assert mock_run.call_count == 0
+
+
+class TestInstancePathsReachSubmitJob:
+    """ParslBox(db_path=..., config_path=...) must govern qsub/sbatch the same
+    way it governs every other method — both for validation and for the paths
+    baked into the generated batch script."""
+
+    _kwargs = dict(
+        config="aurora-tile", job_name="test", queue="debug",
+        select="1", walltime=10, project="proj",
+    )
+
+    def test_qsub_validates_against_instance_db(self, api_pbs, db_with_tags):
+        # Tags only exist in db_with_tags, never in the process-wide default DB.
+        pbx, _ = api_pbs
+        result = pbx.qsub(apps=["lammps-kk"], tags=["prod-run"], **self._kwargs)
+        assert result["matched_jobs"] == 1
+
+    def test_submit_script_pins_instance_paths(self, api_pbs, db_with_tags,
+                                               tmp_path, monkeypatch):
+        # No PBX_* env at all: the script must still carry both exports,
+        # resolved from the instance rather than the environment.
+        monkeypatch.delenv("PBX_DB_PATH", raising=False)
+        monkeypatch.delenv("PBX_CONFIG_PATH", raising=False)
+
+        pbx, _ = api_pbs
+        result = pbx.qsub(apps=["lammps-kk"], tags=["prod-run"], **self._kwargs)
+
+        script = (Path(result["run_dir"]) / "submit.sh").read_text()
+        assert f'export PBX_DB_PATH="{db_with_tags}"' in script
+        assert f'export PBX_CONFIG_PATH="{tmp_path / "pbx_config.yaml"}"' in script
+
+    def test_sbatch_script_pins_instance_paths(self, api_slurm, db_with_tags,
+                                               tmp_path, monkeypatch):
+        monkeypatch.delenv("PBX_DB_PATH", raising=False)
+        monkeypatch.delenv("PBX_CONFIG_PATH", raising=False)
+
+        pbx, _ = api_slurm
+        result = pbx.sbatch(apps=["lammps-kk"], tags=["prod-run"], **self._kwargs)
+
+        script = (Path(result["run_dir"]) / "submit.sh").read_text()
+        assert f'export PBX_DB_PATH="{db_with_tags}"' in script
+        assert f'export PBX_CONFIG_PATH="{tmp_path / "pbx_config.yaml"}"' in script
+
+    def test_env_var_does_not_override_explicit_db_path(self, api_pbs,
+                                                        db_with_tags,
+                                                        monkeypatch):
+        # An unrelated PBX_DB_PATH in the environment must not leak into the
+        # script when the caller pinned a db_path explicitly.
+        monkeypatch.setenv("PBX_DB_PATH", "/somewhere/else/stale.db")
+
+        pbx, _ = api_pbs
+        result = pbx.qsub(apps=["lammps-kk"], tags=["prod-run"], **self._kwargs)
+
+        script = (Path(result["run_dir"]) / "submit.sh").read_text()
+        assert f'export PBX_DB_PATH="{db_with_tags}"' in script
+        assert "stale.db" not in script

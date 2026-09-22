@@ -9,6 +9,7 @@ from parslbox.system_configs.loader import get_system_config
 
 # Import helper functions
 from parslbox.commands.helpers.ls_cmd_helpers import (
+    parse_ls_count,
     select_jobs_to_display,
     truncate_path,
     parse_parents,
@@ -21,8 +22,12 @@ console = Console()
 app = typer.Typer()
 
 
-@app.command()
+@app.command(context_settings={"ignore_unknown_options": True})
 def ls(
+    count: Optional[str] = typer.Argument(
+        None, metavar="[COUNT]",
+        help="How many jobs to show: N for the first N, -N for the last N, or 'all'. Omit for a truncated summary."
+    ),
     status: Optional[str] = typer.Option(
         None, "--status", "-s", help="Filter jobs by status."
         ),
@@ -32,29 +37,28 @@ def ls(
     tag: Optional[str] = typer.Option(
         None, "--tag", "-t", help="Filter jobs by tag."
     ),
-    all_jobs: bool = typer.Option(
-        False, "--all", help="Show all jobs regardless of count."
-    ),
-    n: Optional[int] = typer.Option(
-        None, "-n", help="Number of jobs to show. Negative for last N jobs, 0 for all."
+    nnodes: Optional[int] = typer.Option(
+        None, "--nnodes", "-n", help="Filter jobs by number of nodes (exact match)."
     ),
 ):
     """
     Lists jobs in the database with various display options.
     """
-    # Check for conflicting flags
-    if all_jobs and n is not None:
-        console.print("[red]❌ Error: Cannot use both --all and -n flags together. Please use only one.[/red]")
+    try:
+        show_all, count_n = parse_ls_count(count)
+    except ValueError as e:
+        console.print(f"[red]❌ Error: {e}[/red]")
         raise typer.Exit(code=1)
-    
-    job_list = database.get_jobs(path_utils.DB_FILE, status=status, app=app, tag=tag)
-    
+
+    job_list = database.get_jobs(
+        path_utils.DB_FILE, status=status, app=app, tag=tag, num_nodes=nnodes
+    )
+
     if not job_list:
         console.print("[yellow]ℹ️ No jobs found in the database.[/yellow]")
         return
-    
-    # Select which jobs to display based on flags
-    jobs_to_display, info_messages = select_jobs_to_display(job_list, all_jobs, n)
+
+    jobs_to_display, info_messages = select_jobs_to_display(job_list, show_all, count_n)
     
     # Print job count and any info messages
     console.print(f"[green]# of jobs in the database: {len(job_list)}[/green]")
