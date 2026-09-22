@@ -31,6 +31,7 @@ Check out a quick [demo!](https://www.youtube.com/watch?v=DOu2VRQMVRU)
 - **Self-respawn chain:** `pbx qsub --respawn N` produces a self-perpetuating submission chain that auto-resubmits at every walltime boundary. Running jobs preempted at walltime are marked `Restart`; the next link calls each app's `restart()` hook lazily as each `Restart` job is dispatched, so apps can decide how to resume. See [`docs/pbx-run-details.md`](docs/pbx-run-details.md)
 - **Fault tolerance:** Node health tracking, quarantine, and auto-recovery
 - **Script-driven status reporting:** Python/Julia scripts report success/failure via `report_status()` utility
+- **Local-to-remote execution:** `pbx local` lets you author jobs on a laptop and run them on an HPC machine over Globus. The project's database stores remote paths from the first row, so nothing is rewritten at handover; `pbx qsub` pushes, submits on a Globus Compute endpoint, and pulls back. See [`docs/remote-workflow.md`](docs/remote-workflow.md)
 - **Python API and MCP server** for programmatic and AI-agent integration
 - **Rich CLI output** with tables and colors
 
@@ -58,6 +59,7 @@ pip install poetry
 poetry install                          # core dependencies
 # poetry install --extras "simulation"  # + ase, pymatgen
 # poetry install --extras "agentic"     # + uvicorn, mcp, pydantic
+# poetry install --extras "remote"      # + globus-compute-sdk, globus-sdk
 # poetry install --extras "simulation agentic"  # both
 # poetry install --all-extras
 ```
@@ -68,6 +70,7 @@ poetry install                          # core dependencies
 pip install .                         # core
 # pip install ".[simulation]"
 # pip install ".[agentic]"
+# pip install ".[remote]"
 # pip install ".[simulation,agentic]"
 # pip install ".[all]"
 ```
@@ -207,15 +210,33 @@ See [`docs/agentic_usage.md`](docs/agentic_usage.md) for full setup — adding t
 
 Full per-command reference with examples lives in [`docs/commands.md`](docs/commands.md).
 
+## Running on a remote machine
+
+`pbx local` turns a directory into a project whose database stores the paths jobs will have on an HPC machine, so work authored on a laptop runs there unchanged.
+
+```bash
+mkdir ~/work/proj1 && cd ~/work/proj1
+pbx local init                                     # prints the export line to run
+export PBX_DB_PATH="$PWD/job_database_pbx-local.db"
+
+mkdir run_a && pbx add run_a -a python -c aurora-gpu -i run.py -e pass
+pbx qsub -c aurora-gpu -N run1 -q debug --select 1 -T 30 -A myproject
+pbx local status                                   # who is ahead, endpoint health
+pbx local pull                                     # bring progress back
+```
+
+Needs `pip install ".[remote]"` **here** — the extra is client-side — plus a running Globus Compute endpoint on the remote machine with parslbox importable in its environment. The endpoint needs neither the `remote` extra nor a working parsl; the only parslbox code that runs there is `submit_job`. Full walkthrough: [`docs/remote-workflow.md`](docs/remote-workflow.md).
+
 ## Environment variables
 
-pbx reads three **shell** environment variables to locate its config, database, and pace job submissions. These are set in your shell (via `export`) — **not** inside `config.yaml`. `pbx config` prints copy-paste-ready `export` lines at the end of its output when relevant.
+pbx reads four **shell** environment variables to locate its config, database, and pace job submissions. These are set in your shell (via `export`) — **not** inside `config.yaml`. `pbx config` prints copy-paste-ready `export` lines at the end of its output when relevant.
 
 | Variable | Purpose | Default when unset |
 |---|---|---|
 | `PBX_CONFIG_PATH` | Location of `config.yaml` | `~/.parslbox/config.yaml` |
 | `PBX_DB_PATH` | Location of the SQLite job database | `~/.parslbox/job_database_pbx.db` |
 | `PBX_RUN_DELAY` | Seconds to sleep between consecutive job submissions | `0.2` — bump up on systems like Perlmutter where rapid `srun` invocations can overload `slurmctld` |
+| `PBX_GLOBUS_CLIENT_ID` | Native App client id used to log in to Globus Transfer. Only needed to move job directories with `pbx local push --with-dirs`; the database itself syncs over the Compute endpoint without it | unset — Transfer refuses with instructions |
 
 If you `echo $PBX_DB_PATH` in a fresh shell and get an empty line, that's the intended "not set" state — pbx falls back to the defaults above. Nothing is wrong.
 

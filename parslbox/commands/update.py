@@ -106,7 +106,7 @@ def update_jobs(
         raise ValidationError(f"--ranks-per-node must be a positive integer, got {ranks_per_node}")
 
     # Handle environment file validation and processing
-    final_env_file, env_info, env_warnings = validate_environment_file(env_file)
+    final_env_file, env_info, env_warnings = validate_environment_file(env_file, db_path=db_path)
     info_messages.extend(env_info)
     warning_messages.extend(env_warnings)
 

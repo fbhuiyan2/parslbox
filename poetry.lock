@@ -7,7 +7,7 @@ description = "Reusable constraint types to use with typing.Annotated"
 optional = true
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "extra == \"agentic\" or extra == \"all\""
+markers = "extra == \"agentic\" or extra == \"all\" or extra == \"remote\""
 files = [
     {file = "annotated_types-0.7.0-py3-none-any.whl", hash = "sha256:1f02e8b43a8fbbc3f3e0d4f0f4bfc8131bcb4eebe8849b8e5c773f3a1c582a53"},
     {file = "annotated_types-0.7.0.tar.gz", hash = "sha256:aff07c09a53a08bc8cfccb9c85b05f1aa9a2a6f23728d790723543408344ce89"},
@@ -104,7 +104,7 @@ description = "Foreign Function Interface for Python calling C code."
 optional = false
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "implementation_name == \"pypy\" or platform_python_implementation != \"PyPy\""
+markers = "(extra == \"agentic\" or extra == \"all\" or extra == \"remote\") and platform_python_implementation != \"PyPy\" or implementation_name == \"pypy\""
 files = [
     {file = "cffi-2.0.0-cp310-cp310-macosx_10_13_x86_64.whl", hash = "sha256:0cf2d91ecc3fcc0625c2c530fe004f82c110405f101548512cce44322fa8ac44"},
     {file = "cffi-2.0.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:f73b96c41e3b2adedc34a7356e64c8eb96e03a3782b535e043a986276ce12a49"},
@@ -310,7 +310,7 @@ files = [
     {file = "colorama-0.4.6-py2.py3-none-any.whl", hash = "sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6"},
     {file = "colorama-0.4.6.tar.gz", hash = "sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44"},
 ]
-markers = {main = "platform_system == \"Windows\"", dev = "sys_platform == \"win32\""}
+markers = {main = "platform_system == \"Windows\" or extra == \"remote\" or extra == \"all\"", dev = "sys_platform == \"win32\""}
 
 [[package]]
 name = "contourpy"
@@ -409,9 +409,10 @@ test-no-images = ["pytest", "pytest-cov", "pytest-rerunfailures", "pytest-xdist"
 name = "cryptography"
 version = "45.0.7"
 description = "cryptography is a package which provides cryptographic recipes and primitives to Python developers."
-optional = false
+optional = true
 python-versions = "!=3.9.0,!=3.9.1,>=3.7"
 groups = ["main"]
+markers = "extra == \"agentic\" or extra == \"all\" or extra == \"remote\""
 files = [
     {file = "cryptography-45.0.7-cp311-abi3-macosx_10_9_universal2.whl", hash = "sha256:3be4f21c6245930688bd9e162829480de027f8bf962ede33d4f8ba7d67a00cee"},
     {file = "cryptography-45.0.7-cp311-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:67285f8a611b0ebc0857ced2081e30302909f571a46bfa7a3cc0ad303fe015c6"},
@@ -484,19 +485,38 @@ tests = ["pytest", "pytest-cov", "pytest-xdist"]
 
 [[package]]
 name = "dill"
-version = "0.4.0"
+version = "0.3.9"
 description = "serialize all of Python"
 optional = false
 python-versions = ">=3.8"
 groups = ["main"]
 files = [
-    {file = "dill-0.4.0-py3-none-any.whl", hash = "sha256:44f54bf6412c2c8464c14e8243eb163690a9800dbe2c367330883b19c7561049"},
-    {file = "dill-0.4.0.tar.gz", hash = "sha256:0633f1d2df477324f53a895b02c901fb961bdbf65a17122586ea7019292cbcf0"},
+    {file = "dill-0.3.9-py3-none-any.whl", hash = "sha256:468dff3b89520b474c0397703366b7b95eebe6303f108adf9b19da1f702be87a"},
+    {file = "dill-0.3.9.tar.gz", hash = "sha256:81aa267dddf68cbfe8029c42ca9ec6a4ab3b22371d1c450abc54422577b4512c"},
 ]
 
 [package.extras]
 graph = ["objgraph (>=1.7.2)"]
 profile = ["gprof2dot (>=2022.7.29)"]
+
+[[package]]
+name = "exceptiongroup"
+version = "1.3.1"
+description = "Backport of PEP 654 (exception groups)"
+optional = true
+python-versions = ">=3.7"
+groups = ["main"]
+markers = "extra == \"remote\" or extra == \"all\""
+files = [
+    {file = "exceptiongroup-1.3.1-py3-none-any.whl", hash = "sha256:a7a39a3bd276781e98394987d3a5701d0c4edffb633bb7a5144577f82c773598"},
+    {file = "exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219"},
+]
+
+[package.dependencies]
+typing-extensions = {version = ">=4.6.0", markers = "python_version < \"3.13\""}
+
+[package.extras]
+test = ["pytest (>=6)"]
 
 [[package]]
 name = "filelock"
@@ -593,15 +613,68 @@ unicode = ["unicodedata2 (>=15.1.0) ; python_version <= \"3.12\""]
 woff = ["brotli (>=1.0.1) ; platform_python_implementation == \"CPython\"", "brotlicffi (>=0.8.0) ; platform_python_implementation != \"CPython\"", "zopfli (>=0.1.4)"]
 
 [[package]]
-name = "globus-sdk"
-version = "3.63.0"
-description = "Globus SDK for Python"
-optional = false
-python-versions = ">=3.8"
+name = "globus-compute-common"
+version = "1.0.0"
+description = "Common tools for Globus Compute projects"
+optional = true
+python-versions = ">=3.10"
 groups = ["main"]
+markers = "extra == \"remote\" or extra == \"all\""
 files = [
-    {file = "globus_sdk-3.63.0-py3-none-any.whl", hash = "sha256:debd56865dd015b6e85423a46a9f3226fafae42f90cb28b8cd3c534fb9984c81"},
-    {file = "globus_sdk-3.63.0.tar.gz", hash = "sha256:9a3c4668197f710e2748c015eb06f3b5eb34e929028bc4bf37558b8e0022ab45"},
+    {file = "globus_compute_common-1.0.0-py3-none-any.whl", hash = "sha256:27c256e9d89a4322529817a39cdfc7703056ddff810352bc4659fb2244840571"},
+    {file = "globus_compute_common-1.0.0.tar.gz", hash = "sha256:ebe2d37da999cf056d2d651267414a523b56df603bc7a388e764a7179de41f0d"},
+]
+
+[package.dependencies]
+pydantic = ">=2,<3"
+
+[package.extras]
+boto3 = ["boto3 (>=1.37)"]
+moto = ["moto[s3] (>=5,<6)"]
+redis = ["redis (>=5.3,<8)"]
+
+[[package]]
+name = "globus-compute-sdk"
+version = "4.15.0"
+description = "Globus Compute: High Performance Function Serving for Science"
+optional = true
+python-versions = ">=3.10"
+groups = ["main"]
+markers = "extra == \"remote\" or extra == \"all\""
+files = [
+    {file = "globus_compute_sdk-4.15.0-py3-none-any.whl", hash = "sha256:ccde95af6711c62106353c4078429025b3f4f3d79e7f809f59876289ec9715bf"},
+    {file = "globus_compute_sdk-4.15.0.tar.gz", hash = "sha256:6e4937756fd0769948296ba909029e3df81f802e6d59f216e7f90305f6624f34"},
+]
+
+[package.dependencies]
+colorama = ">=0.4.6,<1"
+dill = "0.3.9"
+exceptiongroup = ">=1.2.2"
+globus-compute-common = "1.0.0"
+globus-sdk = ">=4.4.0,<5"
+packaging = ">=21.1"
+pika = ">=1.2,<1.4"
+requests = ">=2.31.0,<3"
+rich = ">=13.7.1,<15"
+tblib = "1.7.0"
+texttable = ">=1.6.7"
+
+[package.extras]
+dev = ["coverage", "flake8 (==3.8.0)", "pre-commit", "psutil", "pyfakefs", "pytest (>=7.2)", "pytest-mock", "responses"]
+docs = ["furo (==2023.9.10)", "sphinx (>=7.3.2)"]
+test = ["coverage", "flake8 (==3.8.0)", "psutil", "pyfakefs", "pytest (>=7.2)", "pytest-mock", "responses"]
+
+[[package]]
+name = "globus-sdk"
+version = "4.9.0"
+description = "Globus SDK for Python"
+optional = true
+python-versions = ">=3.9"
+groups = ["main"]
+markers = "extra == \"remote\" or extra == \"all\""
+files = [
+    {file = "globus_sdk-4.9.0-py3-none-any.whl", hash = "sha256:7bbc33745b2daa0bfc080bd588be1643288ebb76949c410daae79ed29b2920b0"},
+    {file = "globus_sdk-4.9.0.tar.gz", hash = "sha256:41cdc8611e6d48133fc75e20162068c8ad583a63f33245bd2e2d64edd6425a71"},
 ]
 
 [package.dependencies]
@@ -1308,7 +1381,7 @@ files = [
     {file = "packaging-25.0-py3-none-any.whl", hash = "sha256:29572ef2b1f17581046b3a2227d5c611fb25ec70ca1ba8554b24b0e69331a484"},
     {file = "packaging-25.0.tar.gz", hash = "sha256:d443872c98d677bf60f6a1f2f8c1cb748e8fe762d2bf9d3148b5599295b0fc4f"},
 ]
-markers = {main = "extra == \"simulation\" or extra == \"all\""}
+markers = {main = "extra == \"simulation\" or extra == \"all\" or extra == \"remote\""}
 
 [[package]]
 name = "palettable"
@@ -1412,20 +1485,19 @@ xml = ["lxml (>=4.9.2)"]
 
 [[package]]
 name = "parsl"
-version = "2025.9.8"
+version = "2026.8.10"
 description = "Simple data dependent workflows in Python"
 optional = false
-python-versions = ">=3.9.0"
+python-versions = ">=3.10.0"
 groups = ["main"]
 files = [
-    {file = "parsl-2025.9.8-py3-none-any.whl", hash = "sha256:9e51d78852c41715e7259ae1d7186fbf131358631841a2a33d6c9b63c0186dcd"},
-    {file = "parsl-2025.9.8.tar.gz", hash = "sha256:19523b501265ad28f52a01b0ae268c17f47f075e1539313792552c4b864a343b"},
+    {file = "parsl-2026.8.10-py3-none-any.whl", hash = "sha256:f3cf37b2b75284c9be2c36bce7eac143284b4778d43451546e387ec61465dbd7"},
+    {file = "parsl-2026.8.10.tar.gz", hash = "sha256:ff811a6f57981eb8ea51a0ed9125971d557fdad51b63d30cbbdc3567c8eeb825"},
 ]
 
 [package.dependencies]
 dill = "*"
 filelock = ">=3.13,<4"
-globus-sdk = "*"
 psutil = ">=5.5.1"
 pyzmq = ">=17.1.2"
 requests = "*"
@@ -1436,20 +1508,39 @@ typeguard = ">=2.10,<3.dev0 || ==4.*"
 typing-extensions = ">=4.6,<5"
 
 [package.extras]
-all = ["Flask (>=1.0.2)", "azure (<=4)", "boto3", "cffi", "flask-sqlalchemy", "globus-compute-sdk (>=2.34.0)", "google-api-python-client", "google-auth", "ipython (<=8.6.0)", "jsonschema", "kubernetes", "msrestazure", "nbsphinx", "networkx (>=3.2,<3.3)", "pandas (>=2.2,<3)", "plotly", "proxystore", "pydot (>=1.4.2)", "python-daemon", "python-gssapi", "pyyaml", "radical.pilot (==1.90)", "radical.utils (==1.90)", "sphinx (>=7.4,<8)", "sphinx-rtd-theme", "sqlalchemy (>=2,<2.1)", "work-queue"]
+all = ["Flask (>=1.0.2)", "azure (<=4)", "boto3", "cffi", "flask_sqlalchemy", "globus-sdk", "globus_compute_sdk (>=2.34.0)", "google-api-python-client", "google-auth", "ipython (<=8.6.0)", "jsonschema", "kubernetes", "msrestazure", "nbsphinx", "networkx (>=3.2,<3.3)", "pandas (>=2.2,<3)", "plotly", "proxystore", "pydot (>=1.4.2)", "python-daemon", "python-gssapi", "pyyaml", "radical.pilot (==1.90)", "radical.utils (==1.90)", "sphinx (>=7.4,<8)", "sphinx_rtd_theme", "sqlalchemy (>=2,<2.1)", "work_queue"]
 aws = ["boto3"]
 azure = ["azure (<=4)", "msrestazure"]
-docs = ["ipython (<=8.6.0)", "nbsphinx", "sphinx (>=7.4,<8)", "sphinx-rtd-theme"]
+docs = ["ipython (<=8.6.0)", "nbsphinx", "sphinx (>=7.4,<8)", "sphinx_rtd_theme"]
 flux = ["cffi", "jsonschema", "pyyaml"]
-globus-compute = ["globus-compute-sdk (>=2.34.0)"]
+globus-compute = ["globus_compute_sdk (>=2.34.0)"]
+globus-transfer = ["globus-sdk"]
 google-cloud = ["google-api-python-client", "google-auth"]
 gssapi = ["python-gssapi"]
 kubernetes = ["kubernetes"]
 monitoring = ["sqlalchemy (>=2,<2.1)"]
 proxystore = ["proxystore"]
 radical-pilot = ["radical.pilot (==1.90)", "radical.utils (==1.90)"]
-visualization = ["Flask (>=1.0.2)", "flask-sqlalchemy", "networkx (>=3.2,<3.3)", "pandas (>=2.2,<3)", "plotly", "pydot (>=1.4.2)", "python-daemon"]
-workqueue = ["work-queue"]
+visualization = ["Flask (>=1.0.2)", "flask_sqlalchemy", "networkx (>=3.2,<3.3)", "pandas (>=2.2,<3)", "plotly", "pydot (>=1.4.2)", "python-daemon"]
+workqueue = ["work_queue"]
+
+[[package]]
+name = "pika"
+version = "1.3.2"
+description = "Pika Python AMQP Client Library"
+optional = true
+python-versions = ">=3.7"
+groups = ["main"]
+markers = "extra == \"remote\" or extra == \"all\""
+files = [
+    {file = "pika-1.3.2-py3-none-any.whl", hash = "sha256:0779a7c1fafd805672796085560d290213a465e4f6f76a6fb19e378d8041a14f"},
+    {file = "pika-1.3.2.tar.gz", hash = "sha256:b2a327ddddf8570b4965b3576ac77091b850262d34ce8c1d8cb4e4146aa4145f"},
+]
+
+[package.extras]
+gevent = ["gevent"]
+tornado = ["tornado"]
+twisted = ["twisted"]
 
 [[package]]
 name = "pillow"
@@ -1649,7 +1740,7 @@ description = "C parser in Python"
 optional = false
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "(implementation_name == \"pypy\" or platform_python_implementation != \"PyPy\") and implementation_name != \"PyPy\""
+markers = "(extra == \"agentic\" or extra == \"all\" or extra == \"remote\") and platform_python_implementation != \"PyPy\" and implementation_name != \"PyPy\" or implementation_name == \"pypy\""
 files = [
     {file = "pycparser-2.23-py3-none-any.whl", hash = "sha256:e5c6e8d3fbad53479cab09ac03729e0a9faf2bee3db8208a550daf5af81a5934"},
     {file = "pycparser-2.23.tar.gz", hash = "sha256:78816d4f24add8f10a06d6f05b4d424ad9e96cfebf68a4ddc99c65c0720d00c2"},
@@ -1662,7 +1753,7 @@ description = "Data validation using Python type hints"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"agentic\" or extra == \"all\""
+markers = "extra == \"agentic\" or extra == \"all\" or extra == \"remote\""
 files = [
     {file = "pydantic-2.12.5-py3-none-any.whl", hash = "sha256:e561593fccf61e8a20fc46dfc2dfe075b8be7d0188df33f221ad1f0139180f9d"},
     {file = "pydantic-2.12.5.tar.gz", hash = "sha256:4d351024c75c0f085a9febbb665ce8c0c6ec5d30e903bdb6394b7ede26aebb49"},
@@ -1685,7 +1776,7 @@ description = "Core functionality for Pydantic validation and serialization"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"agentic\" or extra == \"all\""
+markers = "extra == \"agentic\" or extra == \"all\" or extra == \"remote\""
 files = [
     {file = "pydantic_core-2.41.5-cp310-cp310-macosx_10_12_x86_64.whl", hash = "sha256:77b63866ca88d804225eaa4af3e664c5faf3568cea95360d21f4725ab6e07146"},
     {file = "pydantic_core-2.41.5-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:dfa8a0c812ac681395907e71e1274819dec685fec28273a28905df579ef137e2"},
@@ -1857,9 +1948,10 @@ windows-terminal = ["colorama (>=0.4.6)"]
 name = "pyjwt"
 version = "2.10.1"
 description = "JSON Web Token implementation in Python"
-optional = false
+optional = true
 python-versions = ">=3.9"
 groups = ["main"]
+markers = "extra == \"agentic\" or extra == \"all\" or extra == \"remote\""
 files = [
     {file = "PyJWT-2.10.1-py3-none-any.whl", hash = "sha256:dcdd193e30abefd5debf142f9adfcdd2b58004e644f25406ffaebd50bd98dacb"},
     {file = "pyjwt-2.10.1.tar.gz", hash = "sha256:3cc5772eb20009233caf06e9d8a0577824723b44e6648ee0a2aedb6cf9381953"},
@@ -2861,14 +2953,27 @@ widechars = ["wcwidth"]
 
 [[package]]
 name = "tblib"
-version = "3.1.0"
+version = "1.7.0"
 description = "Traceback serialization library."
 optional = false
-python-versions = ">=3.9"
+python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*"
 groups = ["main"]
 files = [
-    {file = "tblib-3.1.0-py3-none-any.whl", hash = "sha256:670bb4582578134b3d81a84afa1b016128b429f3d48e6cbbaecc9d15675e984e"},
-    {file = "tblib-3.1.0.tar.gz", hash = "sha256:06404c2c9f07f66fee2d7d6ad43accc46f9c3361714d9b8426e7f47e595cd652"},
+    {file = "tblib-1.7.0-py2.py3-none-any.whl", hash = "sha256:289fa7359e580950e7d9743eab36b0691f0310fce64dee7d9c31065b8f723e23"},
+    {file = "tblib-1.7.0.tar.gz", hash = "sha256:059bd77306ea7b419d4f76016aef6d7027cc8a0785579b5aad198803435f882c"},
+]
+
+[[package]]
+name = "texttable"
+version = "1.7.0"
+description = "module to create simple ASCII tables"
+optional = true
+python-versions = "*"
+groups = ["main"]
+markers = "extra == \"remote\" or extra == \"all\""
+files = [
+    {file = "texttable-1.7.0-py2.py3-none-any.whl", hash = "sha256:72227d592c82b3d7f672731ae73e4d1f88cd8e2ef5b075a7a7f01a23a3743917"},
+    {file = "texttable-1.7.0.tar.gz", hash = "sha256:2d2068fb55115807d3ac77a4ca68fa48803e84ebb0ee2340f858107a36522638"},
 ]
 
 [[package]]
@@ -2946,7 +3051,7 @@ description = "Runtime typing introspection tools"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"agentic\" or extra == \"all\""
+markers = "extra == \"agentic\" or extra == \"all\" or extra == \"remote\""
 files = [
     {file = "typing_inspection-0.4.2-py3-none-any.whl", hash = "sha256:4ed1cacbdc298c220f1bd249ed5287caa16f34d44ef4e9c3d0cbad5b521545e7"},
     {file = "typing_inspection-0.4.2.tar.gz", hash = "sha256:ba561c48a67c5958007083d386c3295464928b01faa735ab8547c5692e87f464"},
@@ -3027,10 +3132,11 @@ standard = ["colorama (>=0.4) ; sys_platform == \"win32\"", "httptools (>=0.6.3)
 
 [extras]
 agentic = ["mcp", "pydantic", "uvicorn"]
-all = ["ase", "mcp", "pydantic", "pymatgen", "uvicorn"]
+all = ["ase", "globus-compute-sdk", "globus-sdk", "mcp", "pydantic", "pymatgen", "uvicorn"]
+remote = ["globus-compute-sdk", "globus-sdk"]
 simulation = ["ase", "pymatgen"]
 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.14"
-content-hash = "f48aabbdd68a65ecc04ef489862083588a3ca64826469f427b18570bcf80cb96"
+content-hash = "80477511b35337ef28ec87ec1588942785a55f252928aea9928c1454a05a5489"

@@ -24,7 +24,9 @@ python -m parslbox.mcp.mcp_server --port 8080
 python -m parslbox.mcp.mcp_server --stdio
 ```
 
-Exposed tools: `add_jobs`, `submit_pbs_job`, `submit_slurm_job`, `cancel_pbs_job`, `cancel_slurm_job`, `remove_jobs`, `update_job`, `filter_jobs`, `list_jobs`, `get_job`, `get_jobs`.
+Exposed tools: `add_jobs`, `submit_pbs_job`, `submit_slurm_job`, `cancel_pbs_job`, `cancel_slurm_job`, `remove_jobs`, `update_job`, `filter_jobs`, `list_jobs`, `get_job`, `get_jobs`, `local_init`, `local_status`, `local_push`, `local_pull`.
+
+The four `local_*` tools drive a [local project](remote-workflow.md): a directory whose database stores the paths jobs will have on a remote HPC machine, so an agent can author work on one machine and submit it on another. `local_init` takes an absolute `directory` — the MCP server's working directory is usually not the caller's. In a local project `submit_pbs_job` / `submit_slurm_job` push, submit on the remote's Globus Compute endpoint, and pull back; `no_local` opts out.
 
 For an HTTP client example, see [`examples/chemgraph_parslbox_example/`](../examples/chemgraph_parslbox_example/).
 
@@ -159,5 +161,6 @@ These are operational lessons for adding jobs at scale over MCP:
 - **Bulk add with `all:<dir>` — use an absolute `<dir>`.** `all:<dir>` adds every subdirectory of `<dir>`. Over MCP, a bare `all` resolves against the **server's** working directory (usually not what you want), so always pass an absolute base dir.
 - **MCP calls are synchronous — big batches can hit the client timeout.** Adding hundreds/thousands of jobs can take longer than the client's response window. The call may report a timeout **while the database writes still commit** (each insert commits individually). Don't assume failure.
 - **On a timeout, verify then retry.** Check the DB with `list_jobs` / `filter_jobs` before re-issuing. Retries are safe: adds are idempotent via a `(path, in_file)` UNIQUE constraint — re-adding an existing job comes back as a failure, not a duplicate.
+- **In a local project, pull before you push.** `local_push` and `local_pull` refuse to overwrite a side that changed since the last sync rather than merging. `local_status` runs the same comparison without changing anything, so check it first and let the refusals be the safety net, not the workflow.
 - **Add sequentially, not in parallel.** Bulk adds serialize on SQLite's single writer lock; firing several `add_jobs` calls at once just makes them contend and raises the chance of a timeout.
 - **If you control the client timeout, raise it.** For OpenCode, add a `timeout` (ms) to the `mcp` block. Note OpenCode's `timeout` governs tool *fetching*, not necessarily each tool-call response — so pair it with the smaller-batch/sequential guidance above.

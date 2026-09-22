@@ -115,7 +115,7 @@ Optional overrides:
 
 Set `RUN_HOOKS_ON_COMPUTE = True` when your hooks do non-trivial work (file staging on node-local scratch, NumPy/HDF5 post-analysis, anything that imports the heavy modules the job uses). The app class is re-instantiated on the compute node, so its `__init__` must be side-effect-free. The hook's return value (the status string from `postprocess`) is communicated back via a `PBX_HOOK_RETURN` file in the job directory, mirroring the `PBX_JOB_STATUS_REPORT` pattern.
 
-See [`parslbox/apps/EXAMPLE_NEW_APP.py`](../parslbox/apps/EXAMPLE_NEW_APP.py) for full templates.
+See `parslbox/apps/EXAMPLE_NEW_APP.py` (from the repo root) for full templates.
 
 ### Where custom apps live
 

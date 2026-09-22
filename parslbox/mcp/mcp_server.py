@@ -1,9 +1,17 @@
+import sys
+
 from mcp.server.fastmcp import FastMCP
 
 from parslbox.api import ParslBox
+from parslbox.local.project import LocalProjectError
+from parslbox.utils.path_utils import PbxPathError
 from parslbox.commands.helpers.job_id_parser import format_job_ids, group_failures
 from parslbox.mcp.schemas import (
     AddJobSchema,
+    LocalInitSchema,
+    LocalPullSchema,
+    LocalPushSchema,
+    LocalStatusSchema,
     CancelJobSchema,
     FilterJobsSchema,
     GetJobSchema,
@@ -16,7 +24,21 @@ from parslbox.mcp.schemas import (
 )
 
 # Start ParslBox and MCP.
-pbx = ParslBox()
+def _start() -> ParslBox:
+    """ParslBox, or a readable reason why the server cannot start.
+
+    A wrong PBX_DB_PATH or a missing config is the caller's environment, not
+    a bug here. An MCP client shows the server's stderr and nothing else, so
+    a traceback would bury the one line that says what to fix.
+    """
+    try:
+        return ParslBox()
+    except (LocalProjectError, PbxPathError, FileNotFoundError) as e:
+        sys.stderr.write(f"\nParslBox MCP server did not start.\n\n{e}\n\n")
+        raise SystemExit(1)
+
+
+pbx = _start()
 
 
 def _fmt_resources(job: dict) -> str:
@@ -59,7 +81,12 @@ mcp = FastMCP(
         "- filter_jobs: filter jobs by status, app, tag, path, or input file and return their IDs.\n"
         "- list_jobs: list jobs with full details, with optional filtering by status, app, tag, path, or input file.\n"
         "- get_job: get a single job's full details by its ID.\n"
-        "- get_jobs: get multiple jobs' full details by their IDs.\n\n"
+        "- get_jobs: get multiple jobs' full details by their IDs.\n"
+        "- local_init: create a local project in a directory, so jobs authored there run on a remote machine.\n"
+        "- local_status: for a local project (jobs authored here, run on a remote machine), "
+        "report which side is ahead and whether the Compute endpoint answers.\n"
+        "- local_push: send the local project's database to the remote machine.\n"
+        "- local_pull: bring the remote database back down.\n\n"
     ),
 )
 
@@ -101,6 +128,30 @@ def add_jobs(params: AddJobSchema) -> str:
     return "\n".join(response_parts)
 
 
+def _remote_lines(status: dict) -> list:
+    """Extra lines when the submission went to another machine.
+
+    Without these an agent cannot tell a remote submission from a local one:
+    the run directory it is shown does not exist here, and a failed post-submit
+    pull -- which means the local database is now behind -- is invisible.
+    """
+    if not status.get("remote"):
+        return []
+    lines = [f"Submitted on remote Compute endpoint {status.get('endpoint')}.",
+             f"Remote run directory: {status.get('remote_run_dir')}"]
+    push = status.get("push") or {}
+    if push.get("bytes") is not None:
+        lines.append(f"Pushed {push['bytes']} bytes of database first.")
+    transfer = (push.get("transfer") or {}).get("outcome")
+    if transfer:
+        lines.append(f"Directory transfer {transfer['status']}, "
+                     f"{transfer.get('files_transferred')} files.")
+    if status.get("pull_error"):
+        lines.append(f"WARNING: the post-submit pull failed ({status['pull_error']}), "
+                     f"so the local database may be behind the remote.")
+    return lines
+
+
 @mcp.tool(
     name="submit_pbs_job",
     description=(
@@ -138,6 +189,7 @@ def submit_pbs_job(params: QSubSchema) -> str:
             lines.append(f"Resolved tags: {', '.join(resolved)}")
         if respawn_template:
             lines.append(f"Respawn template: {respawn_template} (chain auto-resubmits at walltime)")
+        lines += _remote_lines(status)
         return "\n".join(lines)
     else:
         error_msg = status.get("error", "Unknown error")
@@ -186,6 +238,7 @@ def submit_slurm_job(params: SBatchSchema) -> str:
             lines.append(f"Resolved tags: {', '.join(resolved)}")
         if respawn_template:
             lines.append(f"Respawn template: {respawn_template} (chain auto-resubmits at walltime)")
+        lines += _remote_lines(status)
         return "\n".join(lines)
     else:
         error_msg = status.get("error", "Unknown error")
@@ -411,6 +464,163 @@ def get_jobs(params: GetJobsByIdsSchema) -> str:
         response_parts.append("\n".join(parts))
 
     return "\n".join(response_parts)
+
+
+@mcp.tool(
+    name="local_init",
+    description=(
+        "Create a local project: a directory whose ParslBox database stores remote paths, "
+        "so jobs can be authored on this machine and run on a remote one.\n\n"
+        "Writes a database and a .pbxlocal.yaml, touches no network. Refuses if the "
+        "directory already holds a populated database with no project file, or if a "
+        "project exists in a parent directory (pass nested_ok to go ahead). Re-running "
+        "on an existing project reports it and changes nothing."
+    ),
+)
+def local_init(params: LocalInitSchema) -> str:
+    try:
+        result = pbx.local_init(**params.model_dump())
+    except Exception as e:
+        return f"Exception occurred when creating the local project. Exception: {e}"
+    lines = [
+        f"{result['action']}: {result['local_root']} -> {result['remote_root']}",
+        f"db: {result['db_path']}",
+        f"endpoint: {result['compute_endpoint'] or 'not configured'}",
+    ]
+    lines += result.get("notes", [])
+    lines.append(result["export_line"])
+    return "\n".join(lines)
+
+
+@mcp.tool(
+    name="local_status",
+    description=(
+        "Report on a local project: one whose database stores remote paths so jobs can be "
+        "authored here and run on a remote machine.\n\n"
+        "Says which side has changed since the last sync, whether the Globus Compute "
+        "endpoint answers, and what PBX_DB_PATH resolves to. Read-only. "
+        "If the current database is not a local project, says so -- that is not an error."
+    ),
+)
+def local_status(params: LocalStatusSchema) -> str:
+    try:
+        report = pbx.local_status(check_remote=params.check_remote)
+    except Exception as e:
+        return f"Exception occurred when reading local project status. Exception: {e}"
+
+    if not report.get("is_local_project"):
+        if report.get("misconfigured"):
+            return f"Local project misconfigured: {report['message']}"
+        return f"Not a local project. PBX_DB_PATH resolves to {report['db_path']}."
+
+    if report.get("error"):
+        return (f"local project at {report.get('local_root')}, but its database "
+                f"could not be read: {report['error']}")
+
+    remote = report.get("remote", {})
+    if remote.get("reachable"):
+        endpoint_state = "reachable"
+    elif remote.get("checked"):
+        endpoint_state = "no answer"
+    else:
+        endpoint_state = remote.get("error", "not checked")
+
+    last = report.get("last_sync")
+    lines = [
+        f"local: {report['local_root']} | remote: {report['remote_root']}",
+        f"db: {report['db_path']} | {report.get('job_count')} jobs",
+        f"endpoint: {report.get('compute_endpoint') or 'none'} ({endpoint_state})",
+        f"last sync: {last['at']} ({last.get('direction')})" if last else "last sync: never",
+        f"local drift: {report['local']['drift']}",
+    ]
+    if remote.get("fingerprint"):
+        lines.append(f"remote drift: {remote['drift']}")
+    elif remote.get("checked") and remote.get("reachable"):
+        lines.append("remote drift: no database there yet")
+    if report.get("transfer_remote"):
+        root = report.get("transfer_remote_root")
+        lines.append(f"transfer collection: {report['transfer_remote']} "
+                     + (f"rooted at {root}" if root else "root not detected yet"))
+    if remote.get("identity_ok") is False:
+        lines.append("WARNING: the remote database belongs to a different project.")
+    if report.get("moved"):
+        lines.append(f"NOTE: project was created at {report['recorded_local_root']} and moved.")
+    if report.get("recommendation"):
+        lines.append(f"-> {report['recommendation']}")
+    lines.append(report["export_line"])
+    return "\n".join(lines)
+
+
+@mcp.tool(
+    name="local_push",
+    description=(
+        "Send a local project's database up to the remote machine.\n\n"
+        "Refuses if the remote changed since the last sync -- that is usually a running "
+        "allocation's progress, and pushing over it would lose the result. Pull first, or "
+        "pass force to overwrite deliberately. Optionally sends job directories too."
+    ),
+)
+def local_push(params: LocalPushSchema) -> str:
+    try:
+        result = pbx.local_push(
+            force=params.force,
+            with_dirs=params.with_dirs,
+            apps=params.apps,
+            tags=params.tags,
+            wait_for_dirs=params.wait_for_dirs,
+            sync_level=params.sync_level,
+        )
+    except Exception as e:
+        return f"Exception occurred when pushing. Exception: {e}"
+
+    lines = [
+        f"Pushed {result['bytes'] / 1024:.0f} KB to {result['remote_db_path']}",
+        f"remote now: {result['fingerprint'].get('count')} jobs",
+    ]
+    dirs = result.get("dirs")
+    if dirs:
+        statuses = "/".join(dirs.get("statuses") or []) or "any status"
+        lines.append(
+            f"directories: {len(dirs['present'])} to send "
+            f"({dirs.get('matched')} of {dirs.get('total')} jobs are {statuses}"
+            f"; {len(dirs['missing'])} missing locally, "
+            f"{len(dirs['outside'])} outside the project)")
+    if result.get("transfer_remote_root_detected"):
+        lines.append(f"collection root detected: "
+                     f"{result['transfer_remote_root']} (saved to .pbxlocal.yaml)")
+    transfer = result.get("transfer") or {}
+    if transfer.get("submitted"):
+        lines.append(f"transfer: {transfer['count']} director(ies) in "
+                     f"{transfer['batches']} task(s): {', '.join(transfer['task_ids'])}")
+        outcome = transfer.get("outcome")
+        if outcome:
+            note = outcome.get("nice_status")
+            lines.append(f"transfer {outcome['status']}, "
+                         f"{outcome.get('files_transferred')} files, "
+                         f"{(outcome.get('bytes_transferred') or 0) / 1e6:.1f} MB"
+                         + (f" ({note})" if note else ""))
+        else:
+            lines.append("not waiting; watch at https://app.globus.org/activity")
+    elif transfer.get("reason"):
+        lines.append(f"no directory transfer: {transfer['reason']}")
+    return "\n".join(lines)
+
+
+@mcp.tool(
+    name="local_pull",
+    description=(
+        "Bring a local project's remote database back down over the local one.\n\n"
+        "Refuses if the local database changed since the last sync, since those changes "
+        "would be lost and there is no merge. Pass force to overwrite deliberately."
+    ),
+)
+def local_pull(params: LocalPullSchema) -> str:
+    try:
+        result = pbx.local_pull(force=params.force)
+    except Exception as e:
+        return f"Exception occurred when pulling. Exception: {e}"
+    return (f"Pulled {result['bytes'] / 1024:.0f} KB, "
+            f"local now: {result['fingerprint'].get('count')} jobs")
 
 
 # Start MCP server
