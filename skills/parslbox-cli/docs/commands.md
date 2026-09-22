@@ -17,6 +17,7 @@ Submission flow: `pbx qsub` / `pbx sbatch` generate a `submit.sh` and submit it 
 | [`pbx rm`](#pbx-rm) | Delete jobs from the database by ID range or `all`. |
 | [`pbx qsub` / `pbx sbatch`](#pbx-qsub--pbx-sbatch) | Generate a `submit.sh` and submit it to PBS / SLURM. |
 | [`pbx qdel` / `pbx scancel`](#pbx-qdel-jobid--pbx-scancel-jobid) | Gracefully cancel a running ParslBox batch job (SIGTERM → grace → hard kill). |
+| [`pbx local`](#pbx-local) | Author jobs on this machine, run them on a remote one over Globus. |
 
 | Internal | What it does |
 |---|---|
@@ -233,7 +234,7 @@ Both commands share identical flag names — there is no `--partition`, `--nodes
 - `--queue/-q` — PBS queue name (qsub) / SLURM partition name (sbatch).
 - `--select` — PBS select spec (qsub), e.g. `4` or `2:ncpus=32:ngpus=4` / number of nodes (sbatch), e.g. `2`.
 
-**Optional**: `--run-dir`, `--apps/-a`, `--tags/-t`, `--retries`, `--sched-opts`, `--dynamic`/`--static`, `--respawn N`, `--loglevel`
+**Optional**: `--run-dir`, `--apps/-a`, `--tags/-t`, `--retries`, `--sched-opts`, `--dynamic`/`--static`, `--respawn N`, `--loglevel`, `--no-local`, `--push-dirs`
 
 Notes:
 - `--walltime` defaults to **minutes**; supports `h` and `d` suffixes (`90`, `4.25h`, `3.5d`).
@@ -243,6 +244,7 @@ Notes:
 - `--respawn N` enables the self-respawn chain. A `respawn_template.sh` is generated alongside `submit.sh`. At each walltime expiry, `Running` jobs are marked `Restart` (instead of `Killed`) and the next link is auto-submitted with `--respawn (N-1)`. When `--respawn 0`, `Running` jobs go to `Failed` and the chain ends. Full lifecycle + per-link behavior: [`pbx-run-details.md`](pbx-run-details.md).
 - **Tag globs**: each `--tags` token may be a literal or a `*` glob (`*prod`, `run*`, `*3c*`). Globs are resolved against the DB before submission. **If any token matches no existing tag, submission aborts.** Quote globs to stop the shell from expanding `*`.
 - **Job-count guard**: before submitting, qsub/sbatch query the DB for matching Ready/Restart jobs. **If zero match, submission aborts** to avoid wasting the allocation.
+- **In a local project** (see [`pbx local`](#pbx-local)) the submission is handed to the remote machine instead: the database is pushed, `submit_job` runs on the Globus Compute endpoint, and the result is pulled back. `--no-local` submits from here instead; `--push-dirs` also sends the matching jobs' directories over Globus Transfer first.
 - After generation, the submit script is printed in a cyan box with the `pbx run` line highlighted in red. When `--respawn` is set, `respawn_template.sh` is also printed (yellow note explains the placeholder behavior).
 
 ```bash
@@ -292,6 +294,42 @@ Gracefully cancel a running ParslBox batch job. **Always prefer these over raw `
 ```bash
 pbx qdel    1234567        # 30s default grace
 pbx scancel 7654321 -g 60  # custom grace
+```
+
+---
+
+## `pbx local`
+
+Author jobs on your laptop, run them on an HPC machine. Full walkthrough: [`remote-workflow.md`](remote-workflow.md).
+
+A **local project** is a directory holding `job_database_pbx-local.db` and a `.pbxlocal.yaml` beside it. Its database stores **remote** paths from the first row: `pbx add ./run_a` in a project rooted at `/lus/flare/.../proj1` stores `/lus/flare/.../proj1/run_a`. Nothing is rewritten at handover.
+
+| Subcommand | What it does |
+|---|---|
+| `pbx local init` | Create or resume a project in the current directory. |
+| `pbx local status` | Which side is ahead, whether the endpoint answers, and the export line. |
+| `pbx local push` | Send the local database up. Refuses if the remote moved. |
+| `pbx local pull` | Bring the remote database down. Refuses if the local moved. |
+
+Notes:
+- **`PBX_DB_PATH` is still what selects the database.** `init` cannot set it in your shell, so it prints the `export` line to run. It names the **file**, never the directory — exporting the directory resolves to `job_database_pbx.db`, a separate empty database. Every `pbx` command detects this and refuses before the file is created, printing the corrected `export` line.
+- **Path rule for `pbx add`.** A path under the project root must exist here and is stored with the remote prefix. A path outside it must be absolute and is stored unchanged — it already describes the remote filesystem, so it is not checked locally.
+- **Only `init` looks at the current directory.** `status`, `push` and `pull` follow `PBX_DB_PATH`, so they work from anywhere.
+- **Nesting is allowed** — `PBX_DB_PATH` says which database you are on — but `init` points out a project above it and asks first. `--nested-ok` skips the prompt.
+- **The guard.** Push and pull compare `MAX(timestamp)` and `COUNT(*)` against the values recorded at the last sync, and refuse rather than overwrite work. There is no merge. `--force` overrides. `status` runs the same comparison and changes nothing.
+- **What moves how.** The database travels inside the Compute call (gzipped, well under the 10 MB payload cap), so push, pull and remote submission need only a Compute endpoint. Job *directories* go over Globus Transfer instead — no size cap applies to them — and need collections at both ends (`--with-dirs`) plus `PBX_GLOBUS_CLIENT_ID` set to a registered Native App. Directories are sent 500 recursive items per task; `--sync-level` (default `checksum`) controls how Globus decides a file is already there. A collection usually publishes a subtree rather than the whole filesystem (ALCF's `alcf#dtn_flare` is rooted at `/lus/flare/projects`), so Transfer destinations are rewritten relative to that root while the database, scheduler and job keep the absolute path. The root is detected on the first directory push — each prefix of `remote_root` is listed until one shows the database that push just wrote over Compute, which is what rules out a same-named directory on another filesystem — and saved as `transfer_remote_root`. Set it by hand only to override, which also skips the check.
+
+```bash
+mkdir ~/work/proj1 && cd ~/work/proj1
+pbx local init                       # prompts, then prints the export line
+export PBX_DB_PATH="$PWD/job_database_pbx-local.db"
+
+mkdir run_a && pbx add run_a -a python -c aurora-gpu -i run.py -e pass
+pbx local status                     # 1 job here, nothing pushed yet
+pbx qsub -c aurora-gpu -N t -q debug --select 1 -T 30 -A myproject
+
+pbx local pull                       # bring progress back
+pbx ls
 ```
 
 ---

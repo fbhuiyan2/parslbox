@@ -43,8 +43,8 @@ sync_one() {
 }
 
 # skill dir name  ->  docs it references
-sync_one parslbox-cli commands.md apps.md pbx-run-details.md
-sync_one parslbox-api api-details.md apps.md pbx-run-details.md
+sync_one parslbox-cli commands.md apps.md pbx-run-details.md remote-workflow.md
+sync_one parslbox-api api-details.md apps.md pbx-run-details.md remote-workflow.md commands.md
 
 if [ "$rc" -ne 0 ] && [ "$check" -eq 1 ]; then
     echo "Skill docs out of sync -- run scripts/sync-skill-docs.sh" >&2

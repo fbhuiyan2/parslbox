@@ -4,7 +4,7 @@ from typing import Optional, List
 from typing_extensions import Annotated
 
 from parslbox.commands.helpers.submit_helpers import (
-    submit_job, ValidationError, render_submit_script_panel,
+    submit_job, ValidationError, render_submit_script_panel, render_remote_result,
 )
 from parslbox.commands.helpers.qsub_cmd_helpers import parse_walltime
 from rich.console import Console
@@ -31,6 +31,8 @@ def submit_to_scheduler(
     dynamic: bool = True,
     respawn: Optional[int] = None,
     db_path: Optional[Path] = None,
+    no_local: bool = False,
+    push_dirs: bool = False,
 ):
     """
     Submit a PBS job via qsub. Thin wrapper around submit_job().
@@ -54,6 +56,8 @@ def submit_to_scheduler(
         dynamic=dynamic,
         respawn=respawn,
         db_path=db_path,
+        no_local=no_local,
+        push_dirs=push_dirs,
     )
 
 
@@ -117,6 +121,14 @@ def qsub(
         Optional[int],
         typer.Option("--respawn", help="Enable the self-respawn chain: at walltime, mark in-flight jobs Restart and auto-submit the next link. The integer is the number of remaining auto-resubmissions in the chain (decremented per link; 0 = no resubmit, chain ends after this run).")
     ] = None,
+    no_local: Annotated[
+        bool,
+        typer.Option("--no-local", help="Submit here even if this is a local project (default: hand the submission to the remote machine).")
+    ] = False,
+    push_dirs: Annotated[
+        bool,
+        typer.Option("--push-dirs", help="In a local project, also send the matching jobs' directories over Globus Transfer before submitting.")
+    ] = False,
 ):
     """
     Generate and submit a PBS job script for running parslbox workflows.
@@ -147,6 +159,8 @@ def qsub(
             sched_opts=sched_opts,
             dynamic=dynamic,
             respawn=respawn,
+            no_local=no_local,
+            push_dirs=push_dirs,
         )
 
         # CLI-specific output formatting
@@ -162,6 +176,11 @@ def qsub(
                 f"\U0001f4ca Matched {result['matched_jobs']} runnable job(s) in DB{filt_str}.",
                 fg=typer.colors.CYAN,
             )
+        if result.get("remote"):
+            if not render_remote_result(result, monitor_cmd="qstat"):
+                raise typer.Exit(code=1)
+            return
+
         typer.secho(f"\U0001f4c1 Created run directory: {result['run_dir']}", fg=typer.colors.BLUE)
         typer.secho(f"\U0001f4dd Generated submit script: {result['submit_file']}", fg=typer.colors.GREEN)
         console.print(render_submit_script_panel(result['submit_file']))

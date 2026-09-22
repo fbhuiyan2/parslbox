@@ -104,7 +104,7 @@ def add_jobs(
     final_ranks_per_node = resource_params['final_ranks_per_node']
     
     # Handle environment file validation and processing
-    final_env_file, env_info, env_warnings = validate_environment_file(env_file)
+    final_env_file, env_info, env_warnings = validate_environment_file(env_file, db_path=db_path)
     info_messages.extend(env_info)
     warning_messages.extend(env_warnings)
     
@@ -118,7 +118,7 @@ def add_jobs(
         final_input_file = f"{final_input_file} {app_args}"
 
     # Determine the list of paths to process
-    paths_to_add, failed_jobs = validate_paths(paths)
+    paths_to_add, failed_jobs = validate_paths(paths, db_path=db_path)
 
     # --- Add the determined paths to the database ---
     created_job_ids = []

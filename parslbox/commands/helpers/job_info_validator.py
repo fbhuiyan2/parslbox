@@ -22,6 +22,45 @@ class ResourceConflictError(ValidationError):
     pass
 
 
+def _local_project(db_path: Optional[Path]):
+    """The local project owning `db_path`, or None if this is an ordinary DB.
+
+    One stat next to the database. In a local project every stored path
+    describes the remote filesystem, so the two validators below translate
+    instead of storing what is on this machine.
+    """
+    from parslbox.local.project import find_project, LocalProjectError
+    if db_path is None:
+        from parslbox.utils import path_utils
+        db_path = path_utils.DB_FILE
+    try:
+        return find_project(db_path)
+    except LocalProjectError as e:
+        raise ValidationError(str(e))
+
+
+def _path_for_project(raw: str, project, kind: str) -> Tuple[str, bool]:
+    """Translate one user-supplied path for storage in a local project's DB.
+
+    Returns (path_to_store, must_exist_locally). Paths under the local root
+    keep their existence check -- typo protection is free there -- and then
+    have their prefix swapped. Paths outside it are already remote paths and
+    are stored untouched.
+    """
+    from parslbox.local import paths as local_paths
+    candidate = local_paths.normalize(raw)
+    if local_paths.is_under_local_root(candidate, project):
+        return local_paths.to_remote(candidate, project), True
+    if not Path(raw).expanduser().is_absolute():
+        raise ValidationError(
+            f"{kind} '{raw}' is relative and resolves outside the local "
+            f"project root {project.local_root}.\n"
+            f"Inside a local project, paths outside the root are stored as "
+            f"remote paths and must be absolute."
+        )
+    return str(candidate), False
+
+
 def validate_app_configuration(app: str) -> dict:
     """
     Validates that the application exists in the registry and returns its configuration.
@@ -246,12 +285,17 @@ def handle_gpu_cpu_conflict(ngpus: int, node_occupancy: Optional[float]) -> None
         raise ResourceConflictError("Cannot specify both ngpus and node_occupancy to be > 0.")
     
 
-def validate_environment_file(env_file: Optional[str]) -> Tuple[Optional[str], List[str], List[str]]:
+def validate_environment_file(
+    env_file: Optional[str],
+    db_path: Optional[Path] = None,
+) -> Tuple[Optional[str], List[str], List[str]]:
     """
     Validates environment file path and converts to absolute path.
     
     Args:
         env_file: Environment file path (relative or absolute)
+        db_path: Database the job is being written to. In a local project the
+            stored path is translated to the remote filesystem.
         
     Returns:
         Tuple of (absolute_path_or_none, info_messages, warning_messages)
@@ -264,6 +308,22 @@ def validate_environment_file(env_file: Optional[str]) -> Tuple[Optional[str], L
     
     if not env_file:
         return None, info_messages, warning_messages
+
+    project = _local_project(db_path)
+    if project is not None:
+        stored, must_exist = _path_for_project(env_file, project, "Environment file")
+        if must_exist:
+            local_path = Path(env_file).expanduser()
+            if not local_path.is_absolute():
+                local_path = Path.cwd() / local_path
+            if not local_path.exists():
+                raise ValidationError(f"Environment file '{env_file}' does not exist")
+            if not local_path.is_file():
+                raise ValidationError(f"Environment file '{env_file}' is not a file")
+            info_messages.append(f"Using environment file: {stored} (remote path)")
+        else:
+            info_messages.append(f"Using environment file: {stored} (remote path, not checked locally)")
+        return stored, info_messages, warning_messages
     
     # Convert relative path to absolute path
     env_file_path = Path(env_file)
@@ -339,12 +399,17 @@ def validate_parent_dependencies(
     return final_parents, info_messages, warning_messages
 
 
-def validate_paths(paths: List[str]) -> Tuple[List[Path], List[Tuple[str, str]]]:
+def validate_paths(
+    paths: List[str],
+    db_path: Optional[Path] = None,
+) -> Tuple[List[Path], List[Tuple[str, str]]]:
     """
     Validates paths and handles 'all' subdirectory expansion.
     
     Args:
         paths: List of path strings, or ['all'] for all subdirectories
+        db_path: Database the jobs are being written to. In a local project
+            the stored paths are translated to the remote filesystem.
         
     Returns:
         Tuple of (valid_paths, failed_paths_with_errors)
@@ -354,7 +419,9 @@ def validate_paths(paths: List[str]) -> Tuple[List[Path], List[Tuple[str, str]]]
     """
     paths_to_add: List[Path] = []
     failed_jobs: List[Tuple[str, str]] = []
-    
+
+    project = _local_project(db_path)
+
     token = paths[0].lower() if len(paths) == 1 else None
     if token == 'all' or (token is not None and token.startswith('all:')):
         if token == 'all':
@@ -369,10 +436,38 @@ def validate_paths(paths: List[str]) -> Tuple[List[Path], List[Tuple[str, str]]]
         if not subdirectories:
             raise ValidationError(f"No subdirectories found in '{base_dir}'")
 
-        paths_to_add = [p.resolve() for p in subdirectories]
+        if project is not None:
+            from parslbox.local import paths as local_paths
+            if not local_paths.is_under_local_root(base_dir, project):
+                raise ValidationError(
+                    f"'{paths[0]}' expands under '{base_dir}', which is outside the "
+                    f"local project root {project.local_root}. Those directories have "
+                    f"no counterpart on the remote machine. Name the paths explicitly "
+                    f"if that is really what you want."
+                )
+            paths_to_add = [Path(local_paths.to_remote(p, project)) for p in subdirectories]
+        else:
+            paths_to_add = [p.resolve() for p in subdirectories]
     else:
         # Validate user-provided paths - collect failures instead of raising immediately
         for path_str in paths:
+            if project is not None:
+                try:
+                    stored, must_exist = _path_for_project(path_str, project, "Path")
+                except ValidationError as e:
+                    failed_jobs.append((path_str, str(e)))
+                    continue
+                if must_exist:
+                    local_obj = Path(path_str).expanduser()
+                    if not local_obj.exists():
+                        failed_jobs.append((path_str, f"Path '{path_str}' does not exist"))
+                        continue
+                    if not local_obj.is_dir():
+                        failed_jobs.append((path_str, f"Path '{path_str}' is not a directory"))
+                        continue
+                paths_to_add.append(Path(stored))
+                continue
+
             path_obj = Path(path_str)
             if not path_obj.exists():
                 failed_jobs.append((path_str, f"Path '{path_str}' does not exist"))

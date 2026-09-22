@@ -11,7 +11,10 @@ class AddJobSchema(BaseModel):
         description=(
             "One or more paths to job directories. Use 'all:<dir>' to add every subdirectory of <dir> "
             "(pass an absolute <dir>). Bare 'all' resolves against the MCP server's working directory, "
-            "which is usually not the caller's location, so prefer 'all:<dir>'."
+            "which is usually not the caller's location, so prefer 'all:<dir>'. "
+            "In a local project (see local_status), paths under the project root must exist here and "
+            "are stored with the remote machine's prefix instead; paths outside it must be absolute "
+            "and are stored unchanged, since they already describe the remote filesystem."
         ),
     )
     app: str = Field(
@@ -240,6 +243,24 @@ class QSubSchema(BaseModel):
         ),
     )
 
+    no_local: bool = Field(
+        default=False,
+        description=(
+            "Submit from this machine even when the database belongs to a local project. "
+            "By default, in a local project the database is pushed to the remote machine, "
+            "the submission runs there, and the result is pulled back."
+        ),
+    )
+
+    push_dirs: bool = Field(
+        default=False,
+        description=(
+            "In a local project, also send the matching jobs' directories to the remote "
+            "machine over Globus Transfer before submitting. Requires Transfer collections "
+            "in .pbxlocal.yaml. Off by default: the directories are usually already there."
+        ),
+    )
+
 
 class SBatchSchema(BaseModel):
     """Schema for generating and submitting a SLURM job via ParslBox."""
@@ -312,6 +333,24 @@ class SBatchSchema(BaseModel):
             "marks in-flight jobs Restart and auto-submits the next link, continuing "
             "until all jobs reach Done/Failed or respawn reaches 0. Pass None "
             "(default) to disable the chain entirely."
+        ),
+    )
+
+    no_local: bool = Field(
+        default=False,
+        description=(
+            "Submit from this machine even when the database belongs to a local project. "
+            "By default, in a local project the database is pushed to the remote machine, "
+            "the submission runs there, and the result is pulled back."
+        ),
+    )
+
+    push_dirs: bool = Field(
+        default=False,
+        description=(
+            "In a local project, also send the matching jobs' directories to the remote "
+            "machine over Globus Transfer before submitting. Requires Transfer collections "
+            "in .pbxlocal.yaml. Off by default: the directories are usually already there."
         ),
     )
 
@@ -409,4 +448,146 @@ class UpdateJobSchema(BaseModel):
     app_args: Optional[str] = Field(
         default=None,
         description="Extra arguments appended to the application command (e.g. '-var T 300'). Rebuilds the job's input file as '<base script> <app_args>', replacing any args already set. Combine with input_file to change the base script at the same time.",
+    )
+
+
+class LocalStatusSchema(BaseModel):
+    """Schema for reporting on a local project."""
+
+    check_remote: bool = Field(
+        default=True,
+        description=(
+            "Ping the Globus Compute endpoint and fingerprint the remote database. "
+            "This can take up to 120 seconds if the endpoint is down. Set False "
+            "to report only what is known locally, which needs no network."
+        ),
+    )
+
+
+class LocalPushSchema(BaseModel):
+    """Schema for sending a local project's database to the remote machine."""
+
+    force: bool = Field(
+        default=False,
+        description=(
+            "Overwrite the remote database even though it changed since the last sync. "
+            "Refused by default: the change is usually a running allocation's progress, "
+            "and there is no merge. Pull first unless you mean to discard it."
+        ),
+    )
+
+    with_dirs: bool = Field(
+        default=False,
+        description=(
+            "Also send the matching jobs' directories over Globus Transfer. "
+            "Requires transfer_local and transfer_remote in .pbxlocal.yaml, and "
+            "the PBX_GLOBUS_CLIENT_ID environment variable set to a registered "
+            "Globus Native App client id -- without it the push fails at login. "
+            "The database itself syncs over the Compute endpoint and needs "
+            "none of this."
+        ),
+    )
+
+    apps: Optional[List[str]] = Field(
+        default=None,
+        description="Only send directories for jobs with these apps. Used with with_dirs.",
+    )
+
+    tags: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Only send directories for jobs with these tags. Accepts '*' globs, "
+            "like --tags elsewhere in pbx. A tag (or glob) matching nothing in "
+            "the database is an error, not an empty push. Used with with_dirs."
+        ),
+    )
+
+    sync_level: str = Field(
+        default="checksum",
+        description=(
+            "How Globus decides a file is already at the destination: 'exists', "
+            "'size', 'mtime' or 'checksum'. checksum is safest but reads every file "
+            "on both ends; drop to 'mtime' when the directories hold large output "
+            "files the remote wrote itself."
+        ),
+    )
+
+    wait_for_dirs: bool = Field(
+        default=True,
+        description=(
+            "Block until the directory transfer finishes before returning. Used with "
+            "with_dirs. Set False for a large transfer that would outlast the MCP "
+            "call timeout; the task keeps running and can be watched in the Globus "
+            "web app."
+        ),
+    )
+
+
+class LocalPullSchema(BaseModel):
+    """Schema for bringing a local project's remote database back down."""
+
+    force: bool = Field(
+        default=False,
+        description=(
+            "Overwrite the local database even though it changed since the last sync. "
+            "Refused by default; the local changes would be lost, and there is no merge."
+        ),
+    )
+
+
+class LocalInitSchema(BaseModel):
+    """Schema for creating a local project."""
+
+    directory: str = Field(
+        description=(
+            "Absolute path to the directory that becomes the local project root. "
+            "Give an absolute path: the MCP server's working directory is usually "
+            "not the caller's."
+        ),
+    )
+
+    remote_root: str = Field(
+        description=(
+            "Absolute path to the project root on the remote machine. Every job path "
+            "stored in this project's database is written under this root."
+        ),
+    )
+
+    compute_endpoint: Optional[str] = Field(
+        default=None,
+        description="Globus Compute endpoint UUID running on the remote machine.",
+    )
+
+    transfer_local: Optional[str] = Field(
+        default=None,
+        description="Globus Transfer collection UUID for this machine. Only needed to move job directories.",
+    )
+
+    transfer_remote: Optional[str] = Field(
+        default=None,
+        description="Globus Transfer collection UUID for the remote machine. Only needed to move job directories.",
+    )
+    transfer_remote_root: Optional[str] = Field(
+        default=None,
+        description=(
+            "Override for the path that the remote Transfer collection exposes "
+            "as its own root, e.g. '/lus/flare/projects'. Normally leave unset: "
+            "the first directory push finds it by listing the collection and "
+            "matching the database it just wrote there, then saves the answer. "
+            "Only set it by hand if that detection cannot see the collection."
+        ),
+    )
+
+    remote_config: Optional[str] = Field(
+        default=None,
+        description="Path to config.yaml on the remote machine. Defaults to its own default location.",
+    )
+
+    nested_ok: bool = Field(
+        default=False,
+        description=(
+            "Allow creating this project inside an existing one. False by default: "
+            "nesting works, since PBX_DB_PATH decides which database is in use, but "
+            "it is far more often an accident than an intention."
+        ),
     )

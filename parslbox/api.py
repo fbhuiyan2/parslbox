@@ -35,6 +35,7 @@ from parslbox.commands.qsub import submit_to_scheduler
 from parslbox.commands.sbatch import submit_to_slurm
 from parslbox.commands.helpers.qsub_cmd_helpers import parse_walltime
 from parslbox.commands.helpers.cancel_helpers import cancel_pbs_job, cancel_slurm_job
+from parslbox.local.project import check_db_name
 import parsl
 
 
@@ -106,6 +107,10 @@ class ParslBox:
 
         self.db_path = db_path
         self.config_path = config_path
+
+        # A local project's database is the -local one; creating the ordinary
+        # one beside it would silently start an unrelated, empty project.
+        check_db_name(self.db_path)
 
         # Initialize database (creates if doesn't exist, keeps if exists)
         database.initialize_database(self.db_path)
@@ -473,6 +478,8 @@ class ParslBox:
         loglevel: str = "info",
         sched_opts: Optional[List[str]] = None,
         respawn: Optional[int] = None,
+        no_local: bool = False,
+        push_dirs: bool = False,
     ) -> Dict[str, Any]:
         """
         Generate and submit a PBS job script.
@@ -495,6 +502,11 @@ class ParslBox:
                 next link. The integer is the number of remaining auto-resubmissions
                 in the chain (decremented per link; 0 = no resubmit, chain ends).
                 Pass None (default) to disable the chain entirely.
+            no_local: Submit from this machine even when the database belongs
+                to a local project. By default a local project's submission is
+                pushed to the remote machine and run there.
+            push_dirs: In a local project, also send the matching jobs'
+                directories over Globus Transfer before submitting.
 
         Returns:
             Dictionary with submission details including job_id and run_dir.
@@ -524,6 +536,8 @@ class ParslBox:
                 sched_opts=sched_opts,
                 respawn=respawn,
                 db_path=self.db_path,
+                no_local=no_local,
+                push_dirs=push_dirs,
             )
             return result
         except Exception as e:
@@ -548,6 +562,8 @@ class ParslBox:
         loglevel: str = "info",
         sched_opts: Optional[List[str]] = None,
         respawn: Optional[int] = None,
+        no_local: bool = False,
+        push_dirs: bool = False,
     ) -> Dict[str, Any]:
         """
         Generate and submit a SLURM job script.
@@ -570,6 +586,11 @@ class ParslBox:
                 next link. The integer is the number of remaining auto-resubmissions
                 in the chain (decremented per link; 0 = no resubmit, chain ends).
                 Pass None (default) to disable the chain entirely.
+            no_local: Submit from this machine even when the database belongs
+                to a local project. By default a local project's submission is
+                pushed to the remote machine and run there.
+            push_dirs: In a local project, also send the matching jobs'
+                directories over Globus Transfer before submitting.
 
         Returns:
             Dictionary with submission details including job_id and run_dir.
@@ -598,6 +619,8 @@ class ParslBox:
                 sched_opts=sched_opts,
                 respawn=respawn,
                 db_path=self.db_path,
+                no_local=no_local,
+                push_dirs=push_dirs,
             )
             return result
         except Exception as e:
@@ -605,6 +628,174 @@ class ParslBox:
                 raise ValidationError(str(e))
             else:
                 raise
+
+    # ==================== Local Project Methods ====================
+
+    def local_init(
+        self,
+        directory: Union[str, Path],
+        remote_root: str,
+        compute_endpoint: Optional[str] = None,
+        transfer_local: Optional[str] = None,
+        transfer_remote: Optional[str] = None,
+        transfer_remote_root: Optional[str] = None,
+        remote_config: Optional[str] = None,
+        nested_ok: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Create or adopt a local project in `directory`.
+
+        A local project's database stores remote paths from its first row, so
+        jobs authored here can be run on the remote machine without anything
+        being rewritten at handover.
+
+        Args:
+            directory: Where the project lives on this machine.
+            remote_root: Absolute project root on the remote machine.
+            compute_endpoint: Globus Compute endpoint UUID on the remote.
+            transfer_local: Globus Transfer collection UUID for this machine.
+            transfer_remote: Globus Transfer collection UUID for the remote.
+            transfer_remote_root: Override for the path the remote collection
+                exposes as its own root, e.g. '/lus/flare/projects'. Normally
+                left unset: the first directory push detects and records it.
+            remote_config: Path to config.yaml on the remote machine.
+            nested_ok: Allow creating a project inside another one. False by
+                default, because doing it accidentally is more likely than
+                doing it on purpose.
+
+        Returns:
+            Dict with 'action' ('created', 'adopted' or 'existing'),
+            'db_path', 'export_line', and any 'notes'.
+
+        Raises:
+            ValidationError: The directory cannot hold a project -- a
+                populated database with no project file, a half-deleted
+                project, or a parent project with nested_ok left False.
+        """
+        from parslbox.local import project as project_mod
+        try:
+            outcome = project_mod.init_project(
+                directory,
+                remote_root=remote_root,
+                compute_endpoint=compute_endpoint,
+                transfer_local=transfer_local,
+                transfer_remote=transfer_remote,
+                transfer_remote_root=transfer_remote_root,
+                remote_config=remote_config,
+                nested_ok=nested_ok,
+            )
+        except project_mod.LocalProjectError as e:
+            raise ValidationError(str(e))
+        proj = outcome["project"]
+        return {
+            "action": outcome["action"],
+            "local_root": str(proj.local_root),
+            "remote_root": proj.remote_root,
+            "db_path": str(proj.db_path),
+            "compute_endpoint": proj.compute_endpoint,
+            "export_line": proj.export_line,
+            "notes": outcome["notes"],
+        }
+
+    def local_status(self, check_remote: bool = True) -> Dict[str, Any]:
+        """
+        Report which side of a local project is ahead. Changes nothing.
+
+        Args:
+            check_remote: Ping the Compute endpoint and fingerprint the remote
+                database. Set False to stay offline.
+
+        Returns:
+            Dict with 'is_local_project'. When True, also the two roots, the
+            job count, local and remote drift since the last sync, endpoint
+            reachability, and the PBX_DB_PATH export line.
+        """
+        from parslbox.local import sync as local_sync
+        return local_sync.status(db_path=self.db_path, check_remote=check_remote)
+
+    def local_push(
+        self,
+        force: bool = False,
+        with_dirs: bool = False,
+        apps: Optional[List[str]] = None,
+        tags: Optional[List[str]] = None,
+        wait_for_dirs: bool = True,
+        sync_level: str = "checksum",
+    ) -> Dict[str, Any]:
+        """
+        Send the local database up to the remote machine.
+
+        Args:
+            force: Overwrite the remote even if it changed since the last sync.
+            with_dirs: Also send matching jobs' directories over Globus Transfer.
+            apps: Restrict the directories sent to these apps.
+            tags: Restrict the directories sent to these tags.
+            wait_for_dirs: Block until the directory transfer finishes.
+            sync_level: How Globus decides a file is already at the destination
+                -- 'exists', 'size', 'mtime' or 'checksum'. checksum is safest
+                but reads every file on both ends first.
+
+        Returns:
+            Dict with 'bytes', the remote 'fingerprint', and 'last_sync'. When
+            with_dirs is set and the remote collection's root had not been
+            recorded yet, also 'transfer_remote_root' and
+            'transfer_remote_root_detected'.
+
+        Raises:
+            ValidationError: Not a local project; the remote has moved since
+                the last sync and force was not set; the Compute endpoint
+                could not be reached; or Globus Transfer refused the
+                directories, including when no prefix of remote_root resolves
+                to the database just written over Compute.
+        """
+        from parslbox.local import sync as local_sync
+        from parslbox.local.compute import ComputeError
+        from parslbox.local.project import LocalProjectError
+        from parslbox.local.guard import SyncConflict
+        from parslbox.local.transfer import TransferError
+        try:
+            project = local_sync.require_project(self.db_path)
+            dirs = None
+            report = None
+            if with_dirs:
+                found = local_sync.job_dirs(project, apps=apps, tags=tags)
+                report = found
+                dirs = found["present"]
+            result = local_sync.push(db_path=self.db_path, force=force, dirs=dirs,
+                                     wait_for_dirs=wait_for_dirs,
+                                     sync_level=sync_level)
+            if with_dirs:
+                result["dirs"] = report
+            return result
+        except (LocalProjectError, SyncConflict, TransferError, ComputeError,
+                FileNotFoundError) as e:
+            raise ValidationError(str(e))
+
+    def local_pull(self, force: bool = False) -> Dict[str, Any]:
+        """
+        Bring the remote database down over the local one.
+
+        Args:
+            force: Overwrite the local database even if it changed since the
+                last sync.
+
+        Returns:
+            Dict with 'bytes', the new local 'fingerprint', and 'last_sync'.
+
+        Raises:
+            ValidationError: Not a local project, nothing pushed yet, the
+                local database has moved since the last sync and force was not
+                set, or the Compute endpoint could not be reached.
+        """
+        from parslbox.local import sync as local_sync
+        from parslbox.local.compute import ComputeError
+        from parslbox.local.project import LocalProjectError
+        from parslbox.local.guard import SyncConflict
+        try:
+            return local_sync.pull(db_path=self.db_path, force=force)
+        except (LocalProjectError, SyncConflict, ComputeError,
+                FileNotFoundError) as e:
+            raise ValidationError(str(e))
 
     def qdel(self, jobid: str, grace: int = 30) -> Dict[str, Any]:
         """
