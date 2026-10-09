@@ -10,7 +10,7 @@ import subprocess
 import yaml
 import os
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 from parslbox.commands.helpers.qsub_cmd_helpers import (
     minutes_to_hms,
@@ -29,11 +29,13 @@ def count_matching_runnable_jobs(
     db_path: Path,
     apps_list: Optional[List[str]],
     tags_list: Optional[List[str]],
-) -> int:
+) -> Tuple[int, List[str]]:
     """Count Ready/Restart jobs matching the given apps/tags filters.
 
     Apps and tags are matched exactly. `None` for either means "no filter".
     Used by qsub/sbatch to verify there's actually work to do before submitting.
+
+    Returns (count, sorted distinct app names among the matched jobs).
     """
     from parslbox.database import database
     jobs = database.get_jobs(db_path, status='Ready')
@@ -43,13 +45,102 @@ def count_matching_runnable_jobs(
     tag_set = set(tags_list) if tags_list else None
 
     count = 0
+    matched_apps = set()
     for j in jobs:
         if app_set and j['app'] not in app_set:
             continue
         if tag_set and j['tag'] not in tag_set:
             continue
         count += 1
-    return count
+        matched_apps.add(j['app'])
+    return count, sorted(matched_apps)
+
+
+def summarize_app_configs(
+    app_names: List[str],
+    config_name: str,
+    full_config: Optional[Dict[str, Any]],
+    config_path: Path,
+) -> List[Dict[str, Any]]:
+    """Resolve what each app will actually run with on `config_name`.
+
+    An app whose per-system block is missing still submits and still runs --
+    `load_app_config` returns {} and the executable ends up empty. Reporting
+    the three cases apart is what separates "edited the right block" from
+    "edited a block with the same shape and a different name".
+
+    `env_state` is one of: 'configured', 'no_system_entry', 'no_app_block'.
+    """
+    config = full_config or {}
+    summary = []
+    for app in app_names:
+        app_block = config.get(app)
+        if not isinstance(app_block, dict):
+            summary.append({
+                "app": app,
+                "executable": None,
+                "env_state": "no_app_block",
+                "detail": f"no `{app}` block in {config_path}",
+            })
+            continue
+        system_block = app_block.get(config_name)
+        if not isinstance(system_block, dict):
+            summary.append({
+                "app": app,
+                "executable": None,
+                "env_state": "no_system_entry",
+                "detail": f"no `{config_name}` entry under `{app}`",
+            })
+            continue
+        summary.append({
+            "app": app,
+            "executable": system_block.get("executable_path") or None,
+            "env_state": "configured",
+            "detail": f"configured for {config_name}",
+        })
+    return summary
+
+
+def render_app_summary(result: Dict[str, Any], config_name: str, cancel_cmd: str) -> None:
+    """Print the per-app resolution block plus the cancel-now hint.
+
+    `cancel_cmd` is "qdel" or "scancel". Nothing here blocks or validates --
+    the job is already in the queue by the time this runs.
+    """
+    import typer
+
+    summary = result.get("app_summary")
+    job_id = result.get("job_id")
+
+    if summary:
+        typer.secho(f"\U0001f4e6 Apps in this submission ({config_name}):",
+                    fg=typer.colors.CYAN)
+        for entry in summary:
+            typer.secho(f"   {entry['app']}", fg=typer.colors.WHITE, bold=True)
+            if entry["executable"]:
+                typer.echo(f"     executable: {entry['executable']}")
+            else:
+                typer.secho(
+                    "     executable: (not set)  ← make sure this is intended",
+                    fg=typer.colors.YELLOW,
+                )
+            if entry["env_state"] == "configured":
+                typer.echo(f"     env setup:  {entry['detail']}")
+            else:
+                typer.secho(f"     env setup:  {entry['detail']}",
+                            fg=typer.colors.YELLOW)
+
+    if not job_id:
+        return
+
+    typer.secho(
+        "⚠  If anything above looks wrong, cancel now and fix it before "
+        "the job starts:",
+        fg=typer.colors.YELLOW,
+    )
+    typer.echo(f"     {cancel_cmd} {job_id}")
+    typer.echo("   or, if the job already started:")
+    typer.echo(f"     pbx {cancel_cmd} {job_id}")
 
 
 def render_submit_script_panel(submit_file_path, title: str = "Submit Script"):
@@ -189,6 +280,7 @@ def submit_job(
     # Tag glob expansion + runnable-jobs guard (skipped when caller has already
     # validated, e.g. unit tests that bypass the DB).
     matched_count = None
+    matched_apps: List[str] = []
     if validate_runnable:
         if tags:
             from parslbox.utils.tag_match import expand_tag_patterns
@@ -196,7 +288,9 @@ def submit_job(
                 tags = expand_tag_patterns(db_path, list(tags))
             except ValueError as e:
                 raise ValidationError(str(e))
-        matched_count = count_matching_runnable_jobs(db_path, list(apps) if apps else None, list(tags) if tags else None)
+        matched_count, matched_apps = count_matching_runnable_jobs(
+            db_path, list(apps) if apps else None, list(tags) if tags else None
+        )
         if matched_count == 0:
             raise ValidationError(
                 "No Ready/Restart jobs match the given --apps/--tags filters. "
@@ -261,6 +355,8 @@ def submit_job(
     # Validate system configuration exists
     if config_name not in config:
         raise ValidationError(f"System '{config_name}' not found in configuration")
+
+    app_summary = summarize_app_configs(matched_apps, config_name, config, config_path)
 
     # Get system-specific python environment setup
     system_config = config[config_name]
@@ -414,6 +510,7 @@ def submit_job(
             "respawn_template_file": str(respawn_template_file) if respawn_template_file else None,
             "matched_jobs": matched_count,
             "resolved_tags": list(tags) if tags else None,
+            "app_summary": app_summary,
         }
         if scheduler_type == "pbs":
             result_dict["pbs_job_id"] = job_id
@@ -431,6 +528,7 @@ def submit_job(
             "respawn_template_file": str(respawn_template_file) if respawn_template_file else None,
             "matched_jobs": matched_count,
             "resolved_tags": list(tags) if tags else None,
+            "app_summary": app_summary,
         }
     except FileNotFoundError:
         raise ValidationError(
@@ -439,11 +537,18 @@ def submit_job(
         )
 
 
-def render_remote_result(result: Dict[str, Any], monitor_cmd: str = "qstat") -> bool:
+def render_remote_result(
+    result: Dict[str, Any],
+    monitor_cmd: str = "qstat",
+    config_name: Optional[str] = None,
+    cancel_cmd: str = "qdel",
+) -> bool:
     """Print the outcome of a submission that ran on the remote machine.
 
     The submit script and run directory named in `result` live over there, so
-    there is nothing local to open -- only paths to report.
+    there is nothing local to open -- only paths to report. The config.yaml the
+    run will read lives over there too, so no app summary is printed here: the
+    local one may not even hold those blocks.
 
     Returns True when the remote scheduler accepted the job.
     """
@@ -480,6 +585,24 @@ def render_remote_result(result: Dict[str, Any], monitor_cmd: str = "qstat") -> 
                     fg=typer.colors.BLUE)
         typer.secho("\U0001f4a1 Run 'pbx local pull' to bring progress back here.",
                     fg=typer.colors.CYAN)
+        for_system = f" for {config_name}" if config_name else ""
+        typer.secho(
+            "\U0001f30e This is a local project; the submission uses the config "
+            "file on the remote host.",
+            fg=typer.colors.CYAN,
+        )
+        typer.secho(
+            f"   Check the app executables and env blocks in the remote "
+            f"config.yaml to make sure nothing is missing or wrong{for_system}.",
+            fg=typer.colors.CYAN,
+        )
+        typer.secho(
+            "⚠  If anything is wrong, cancel on the remote host:",
+            fg=typer.colors.YELLOW,
+        )
+        typer.echo(f"     {cancel_cmd} {job_id}")
+        typer.echo("   or, if the job already started:")
+        typer.echo(f"     pbx {cancel_cmd} {job_id}")
         return True
 
     typer.secho(f"❌ The remote scheduler refused the job: {result.get('error')}",

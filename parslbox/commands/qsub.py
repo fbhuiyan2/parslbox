@@ -5,6 +5,7 @@ from typing_extensions import Annotated
 
 from parslbox.commands.helpers.submit_helpers import (
     submit_job, ValidationError, render_submit_script_panel, render_remote_result,
+    render_app_summary,
 )
 from parslbox.commands.helpers.qsub_cmd_helpers import parse_walltime
 from rich.console import Console
@@ -177,7 +178,8 @@ def qsub(
                 fg=typer.colors.CYAN,
             )
         if result.get("remote"):
-            if not render_remote_result(result, monitor_cmd="qstat"):
+            if not render_remote_result(result, monitor_cmd="qstat",
+                                        config_name=config_name, cancel_cmd="qdel"):
                 raise typer.Exit(code=1)
             return
 
@@ -206,6 +208,7 @@ def qsub(
             typer.secho(f"\U0001f680 Job submitted successfully! Job ID: {job_id}", fg=typer.colors.GREEN)
             typer.secho(f"\U0001f4ca Monitor with: qstat {job_id}", fg=typer.colors.BLUE)
             typer.secho(f"\U0001f4c1 Run directory: {result['run_dir']}", fg=typer.colors.BLUE)
+            render_app_summary(result, config_name, "qdel")
         else:
             typer.secho(f"\u274c Error submitting job: {result['error']}", fg=typer.colors.RED)
             typer.secho(f"\U0001f4cb Submit script saved at: {result['submit_file']}", fg=typer.colors.YELLOW)

@@ -246,6 +246,7 @@ Notes:
 - **Job-count guard**: before submitting, qsub/sbatch query the DB for matching Ready/Restart jobs. **If zero match, submission aborts** to avoid wasting the allocation.
 - **In a local project** (see [`pbx local`](#pbx-local)) the submission is handed to the remote machine instead: the database is pushed, `submit_job` runs on the Globus Compute endpoint, and the result is pulled back. `--no-local` submits from here instead; `--push-dirs` also sends the matching jobs' directories over Globus Transfer first.
 - After generation, the submit script is printed in a cyan box with the `pbx run` line highlighted in red. When `--respawn` is set, `respawn_template.sh` is also printed (yellow note explains the placeholder behavior).
+- **App summary**: after submitting, each app in the matched job set is listed with the executable and env block it resolves to on `--config`'s system — `configured for <system>`, `no <system> entry under <app>`, or `no <app> block in config.yaml`. An app with no block still submits and still runs, with an empty executable, so this is worth reading. A `qdel`/`scancel` line follows for cancelling if it looks wrong. In a local project the remote `config.yaml` is the one that counts, so a note points there instead.
 
 ```bash
 # Short flags

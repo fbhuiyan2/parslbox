@@ -154,6 +154,8 @@ pbx qsub -c sophia -N sweep -q gpu --select 4 -T 4h -A myproject -a lammps-kk -t
   --respawn 3
 ```
 
+After submitting, qsub/sbatch list each app in the submission with the executable and env block it resolves to on the target system, so a missing or misnamed `config.yaml` block is visible before the allocation starts, along with the `qdel`/`scancel` line to cancel if it looks wrong.
+
 **New to pbx?** See [Example usage](#example-usage) below — [`job_test/create_test_jobs.py`](job_test/create_test_jobs.py) generates a batch of tiny throwaway jobs so you can exercise the whole pipeline end-to-end in a few minutes without preparing real workloads.
 
 ## Supported Applications

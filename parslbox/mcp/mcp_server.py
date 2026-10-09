@@ -128,6 +128,42 @@ def add_jobs(params: AddJobSchema) -> str:
     return "\n".join(response_parts)
 
 
+def _app_summary_lines(status: dict, cancel_cmd: str) -> list:
+    """Compact per-app resolution + the cancel hint.
+
+    Remote submits carry no summary: the config.yaml that matters is on the
+    other machine, so say that instead of resolving against the local one.
+    """
+    job_id = status.get("job_id") or "UNKNOWN"
+    if status.get("remote"):
+        return [
+            "This is a local project; the submission uses the config file on the "
+            "remote host. Check the app executables and env blocks in the remote "
+            "config.yaml to make sure nothing is missing or wrong.",
+            f"If anything is wrong, cancel on the remote host: {cancel_cmd} {job_id} "
+            f"(or `pbx {cancel_cmd} {job_id}` if it already started).",
+        ]
+
+    summary = status.get("app_summary")
+    if not summary:
+        return []
+
+    parts = []
+    for e in summary:
+        exe = e.get("executable") or "NOT SET"
+        state = {
+            "configured": "env:configured",
+            "no_system_entry": "env:NO SYSTEM ENTRY",
+            "no_app_block": "env:NO APP BLOCK",
+        }.get(e.get("env_state"), "env:?")
+        parts.append(f"{e['app']} [exe:{exe}, {state}]")
+    return [
+        "apps: " + " | ".join(parts),
+        f"If anything above looks wrong, cancel now: {cancel_cmd} {job_id} "
+        f"(or `pbx {cancel_cmd} {job_id}` if it already started).",
+    ]
+
+
 def _remote_lines(status: dict) -> list:
     """Extra lines when the submission went to another machine.
 
@@ -161,7 +197,11 @@ def _remote_lines(status: dict) -> list:
         "Walltime defaults to minutes; supports h/d suffixes (e.g., 90, 4.25h, 3.5d). "
         "Set respawn=N to enable a self-respawn chain: at walltime, in-flight jobs are "
         "marked Restart and the next link is auto-submitted, until all jobs finish or "
-        "respawn reaches 0. Returns a short message describing whether submission succeeded."
+        "respawn reaches 0. Returns a short message describing whether submission succeeded, "
+        "including an `apps:` line resolving each app in the submission to its executable "
+        "and env block on the target system (env:configured / NO SYSTEM ENTRY / NO APP BLOCK). "
+        "Check that line: a missing block still submits and still runs, with an empty "
+        "executable. Cancel with the command given there if it looks wrong."
     ),
 )
 def submit_pbs_job(params: QSubSchema) -> str:
@@ -190,6 +230,7 @@ def submit_pbs_job(params: QSubSchema) -> str:
         if respawn_template:
             lines.append(f"Respawn template: {respawn_template} (chain auto-resubmits at walltime)")
         lines += _remote_lines(status)
+        lines += _app_summary_lines(status, "qdel")
         return "\n".join(lines)
     else:
         error_msg = status.get("error", "Unknown error")
@@ -210,7 +251,11 @@ def submit_pbs_job(params: QSubSchema) -> str:
         "Walltime defaults to minutes; supports h/d suffixes (e.g., 90, 4.25h, 3.5d). "
         "Set respawn=N to enable a self-respawn chain: at walltime, in-flight jobs are "
         "marked Restart and the next link is auto-submitted, until all jobs finish or "
-        "respawn reaches 0. Returns a short message describing whether submission succeeded."
+        "respawn reaches 0. Returns a short message describing whether submission succeeded, "
+        "including an `apps:` line resolving each app in the submission to its executable "
+        "and env block on the target system (env:configured / NO SYSTEM ENTRY / NO APP BLOCK). "
+        "Check that line: a missing block still submits and still runs, with an empty "
+        "executable. Cancel with the command given there if it looks wrong."
     ),
 )
 def submit_slurm_job(params: SBatchSchema) -> str:
@@ -239,6 +284,7 @@ def submit_slurm_job(params: SBatchSchema) -> str:
         if respawn_template:
             lines.append(f"Respawn template: {respawn_template} (chain auto-resubmits at walltime)")
         lines += _remote_lines(status)
+        lines += _app_summary_lines(status, "scancel")
         return "\n".join(lines)
     else:
         error_msg = status.get("error", "Unknown error")
