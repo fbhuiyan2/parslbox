@@ -591,3 +591,35 @@ class LocalInitSchema(BaseModel):
             "it is far more often an accident than an intention."
         ),
     )
+
+
+class UseDatabaseSchema(BaseModel):
+    """Schema for rebinding the server to a different ParslBox database"""
+
+    path: str = Field(
+        description=(
+            "Absolute path to the project directory, or directly to a .db file. "
+            "A directory holding a .pbxlocal.yaml resolves to its "
+            "job_database_pbx-local.db; any other directory resolves to "
+            "job_database_pbx.db. Relative paths are rejected -- they would resolve "
+            "against the server's working directory, not yours."
+        ),
+    )
+    config_path: Optional[str] = Field(
+        default=None,
+        description=(
+            "Absolute path to a config.yaml, or a directory holding one. Omit to keep "
+            "the config currently in use, which is the usual case when projects share "
+            "one config. Pass it when the project declares its own custom apps or "
+            "executables."
+        ),
+    )
+    create: bool = Field(
+        default=False,
+        description=(
+            "Create the database if it does not exist. Default false: a path that is "
+            "not already a database is refused, because a typo would otherwise bind "
+            "the session to a new empty database that looks like a project with no "
+            "jobs. Set true only when deliberately starting a new project here."
+        ),
+    )

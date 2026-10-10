@@ -1,9 +1,16 @@
+import functools
 import sys
 
 from mcp.server.fastmcp import FastMCP
 
 from parslbox.api import ParslBox
-from parslbox.local.project import LocalProjectError
+from parslbox.local.project import (
+    LocalProjectError,
+    count_rows,
+    find_project,
+    resolve_db_path,
+)
+from parslbox.utils import path_utils
 from parslbox.utils.path_utils import PbxPathError
 from parslbox.commands.helpers.job_id_parser import format_job_ids, group_failures
 from parslbox.mcp.schemas import (
@@ -21,6 +28,7 @@ from parslbox.mcp.schemas import (
     SBatchSchema,
     RemoveJobsSchema,
     UpdateJobSchema,
+    UseDatabaseSchema,
 )
 
 # Start ParslBox and MCP.
@@ -39,6 +47,30 @@ def _start() -> ParslBox:
 
 
 pbx = _start()
+
+
+def _db_line() -> str:
+    """One-line statement of which database the answer came from.
+
+    The binding is fixed until use_database changes it and does not follow the
+    caller's working directory, so every job-facing answer says where it came
+    from. The directory name leads because a wrong project is far easier to
+    notice as a name than as a path.
+    """
+    return f"db: {pbx.db_path.parent.name} ({pbx.db_path})"
+
+
+def _with_db_line(fn):
+    """Prefix a tool's answer with the database it came from.
+
+    Applied below @mcp.tool so FastMCP still sees the real signature. Covers
+    every return path, error ones included: an exception raised against the
+    wrong project is just as misleading as a wrong job list.
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        return f"{_db_line()}\n{fn(*args, **kwargs)}"
+    return wrapper
 
 
 def _fmt_resources(job: dict) -> str:
@@ -70,7 +102,20 @@ mcp = FastMCP(
     name="ParslBox Tool MCP",
     instructions=(
         "You expose tools for managing and running ParslBox jobs.\n\n"
+        f"ACTIVE DATABASE: {pbx.db_path}\n"
+        f"ACTIVE CONFIG:   {pbx.config_path}\n\n"
+        "That binding is fixed for this server and does NOT follow the caller's "
+        "working directory. It was read from PBX_DB_PATH when the server started; "
+        "a later `cd`, or an `export PBX_DB_PATH=...` in a shell, runs in a "
+        "different process and cannot change it. Only use_database changes it.\n\n"
+        "So: before using any job tool against a project directory you have not "
+        "already bound to, call use_database with that directory. Every job tool "
+        "prefixes its answer with the database it used; if that line names the "
+        "wrong project, you are on the wrong database -- call use_database rather "
+        "than acting on the result. The pbx CLI is unaffected by all of this: it "
+        "reads PBX_DB_PATH fresh on every invocation.\n\n"
         "Available capabilities:\n"
+        "- use_database: rebind this server to another project's database (and optionally its config).\n"
         "- add_jobs: create new jobs and add them to the ParslBox database.\n"
         "- submit_pbs_job: submit PBS jobs to the queue using a qsub-style configuration.\n"
         "- submit_slurm_job: submit SLURM jobs to the queue using an sbatch-style configuration.\n"
@@ -92,9 +137,76 @@ mcp = FastMCP(
 
 
 @mcp.tool(
+    name="use_database",
+    description=(
+        "Point this server at a different ParslBox database, for the rest of the session.\n\n"
+        "THE BINDING IS FIXED UNTIL THIS TOOL CHANGES IT. It is set from PBX_DB_PATH when "
+        "the server starts and does NOT follow your working directory, so a `cd` or an "
+        "`export PBX_DB_PATH=...` in a shell has no effect on it -- those run in a "
+        "different process. Before using any job tool against a project directory you "
+        "have not already bound to, call this first. Every job tool reports the database "
+        "it used on a `db:` line; if that line names the wrong project, call this.\n\n"
+        "Takes the project directory (or a .db file directly), resolving a local "
+        "project to its -local database. Refuses a database that does not exist "
+        "unless create is set. Reports the resolved paths and the job count."
+    ),
+)
+def use_database(params: UseDatabaseSchema) -> str:
+    global pbx
+
+    try:
+        db_path = resolve_db_path(params.path)
+    except (PbxPathError, LocalProjectError) as e:
+        return f"Cannot use that path. {e}"
+
+    if not db_path.exists() and not params.create:
+        return (
+            f"No database at {db_path}. Nothing was changed.\n"
+            f"Still using {pbx.db_path}.\n"
+            "If this path is a typo, fix it. To start a new project here, either call "
+            "local_init (for a laptop-to-remote project) or run `pbx add` there, or "
+            "call this again with create=true."
+        )
+
+    config_path = None
+    if params.config_path:
+        try:
+            config_path = path_utils.require_absolute("config_path", params.config_path)
+        except PbxPathError as e:
+            return f"Cannot use that config path. {e}"
+        if config_path.is_dir():
+            config_path = config_path / "config.yaml"
+        if not config_path.is_file():
+            return f"No config file at {config_path}. Nothing was changed."
+
+    previous = pbx.db_path
+    try:
+        pbx = ParslBox(db_path=db_path, config_path=config_path or pbx.config_path)
+    except Exception as e:
+        return f"Could not switch to {db_path}: {e}\nStill using {previous}."
+
+    lines = [f"Now using {pbx.db_path}"]
+    if previous != pbx.db_path:
+        lines.append(f"(was {previous})")
+    lines.append(f"config: {pbx.config_path}")
+    try:
+        lines.append(f"jobs: {count_rows(pbx.db_path)}")
+    except Exception:
+        pass
+    try:
+        project = find_project(pbx.db_path)
+    except LocalProjectError:
+        project = None
+    if project is not None:
+        lines.append(f"local project -> {project.remote_root}")
+    return "\n".join(lines)
+
+
+@mcp.tool(
     name="add_jobs",
     description="Add jobs to ParslBox",
 )
+@_with_db_line
 def add_jobs(params: AddJobSchema) -> str:
     input_dict = params.model_dump()
     
@@ -204,6 +316,7 @@ def _remote_lines(status: dict) -> list:
         "executable. Cancel with the command given there if it looks wrong."
     ),
 )
+@_with_db_line
 def submit_pbs_job(params: QSubSchema) -> str:
     input_dict = params.model_dump()
 
@@ -258,6 +371,7 @@ def submit_pbs_job(params: QSubSchema) -> str:
         "executable. Cancel with the command given there if it looks wrong."
     ),
 )
+@_with_db_line
 def submit_slurm_job(params: SBatchSchema) -> str:
     input_dict = params.model_dump()
 
@@ -311,6 +425,7 @@ def submit_slurm_job(params: SBatchSchema) -> str:
         "orchestrator the cluster's default kill grace (often ~2s) and does no DB cleanup."
     ),
 )
+@_with_db_line
 def cancel_pbs_job(params: CancelJobSchema) -> str:
     input_dict = params.model_dump()
     try:
@@ -347,6 +462,7 @@ def cancel_pbs_job(params: CancelJobSchema) -> str:
         "scancel does no DB cleanup."
     ),
 )
+@_with_db_line
 def cancel_slurm_job(params: CancelJobSchema) -> str:
     input_dict = params.model_dump()
     try:
@@ -372,6 +488,7 @@ def cancel_slurm_job(params: CancelJobSchema) -> str:
     name="remove_job",
     description="Remove jobs from ParslBox",
 )
+@_with_db_line
 def remove_jobs(params: RemoveJobsSchema) -> str:
     input_dict = params.model_dump()
     try:
@@ -389,6 +506,7 @@ def remove_jobs(params: RemoveJobsSchema) -> str:
     name="update_job",
     description=("Update fields for an existing ParslBox job.\n\n"),
 )
+@_with_db_line
 def update_job(params: UpdateJobSchema) -> str:
     input_dict = params.model_dump()
     
@@ -431,6 +549,7 @@ def update_job(params: UpdateJobSchema) -> str:
     name="filter_jobs",
     description=("Filter jobs in ParslBox and return their IDs. "),
 )
+@_with_db_line
 def filter_jobs(params: FilterJobsSchema) -> str:
     input_dict = params.model_dump()
     try:
@@ -454,6 +573,7 @@ def filter_jobs(params: FilterJobsSchema) -> str:
         "For full per-field details on specific jobs, use get_job / get_jobs."
     ),
 )
+@_with_db_line
 def list_jobs(params: ListJobsSchema) -> str:
     input_dict = params.model_dump()
     try:
@@ -473,6 +593,7 @@ def list_jobs(params: ListJobsSchema) -> str:
     name="get_job",
     description="Get a single job's full details by its ID.",
 )
+@_with_db_line
 def get_job(params: GetJobSchema) -> str:
     try:
         job = pbx.get_job(params.job_id)
@@ -492,6 +613,7 @@ def get_job(params: GetJobSchema) -> str:
     name="get_jobs",
     description="Get multiple jobs' full details by their IDs.",
 )
+@_with_db_line
 def get_jobs(params: GetJobsByIdsSchema) -> str:
     try:
         jobs = pbx.get_jobs_by_ids(params.job_ids)

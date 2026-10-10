@@ -202,6 +202,7 @@ class ParslBox:
                 status=status,
                 app_args=app_args,
                 db_path=self.db_path,
+                config_path=self.config_path,
             )
             return successful_job_ids, failed_jobs, msg_log
         except Exception as e:
@@ -316,6 +317,7 @@ class ParslBox:
                 rm_deps=rm_deps,
                 app_args=app_args,
                 db_path=self.db_path,
+                config_path=self.config_path,
             )
             return updated_job_ids, failed_jobs, msg_log
         except Exception as e:

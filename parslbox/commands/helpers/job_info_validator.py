@@ -61,7 +61,7 @@ def _path_for_project(raw: str, project, kind: str) -> Tuple[str, bool]:
     return str(candidate), False
 
 
-def validate_app_configuration(app: str) -> dict:
+def validate_app_configuration(app: str, config_path: Optional[Path] = None) -> dict:
     """
     Validates that the application exists in the registry and returns its configuration.
     
@@ -74,12 +74,12 @@ def validate_app_configuration(app: str) -> dict:
     Raises:
         ValidationError: If the application is not registered
     """
-    if not is_app_registered(app):
-        available_apps = ", ".join(get_registered_apps())
+    if not is_app_registered(app, config_path):
+        available_apps = ", ".join(get_registered_apps(config_path))
         raise ValidationError(f"Unknown application '{app}'. Available applications: {available_apps}")
     
     try:
-        return get_app_config(app)
+        return get_app_config(app, config_path)
     except ValueError as e:
         raise ValidationError(str(e))
 
@@ -103,7 +103,8 @@ def validate_system_configuration(config_name: str):
         raise ValidationError(f"Could not load system configuration: {e}")
 
 
-def validate_input_file(app: str, input_file: Optional[str] = None) -> Tuple[Optional[str], List[str], List[str]]:
+def validate_input_file(app: str, input_file: Optional[str] = None,
+                        config_path: Optional[Path] = None) -> Tuple[Optional[str], List[str], List[str]]:
     """
     Validates and determines the final input file based on app requirements.
     
@@ -125,7 +126,7 @@ def validate_input_file(app: str, input_file: Optional[str] = None) -> Tuple[Opt
     """
     info_messages = []
     warning_messages = []
-    app_config = validate_app_configuration(app)
+    app_config = validate_app_configuration(app, config_path)
     input_required = app_config["INPUT_REQUIRED"]
     default_input = app_config["DFLT_INPUT"]
     
@@ -550,7 +551,8 @@ def validate_update_app_compatibility(
     job_ids: List[int],
     new_app: str,
     input_file: Optional[str],
-    db_path: Optional[Path] = None
+    db_path: Optional[Path] = None,
+    config_path: Optional[Path] = None
 ) -> Tuple[List[Tuple[int, str]], List[str], List[str], Optional[str]]:
     """
     Validates app update compatibility and handles input file logic for update operations.
@@ -582,8 +584,8 @@ def validate_update_app_compatibility(
         
         try:
             # Get app configurations
-            original_config = get_app_config(original_app)
-            new_config = get_app_config(new_app)
+            original_config = get_app_config(original_app, config_path)
+            new_config = get_app_config(new_app, config_path)
             
             original_input_required = original_config['INPUT_REQUIRED']
             original_default_input = original_config['DFLT_INPUT']

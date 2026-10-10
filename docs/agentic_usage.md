@@ -24,7 +24,27 @@ python -m parslbox.mcp.mcp_server --port 8080
 python -m parslbox.mcp.mcp_server --stdio
 ```
 
-Exposed tools: `add_jobs`, `submit_pbs_job`, `submit_slurm_job`, `cancel_pbs_job`, `cancel_slurm_job`, `remove_jobs`, `update_job`, `filter_jobs`, `list_jobs`, `get_job`, `get_jobs`, `local_init`, `local_status`, `local_push`, `local_pull`.
+Exposed tools: `use_database`, `add_jobs`, `submit_pbs_job`, `submit_slurm_job`, `cancel_pbs_job`, `cancel_slurm_job`, `remove_jobs`, `update_job`, `filter_jobs`, `list_jobs`, `get_job`, `get_jobs`, `local_init`, `local_status`, `local_push`, `local_pull`.
+
+### Which database the server is on
+
+The server binds to `PBX_DB_PATH` when it starts and keeps that binding for its whole life. It does **not** follow the caller's working directory, and it cannot see an `export PBX_DB_PATH=...` run in a shell afterwards — that is a different process. (The `pbx` CLI is unaffected: it re-reads the environment on every invocation.)
+
+`use_database` changes the binding for the rest of the session, so one agent session can move between projects:
+
+```
+use_database(path="/lus/flare/projects/kappa-cusic")   # or a .db file directly
+```
+
+A directory holding a `.pbxlocal.yaml` resolves to its `job_database_pbx-local.db`; any other directory resolves to `job_database_pbx.db`. Relative paths are refused, and so is a database that does not exist — a typo would otherwise bind the session to a new empty database that looks like a project with no jobs. Pass `create=true` to start one deliberately, or `config_path` when the project has its own `config.yaml` (needed when it declares its own custom apps).
+
+Every job tool prefixes its answer with the database it used:
+
+```
+db: kappa-cusic (/lus/flare/projects/kappa-cusic/job_database_pbx.db)
+```
+
+If that line names the wrong project, call `use_database` rather than acting on the result.
 
 The four `local_*` tools drive a [local project](remote-workflow.md): a directory whose database stores the paths jobs will have on a remote HPC machine, so an agent can author work on one machine and submit it on another. `local_init` takes an absolute `directory` — the MCP server's working directory is usually not the caller's. In a local project `submit_pbs_job` / `submit_slurm_job` push, submit on the remote's Globus Compute endpoint, and pull back; `no_local` opts out.
 

@@ -41,6 +41,7 @@ def add_jobs(
     status: str = "Ready",
     app_args: Optional[str] = None,
     db_path: Optional[Path] = None,
+    config_path: Optional[Path] = None,
 ) -> tuple[List[int], List[tuple[str, str]], dict]:
     """
     Core job addition logic - used by both CLI and API.
@@ -80,18 +81,18 @@ def add_jobs(
     warning_messages = []
     
     # Validate application exists in registry
-    validate_app_configuration(app)
+    validate_app_configuration(app, config_path)
     
     # API-specific validation for Python apps
     env_file = validate_python_app_env_file(app, env_file)
     
     # Handle input file logic based on app configuration
-    final_input_file, input_info, input_warnings = validate_input_file(app, input_file)
+    final_input_file, input_info, input_warnings = validate_input_file(app, input_file, config_path)
     info_messages.extend(input_info)
     warning_messages.extend(input_warnings)
     
     # Get system configuration and validate resource parameters
-    app_class = get_app_class(app)
+    app_class = get_app_class(app, config_path)
     system_config = validate_system_configuration(config_name)
     resource_params, resource_info, resource_warnings = validate_resource_parameters(ngpus, nnodes, node_occupancy, ranks_per_node, system_config, app_class=app_class)
     info_messages.extend(resource_info)

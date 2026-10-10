@@ -487,3 +487,140 @@ class TestStartupFailureIsReadable:
         monkeypatch.setattr(mcp_server, "ParslBox", boom)
         with pytest.raises(RuntimeError, match="a real bug"):
             mcp_server._start()
+
+
+# ----------------- use_database: switching + visibility -------------------- #
+
+
+class TestUseDatabase:
+    """The server's binding is fixed until use_database changes it, so the
+    tool must switch cleanly and every job tool must say where it answered
+    from. A silent wrong database is the failure this exists to prevent.
+    """
+
+    @pytest.fixture
+    def projects(self, tmp_path):
+        """Two project dirs with different job counts."""
+        from parslbox.database import database
+        made = {}
+        for name, n in (("projA", 2), ("projB", 5)):
+            db = tmp_path / name / "job_database_pbx.db"
+            database.initialize_database(db)
+            for i in range(n):
+                database.add_job(db_path=db, path=f"/{name}/j{i}", app="lammps-kk",
+                                 num_nodes=1, ngpus=0, node_occupancy=1.0,
+                                 tag=name, in_file=None, status="Ready")
+            made[name] = tmp_path / name
+        return made
+
+    @pytest.fixture
+    def server(self, projects):
+        """Bound to projA, restored afterwards so tests stay independent."""
+        from parslbox.mcp import mcp_server as m
+        from parslbox.mcp.schemas import UseDatabaseSchema
+        original = m.pbx
+        m.use_database(UseDatabaseSchema(path=str(projects["projA"])))
+        yield m, projects
+        m.pbx = original
+
+    def _use(self, m, path, **kw):
+        from parslbox.mcp.schemas import UseDatabaseSchema
+        return m.use_database(UseDatabaseSchema(path=str(path), **kw))
+
+    def _list(self, m):
+        from parslbox.mcp.schemas import ListJobsSchema
+        return m.list_jobs(ListJobsSchema())
+
+    # --- switching ---
+
+    def test_switch_changes_the_binding(self, server):
+        m, projects = server
+        out = self._use(m, projects["projB"])
+        assert str(projects["projB"] / "job_database_pbx.db") in out
+        assert m.pbx.db_path == projects["projB"] / "job_database_pbx.db"
+
+    def test_switch_reports_job_count(self, server):
+        m, projects = server
+        assert "jobs: 5" in self._use(m, projects["projB"])
+
+    def test_switch_names_the_previous_database(self, server):
+        m, projects = server
+        assert "projA" in self._use(m, projects["projB"])
+
+    def test_subsequent_calls_read_the_new_database(self, server):
+        m, projects = server
+        assert "Found 2 job(s)" in self._list(m)
+        self._use(m, projects["projB"])
+        assert "Found 5 job(s)" in self._list(m)
+
+    def test_accepts_a_db_file_directly(self, server):
+        m, projects = server
+        db = projects["projB"] / "job_database_pbx.db"
+        self._use(m, db)
+        assert m.pbx.db_path == db
+
+    # --- refusals leave the binding untouched ---
+
+    def test_nonexistent_path_is_refused(self, server, tmp_path):
+        m, _ = server
+        before = m.pbx.db_path
+        out = self._use(m, tmp_path / "typo-dir")
+        assert "No database at" in out
+        assert m.pbx.db_path == before
+
+    def test_refusal_says_what_is_still_in_use(self, server, tmp_path):
+        m, _ = server
+        assert "projA" in self._use(m, tmp_path / "typo-dir")
+
+    def test_relative_path_is_refused(self, server):
+        m, _ = server
+        before = m.pbx.db_path
+        out = self._use(m, "some/relative/dir")
+        assert "absolute" in out
+        assert m.pbx.db_path == before
+
+    def test_create_flag_allows_a_new_database(self, server, tmp_path):
+        m, _ = server
+        fresh = tmp_path / "brand-new"
+        fresh.mkdir()
+        out = self._use(m, fresh, create=True)
+        assert "Now using" in out
+        assert m.pbx.db_path == fresh / "job_database_pbx.db"
+
+    def test_missing_config_is_refused(self, server, projects, tmp_path):
+        m, _ = server
+        before = m.pbx.config_path
+        out = self._use(m, projects["projB"], config_path=str(tmp_path / "nope.yaml"))
+        assert "No config file at" in out
+        assert m.pbx.config_path == before
+
+    # --- visibility ---
+
+    def test_job_tools_report_the_database(self, server):
+        m, projects = server
+        first = self._list(m).splitlines()[0]
+        assert first.startswith("db: projA (")
+        assert str(projects["projA"] / "job_database_pbx.db") in first
+
+    def test_db_line_follows_a_switch(self, server, projects):
+        m, _ = server
+        self._use(m, projects["projB"])
+        assert self._list(m).splitlines()[0].startswith("db: projB (")
+
+    def test_db_line_leads_with_the_project_directory_name(self, server):
+        """A wrong project is easier to spot as a name than as a long path."""
+        m, _ = server
+        assert self._list(m).splitlines()[0].startswith("db: projA")
+
+    def test_local_tools_are_not_double_prefixed(self, server):
+        """local_status already reports the path itself."""
+        from parslbox.mcp.schemas import LocalStatusSchema
+        m, _ = server
+        assert not m.local_status(LocalStatusSchema(check_remote=False)).startswith("db:")
+
+    def test_instructions_name_the_binding_and_the_rule(self):
+        from parslbox.mcp import mcp_server as m
+        text = m.mcp.instructions
+        assert "ACTIVE DATABASE:" in text
+        assert "use_database" in text
+        assert "does NOT follow" in text

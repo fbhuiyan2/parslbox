@@ -27,6 +27,7 @@ def update_jobs(
     rm_deps: Optional[List[int]] = None,
     app_args: Optional[str] = None,
     db_path: Optional[Path] = None,
+    config_path: Optional[Path] = None,
 ) -> tuple[List[int], List[tuple[int, str]], dict]:
     """
     Core job update logic - used by both CLI and API.
@@ -123,7 +124,7 @@ def update_jobs(
             
             try:
                 # Validate input file against the job's existing app
-                validated_input, input_info, input_warnings = validate_input_file(job_app, input_file)
+                validated_input, input_info, input_warnings = validate_input_file(job_app, input_file, config_path)
                 
                 # Fail the job if there are any warnings (e.g., input file ignored)
                 if input_warnings:
