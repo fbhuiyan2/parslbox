@@ -624,3 +624,93 @@ class TestUseDatabase:
         assert "ACTIVE DATABASE:" in text
         assert "use_database" in text
         assert "does NOT follow" in text
+
+
+class TestSchemaArgumentHygiene:
+    """Unknown arguments must be rejected, and the error must name the valid ones.
+
+    Pydantic's default silently drops an unrecognised key, so `nodes=4` instead
+    of `nnodes=4` stored the default and the tool still answered "Successfully
+    added". Rejecting without naming the alternatives is not enough either --
+    the caller just guesses again.
+    """
+
+    def test_unknown_argument_is_rejected(self):
+        from pydantic import ValidationError
+        from parslbox.mcp.schemas import AddJobSchema
+
+        with pytest.raises(ValidationError):
+            AddJobSchema(paths=["/j"], app="lammps-kk", config="polaris", nodes=4)
+
+    def test_error_names_the_bad_key_and_the_valid_ones(self):
+        from pydantic import ValidationError
+        from parslbox.mcp.schemas import AddJobSchema
+
+        with pytest.raises(ValidationError) as exc:
+            AddJobSchema(paths=["/j"], app="lammps-kk", config="polaris",
+                         nodes=4, tags=["t"])
+        msg = str(exc.value)
+        assert "nodes" in msg and "tags" in msg
+        assert "nnodes" in msg and "tag" in msg
+
+    def test_correct_arguments_still_accepted(self):
+        from parslbox.mcp.schemas import AddJobSchema
+
+        s = AddJobSchema(paths=["/j"], app="lammps-kk", config="polaris",
+                         nnodes=2, ngpus=4, tag="run-a")
+        assert (s.nnodes, s.ngpus, s.tag) == (2, 4, "run-a")
+
+    def test_every_mcp_schema_rejects_extras(self):
+        from parslbox.mcp import schemas as S
+
+        for name in dir(S):
+            obj = getattr(S, name)
+            if (isinstance(obj, type) and issubclass(obj, S.BaseModel)
+                    and obj not in (S.BaseModel, S.McpSchema)):
+                assert obj.model_config.get("extra") == "forbid", name
+
+
+class TestSchemaTextBlock:
+    """A tool declared `def tool(params: XSchema)` reaches the client as one
+    property behind a $ref; not every model dereferences it. The rendered
+    block restates the fields where there is no reference to follow."""
+
+    def test_block_lists_fields_with_requiredness(self):
+        from parslbox.mcp.schemas import AddJobSchema, schema_text_block
+
+        block = schema_text_block(AddJobSchema)
+        assert "paths (array, required)" in block
+        assert "nnodes (integer, optional, default 1)" in block
+        assert "app_args" in block
+
+    def test_block_is_generated_not_hardcoded(self):
+        """Adding a field to a schema must show up without further edits."""
+        from pydantic import Field
+        from parslbox.mcp.schemas import McpSchema, schema_text_block
+
+        class Tmp(McpSchema):
+            alpha: str = Field(description="x")
+            beta: int = Field(default=7, description="y")
+
+        block = schema_text_block(Tmp)
+        assert "alpha (string, required)" in block
+        assert "beta (integer, optional, default 7)" in block
+
+    def test_every_tool_description_carries_its_arguments(self):
+        import asyncio
+        from parslbox.mcp.mcp_server import mcp
+
+        tools = asyncio.run(mcp.list_tools())
+        assert tools
+        for t in tools:
+            assert "Arguments, all inside the single `params` object:" in t.description, t.name
+
+    def test_add_jobs_description_names_the_resource_fields(self):
+        """These are the ones models most often guess wrong (nodes/gpus)."""
+        import asyncio
+        from parslbox.mcp.mcp_server import mcp
+
+        tools = asyncio.run(mcp.list_tools())
+        t = [x for x in tools if x.name == "add_jobs"][0]
+        for field in ("paths", "app", "config", "nnodes", "ngpus", "tag"):
+            assert field in t.description

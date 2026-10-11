@@ -1,10 +1,62 @@
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing import List, Optional, Union
 
 
-class AddJobSchema(BaseModel):
+class McpSchema(BaseModel):
+    """Reject unknown arguments, and say what the valid ones are.
+
+    Pydantic's default silently drops an unrecognised key, so a call with
+    `nodes=4` instead of `nnodes=4` stores the default and reports success.
+    Rejecting alone is not enough either: "Extra inputs are not permitted"
+    names the wrong key without naming the right one, and a caller then
+    guesses again. Listing the accepted arguments makes one retry sufficient.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_unknown_arguments(cls, data):
+        if isinstance(data, dict):
+            unknown = sorted(set(data) - set(cls.model_fields))
+            if unknown:
+                raise ValueError(
+                    f"Unknown argument(s) {unknown}. "
+                    f"Valid arguments: {sorted(cls.model_fields)}"
+                )
+        return data
+
+
+def schema_text_block(model: type[BaseModel]) -> str:
+    """Render a schema's arguments as text, to append to a tool description.
+
+    A tool declared as `def tool(params: XSchema)` reaches the client as a
+    single `params` property behind a `$ref` into `$defs`. Not every model
+    follows the reference; some invent a container instead and the call is
+    malformed before any validation runs. Restating the field names where
+    there is no reference to follow costs a few dozen tokens and removes
+    that failure. Generated from the model, so it cannot drift.
+    """
+    js = model.model_json_schema()
+    required = set(js.get("required", []))
+    lines = []
+    for name, spec in js.get("properties", {}).items():
+        kind = spec.get("type") or "/".join(
+            x.get("type", "?") for x in spec.get("anyOf", [])
+            if x.get("type") != "null"
+        ) or "any"
+        note = ("required" if name in required
+                else f"optional, default {spec.get('default')!r}")
+        lines.append(f"  {name} ({kind}, {note})")
+    if not lines:
+        return ""
+    return ("\n\nArguments, all inside the single `params` object:\n"
+            + "\n".join(lines))
+
+
+class AddJobSchema(McpSchema):
     """Schema for adding job(s)"""
 
     paths: List[str] = Field(
@@ -81,7 +133,7 @@ class AddJobSchema(BaseModel):
     )
 
 
-class FilterJobsSchema(BaseModel):
+class FilterJobsSchema(McpSchema):
     """Schema for filtering jobs and returning their IDs."""
 
     status: Optional[str] = Field(
@@ -122,7 +174,7 @@ class FilterJobsSchema(BaseModel):
     )
 
 
-class ListJobsSchema(BaseModel):
+class ListJobsSchema(McpSchema):
     """Schema for listing jobs with full details and optional filters."""
 
     status: Optional[str] = Field(
@@ -151,7 +203,7 @@ class ListJobsSchema(BaseModel):
     )
 
 
-class GetJobSchema(BaseModel):
+class GetJobSchema(McpSchema):
     """Schema for getting a single job's full details by ID."""
 
     job_id: int = Field(
@@ -159,7 +211,7 @@ class GetJobSchema(BaseModel):
     )
 
 
-class GetJobsByIdsSchema(BaseModel):
+class GetJobsByIdsSchema(McpSchema):
     """Schema for getting multiple jobs' full details by their IDs."""
 
     job_ids: List[int] = Field(
@@ -167,7 +219,7 @@ class GetJobsByIdsSchema(BaseModel):
     )
 
 
-class QSubSchema(BaseModel):
+class QSubSchema(McpSchema):
     """Schema for generating and submitting a PBS job via ParslBox."""
 
     config: str = Field(
@@ -262,7 +314,7 @@ class QSubSchema(BaseModel):
     )
 
 
-class SBatchSchema(BaseModel):
+class SBatchSchema(McpSchema):
     """Schema for generating and submitting a SLURM job via ParslBox."""
 
     config: str = Field(
@@ -355,7 +407,7 @@ class SBatchSchema(BaseModel):
     )
 
 
-class CancelJobSchema(BaseModel):
+class CancelJobSchema(McpSchema):
     """Schema for gracefully cancelling a running ParslBox batch job."""
 
     jobid: str = Field(
@@ -375,7 +427,7 @@ class CancelJobSchema(BaseModel):
     )
 
 
-class RemoveJobsSchema(BaseModel):
+class RemoveJobsSchema(McpSchema):
     """Schema for removing existing job in the database"""
 
     job_ids: List[int] = Field(
@@ -383,7 +435,7 @@ class RemoveJobsSchema(BaseModel):
     )
 
 
-class UpdateJobSchema(BaseModel):
+class UpdateJobSchema(McpSchema):
     """Schema for updating an existing job in the database."""
 
     job_id: int = Field(
@@ -451,7 +503,7 @@ class UpdateJobSchema(BaseModel):
     )
 
 
-class LocalStatusSchema(BaseModel):
+class LocalStatusSchema(McpSchema):
     """Schema for reporting on a local project."""
 
     check_remote: bool = Field(
@@ -464,7 +516,7 @@ class LocalStatusSchema(BaseModel):
     )
 
 
-class LocalPushSchema(BaseModel):
+class LocalPushSchema(McpSchema):
     """Schema for sending a local project's database to the remote machine."""
 
     force: bool = Field(
@@ -523,7 +575,7 @@ class LocalPushSchema(BaseModel):
     )
 
 
-class LocalPullSchema(BaseModel):
+class LocalPullSchema(McpSchema):
     """Schema for bringing a local project's remote database back down."""
 
     force: bool = Field(
@@ -535,7 +587,7 @@ class LocalPullSchema(BaseModel):
     )
 
 
-class LocalInitSchema(BaseModel):
+class LocalInitSchema(McpSchema):
     """Schema for creating a local project."""
 
     directory: str = Field(
@@ -593,7 +645,7 @@ class LocalInitSchema(BaseModel):
     )
 
 
-class UseDatabaseSchema(BaseModel):
+class UseDatabaseSchema(McpSchema):
     """Schema for rebinding the server to a different ParslBox database"""
 
     path: str = Field(

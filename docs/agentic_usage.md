@@ -50,6 +50,37 @@ The four `local_*` tools drive a [local project](remote-workflow.md): a director
 
 For an HTTP client example, see [`examples/chemgraph_parslbox_example/`](../examples/chemgraph_parslbox_example/).
 
+### Tool arguments
+
+Each tool's description ends with its argument list, generated from the schema:
+
+```
+Arguments, all inside the single `params` object:
+  paths (array, required)
+  app (string, required)
+  config (string, required)
+  nnodes (integer, optional, default 1)
+  ...
+```
+
+The arguments are also in the JSON schema, but there they sit behind a `$ref`
+that some models do not follow — they guess at the shape of `params` and the
+call is malformed before any validation runs. Restating the names costs a few
+dozen tokens and removes that failure.
+
+An unknown argument is rejected rather than ignored, and the error names the
+valid ones:
+
+```
+Unknown argument(s) ['nodes', 'tags']. Valid arguments: ['app', 'app_args',
+'config', ..., 'ngpus', 'nnodes', ..., 'tag']
+```
+
+Previously an unrecognised key was silently dropped, so `nodes=4` instead of
+`nnodes=4` stored the default and the tool still answered "Successfully
+added" — a wrong database reported as success.
+
+
 ### Add the MCP server to Claude Code (user scope — available in every directory)
 
 ```bash

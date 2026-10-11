@@ -14,6 +14,7 @@ from parslbox.utils import path_utils
 from parslbox.utils.path_utils import PbxPathError
 from parslbox.commands.helpers.job_id_parser import format_job_ids, group_failures
 from parslbox.mcp.schemas import (
+    schema_text_block,
     AddJobSchema,
     LocalInitSchema,
     LocalPullSchema,
@@ -789,6 +790,31 @@ def local_pull(params: LocalPullSchema) -> str:
         return f"Exception occurred when pulling. Exception: {e}"
     return (f"Pulled {result['bytes'] / 1024:.0f} KB, "
             f"local now: {result['fingerprint'].get('count')} jobs")
+
+
+
+def _append_schema_blocks() -> None:
+    """Restate each tool's arguments at the end of its description.
+
+    Done by introspection rather than by hand at 16 call sites, so adding a
+    field to a schema updates the description with no further edit.
+    """
+    import inspect
+    from pydantic import BaseModel as _BM
+
+    for tool in mcp._tool_manager._tools.values():
+        try:
+            params = inspect.signature(tool.fn).parameters
+        except (TypeError, ValueError):
+            continue
+        for p in params.values():
+            ann = p.annotation
+            if isinstance(ann, type) and issubclass(ann, _BM):
+                tool.description = (tool.description or "") + schema_text_block(ann)
+                break
+
+
+_append_schema_blocks()
 
 
 # Start MCP server
