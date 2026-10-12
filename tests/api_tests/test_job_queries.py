@@ -231,3 +231,39 @@ class TestFilterJobs:
         # status=Ready (2 jobs) minus tag=prod-run → just prod-test job
         out = pbx.filter_jobs(status="Ready", exclude_tag="prod-run")
         assert len(out) == 1
+
+
+class TestRemoveRejectsMissingIds:
+    """`remove_jobs` returned a bare count, so a request for forty ids that
+    found five was reported the same way as a complete delete."""
+
+    def _three_jobs(self, pbx, tmp_path):
+        env_file = tmp_path / "env.sh"
+        env_file.write_text("#!/bin/bash\n")
+        dirs = []
+        for i in range(3):
+            d = tmp_path / f"j{i}"
+            d.mkdir()
+            dirs.append(str(d))
+        ids, _, _ = pbx.add_jobs(paths=dirs, app="python", config="polaris",
+                                 input_file="script.py", env_file=str(env_file))
+        return ids
+
+    def test_a_missing_id_raises_and_removes_nothing(self, pbx, tmp_path):
+        from parslbox.api import ValidationError
+        ids = self._three_jobs(pbx, tmp_path)
+        with pytest.raises(ValidationError, match="No job with id"):
+            pbx.remove_jobs(ids + [99999])
+        assert len(pbx.list_jobs()) == 3
+
+    def test_the_message_compresses_the_missing_ids(self, pbx, tmp_path):
+        from parslbox.api import ValidationError
+        ids = self._three_jobs(pbx, tmp_path)
+        pbx.remove_jobs(ids[1:])
+        with pytest.raises(ValidationError) as exc:
+            pbx.remove_jobs(ids)
+        assert f"{ids[1]}-{ids[2]}" in str(exc.value)
+
+    def test_the_singular_form_keeps_its_lenient_contract(self, pbx):
+        """`remove_job` is documented to answer False, not to raise."""
+        assert pbx.remove_job(99999) is False

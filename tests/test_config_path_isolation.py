@@ -143,3 +143,84 @@ class TestDefaultsUnchanged:
 
     def test_builtins_resolve_without_touching_config(self, tmp_path):
         assert app_registry.get_app_class("lammps-kk").__name__ == "LammpsKokkosApp"
+
+
+# ---- pbx_config_utils: the shared helper that kept reading the global ---- #
+
+
+class TestConfigUtilsHonourAnExplicitPath:
+    """`70ff47d` threaded config_path through the app registry but stopped
+    there, leaving pbx_config_utils reading the process-wide default. That
+    module is a shared helper -- schedule_helpers calls into it -- so a
+    helper calling a helper had no way to pass the caller's project down.
+    Only CLI paths reached it, where a fresh process makes the default
+    correct, which is why it went unnoticed.
+    """
+
+    @staticmethod
+    def _cfg(tmp_path, name, value):
+        p = tmp_path / name
+        p.write_text(yaml.safe_dump({"lammps-kk": {"polaris": {"marker": value}}}))
+        return p
+
+    def test_load_full_config_reads_the_path_it_is_given(self, tmp_path):
+        from parslbox.utils.pbx_config_utils import load_full_config
+        cfg = self._cfg(tmp_path, "a.yaml", "A")
+        assert load_full_config(cfg)["lammps-kk"]["polaris"]["marker"] == "A"
+
+    def test_two_configs_in_one_process_do_not_bleed(self, tmp_path):
+        # The shape use_database relies on: one process, two projects.
+        from parslbox.utils.pbx_config_utils import load_full_config
+        a = self._cfg(tmp_path, "a.yaml", "A")
+        b = self._cfg(tmp_path, "b.yaml", "B")
+        assert load_full_config(a)["lammps-kk"]["polaris"]["marker"] == "A"
+        assert load_full_config(b)["lammps-kk"]["polaris"]["marker"] == "B"
+        assert load_full_config(a)["lammps-kk"]["polaris"]["marker"] == "A"
+
+    def test_an_explicit_path_beats_the_global(self, tmp_path, monkeypatch):
+        from parslbox.utils import path_utils, pbx_config_utils
+        theirs = self._cfg(tmp_path, "global.yaml", "GLOBAL")
+        mine = self._cfg(tmp_path, "mine.yaml", "MINE")
+        monkeypatch.setattr(path_utils, "PBX_CONFIG_FILE", theirs)
+        got = pbx_config_utils.load_full_config(mine)
+        assert got["lammps-kk"]["polaris"]["marker"] == "MINE"
+
+    def test_omitting_it_still_uses_the_global(self, tmp_path, monkeypatch):
+        from parslbox.utils import path_utils, pbx_config_utils
+        theirs = self._cfg(tmp_path, "global.yaml", "GLOBAL")
+        monkeypatch.setattr(path_utils, "PBX_CONFIG_FILE", theirs)
+        got = pbx_config_utils.load_full_config()
+        assert got["lammps-kk"]["polaris"]["marker"] == "GLOBAL"
+
+    def test_load_app_config_takes_one_too(self, tmp_path):
+        from parslbox.utils.pbx_config_utils import load_app_config
+        cfg = self._cfg(tmp_path, "a.yaml", "A")
+        assert load_app_config("lammps-kk", "polaris", cfg) == {"marker": "A"}
+        assert load_app_config("lammps-kk", "crux", cfg) == {}
+
+    def test_is_app_configured_takes_one_too(self, tmp_path):
+        from parslbox.utils.pbx_config_utils import is_app_configured
+        cfg = self._cfg(tmp_path, "a.yaml", "A")
+        assert is_app_configured("lammps-kk", "polaris", cfg) is True
+        assert is_app_configured("vasp", "polaris", cfg) is False
+
+    def test_a_missing_file_still_raises_and_is_still_swallowed(self, tmp_path):
+        from parslbox.utils.pbx_config_utils import load_full_config, is_app_configured
+        gone = tmp_path / "nope.yaml"
+        with pytest.raises(FileNotFoundError):
+            load_full_config(gone)
+        # is_app_configured has always answered False rather than raising.
+        assert is_app_configured("lammps-kk", "polaris", gone) is False
+
+    def test_the_global_is_read_in_exactly_one_place(self):
+        # The fallback belongs in one helper. Any other reader in this module
+        # is a function that cannot be pointed at another project.
+        import inspect
+        from parslbox.utils import pbx_config_utils
+        src = inspect.getsource(pbx_config_utils)
+        assert src.count("path_utils.PBX_CONFIG_FILE") == 1
+
+    def test_the_dead_entry_points_are_gone(self):
+        from parslbox.utils import pbx_config_utils
+        assert not hasattr(pbx_config_utils, "get_configured_systems_for_app")
+        assert not hasattr(pbx_config_utils, "initialize_config_file")

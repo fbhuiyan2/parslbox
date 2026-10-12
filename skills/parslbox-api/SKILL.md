@@ -26,17 +26,19 @@ pbx = ParslBox(config_path="...", db_path="...")
 | Method | Returns | Purpose |
 |---|---|---|
 | `add_jobs(paths, app, config, ...)` | `(ids, failures, msg_log)` | Register one or many jobs. `paths` is always `List[str]`. |
-| `list_jobs(status=, app=, tag=, path=, in_file=, num_nodes=)` | `List[dict]` | Job rows with optional filters (`num_nodes` is an exact match) |
+| `list_jobs(status=, app=, tag=, path=, in_file=, num_nodes=, limit=)` | `List[dict]` | Job rows with optional filters (`num_nodes` is an exact match). `limit=N` keeps the first N, `limit=-N` the last N; omit for every row. |
 | `filter_jobs(status=, app=, tag=, path=, in_file=, num_nodes=, exclude_status=, exclude_app=, exclude_tag=)` | `List[int]` | Just the job IDs matching the filters (note: IDs only, not full rows) |
 | `get_job(job_id)` | `dict` | Full row for one job |
 | `get_jobs_by_ids(ids)` | `List[dict]` | Full rows for a list of IDs |
 | `update_jobs(job_ids, status=, tag=, input_file=, ngpus=, env_file=, nnodes=, node_occupancy=, ranks_per_node=, add_deps=, rm_deps=, app_args=)` | `(ids, failures, msg_log)` | Edit any of the listed fields. `app_args` mirrors CLI `--args`: it rebuilds each job's `in_file` as `<base script> <app_args>`, replacing any args already there. |
-| `remove_job(id)` / `remove_jobs(ids)` / `remove_all_jobs()` | `bool` / `int` / `int` | Delete |
-| `qsub(config, job_name, queue, select, walltime, project=, apps=, tags=, sched_opts=, respawn=, ...)` | `dict` | Build + submit a PBS batch. With `respawn=N` set, returns includes `respawn_template_file`. |
+| `remove_job(id)` / `remove_jobs(ids)` / `remove_all_jobs()` | `bool` / `int` / `int` | Delete. `remove_jobs` is all-or-nothing: a missing id raises `ValidationError` naming the gaps in range notation, and nothing is removed. `remove_job` answers `False` instead. |
+| `resource_requirements(system, job_ids=None)` | `dict` | How many nodes of `system` the jobs need. Read-only. Only Ready/Restart jobs are sized; the rest come back under `skipped`. |
+| `command_lines(system, job_ids=None)` | `dict` | Preview the MPI/srun line each job would launch with. Nothing runs; hostnames are placeholders. |
+| `qsub(config, job_name, queue, select, walltime, project=, apps=, tags=, sched_opts=, dynamic=True, respawn=, ...)` | `dict` | Build + submit a PBS batch. With `respawn=N` set, returns includes `respawn_template_file`. `dynamic=False` pins the run to the jobs matched at submit time. |
 | `sbatch(...)` | `dict` | Same as `qsub` for SLURM. Same `respawn` semantics. |
 | `qdel(jobid, grace=30)` | `dict` | Graceful PBS cancel (SIGTERM → grace → `qdel`). Returns dict with `success`, `reconciled_count`, etc. |
 | `scancel(jobid, grace=30)` | `dict` | Same for SLURM. |
-| `local_init(directory, remote_root, compute_endpoint=, transfer_local=, transfer_remote=, transfer_remote_root=, remote_config=, nested_ok=False)` | `dict` | Create or adopt a local project. `nested_ok=False` raises if a project exists in a parent directory. `transfer_remote_root` overrides the collection root that the first directory push otherwise detects. |
+| `local_init(directory, remote_root, compute_endpoint=, transfer_local=, transfer_remote=, transfer_remote_root=, remote_config=, nested_ok=False, verify=False)` | `dict` | Create or adopt a local project. `nested_ok=False` raises if a project exists in a parent directory. `verify=True` pings the Compute endpoint and reports it under `endpoint_check`. `transfer_remote_root` overrides the collection root that the first directory push otherwise detects. |
 | `local_status(check_remote=True)` | `dict` | Which side is ahead, endpoint health. Always has `is_local_project`; the rest only when that is `True`. |
 | `local_push(force=False, with_dirs=False, apps=, tags=, wait_for_dirs=True, sync_level='checksum')` | `dict` | Send the database up. `with_dirs=True` also sends job directories over Globus Transfer — that needs `transfer_local`/`transfer_remote` in `.pbxlocal.yaml` **and** `PBX_GLOBUS_CLIENT_ID` set to a registered Globus Native App id. `tags` accepts `*` globs; a tag matching nothing is an error. Raises `ValidationError` if the remote moved and `force` is unset, if the Compute endpoint is unreachable, or if Transfer refuses. |
 | `local_pull(force=False)` | `dict` | Bring the database down. Raises `ValidationError` if the local moved and `force` is unset. |

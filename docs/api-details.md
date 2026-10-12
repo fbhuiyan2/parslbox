@@ -37,6 +37,8 @@ from parslbox.api import ParslBoxError, ValidationError, JobNotFoundError
 | `remove_job(job_id)` | Delete one job |
 | `remove_jobs(job_ids)` | Delete many jobs |
 | `remove_all_jobs()` | Wipe the DB |
+| `resource_requirements(system, job_ids=None)` | How many nodes of `system` the jobs need (read-only) |
+| `command_lines(system, job_ids=None)` | Preview the MPI/srun line each job would launch with |
 | `qsub(...)` | Generate and submit a PBS batch script |
 | `sbatch(...)` | Generate and submit a SLURM batch script |
 | `qdel(jobid, grace=30)` | Graceful PBS cancel (SIGTERM → wait → hard kill) |
@@ -140,6 +142,10 @@ plot_jobs  = pbx.list_jobs(in_file="plot.py")
 
 # Exact node count
 two_node = pbx.list_jobs(num_nodes=2)
+
+# First / last N, as `pbx ls 20` and `pbx ls -20` do
+first_20 = pbx.list_jobs(limit=20)
+last_20  = pbx.list_jobs(limit=-20)
 ```
 
 > `list_jobs` filters use exact match for `status`/`app`/`tag`/`num_nodes` and substring match for `path`/`in_file`. For **tag glob support** (`*test`, `prod*`, `*3c*`) and exclude filters, use `filter_jobs`.
@@ -191,14 +197,42 @@ except JobNotFoundError as e:
 ## `remove_job` / `remove_jobs` / `remove_all_jobs`
 
 ```python
-ok = pbx.remove_job(42)                # True if it existed
-n  = pbx.remove_jobs([10, 11, 12])     # returns count actually deleted
+ok = pbx.remove_job(42)                # True if it existed, False if not
+n  = pbx.remove_jobs([10, 11, 12])     # all-or-nothing; returns count
 n  = pbx.remove_all_jobs()             # wipe DB; returns count
 
 # Idiom: remove every Done job older than some criterion
 done_ids = pbx.filter_jobs(status="Done")
 pbx.remove_jobs(done_ids)
 ```
+
+`remove_jobs` raises `ValidationError` and removes nothing if any id is
+absent; the message names the missing ids in range notation (`No job with id
+6-40`). `remove_job`, being singular, keeps the gentler contract and answers
+`False`.
+
+---
+
+## `resource_requirements` / `command_lines`
+
+The `pbx info --req` and `--cmdline` analyses, as data. Both are read-only:
+nothing is submitted and nothing in the DB changes. `job_ids=None` covers
+every job.
+
+```python
+req = pbx.resource_requirements("aurora-tile")
+print(req["gpus_per_node"], req["cores_per_node"], req["schedulable"], req["skipped"])
+print(req["gpu"]["simultaneous"], req["gpu"]["optimal"])   # also req["cpu"], req["total"]
+
+for row in pbx.command_lines("aurora-tile", job_ids=[1, 2])["jobs"]:
+    print(row["job_id"], row["resources"], row["command"], row["error"])
+```
+
+Only `Ready`/`Restart` jobs are sized; the rest come back as `{status: count}`
+under `skipped`. `simultaneous` runs everything at once, `optimal` is the
+tighter number once jobs queue behind each other. A command-line preview uses
+placeholder hostnames and generates its rankfiles into a temp directory that
+is removed before returning. An unknown system raises `ValidationError`.
 
 ---
 
@@ -217,6 +251,7 @@ result = pbx.qsub(
     apps=["lammps-kk"],
     tags=["prod-*", "film-bulk"],  # globs allowed; resolved against DB
     retries=1,
+    dynamic=True,                  # False pins the run to the jobs matched now
 )
 print(result["job_id"], result["run_dir"])
 print("matched", result.get("matched_jobs"), "tags →", result.get("resolved_tags"))
@@ -312,7 +347,7 @@ pbx.local_init(
 pbx = ParslBox(db_path="/home/you/work/proj1/job_database_pbx-local.db")
 ```
 
-`local_init` writes files and touches no network. It raises `ValidationError` when the directory cannot hold a project: a populated `-local.db` with no project file (the remote root it belonged to is unrecoverable), a project file with no database, a relative `remote_root`, or a project in a parent directory with `nested_ok` left `False`. Re-running on an existing project returns `action='existing'` and changes nothing.
+`local_init(..., verify=True)` pings the Compute endpoint once the project exists and reports it under `endpoint_check` (skipped when no endpoint is configured). Otherwise `local_init` writes files and touches no network. It raises `ValidationError` when the directory cannot hold a project: a populated `-local.db` with no project file (the remote root it belonged to is unrecoverable), a project file with no database, a relative `remote_root`, or a project in a parent directory with `nested_ok` left `False`. Re-running on an existing project returns `action='existing'` and changes nothing.
 
 `local_status(check_remote=False)` stays offline. The return always has `is_local_project`; when `True` it also carries `local_root`, `remote_root`, `job_count`, `created`, `export_line`, a `local` block with a `drift` phrase, a `remote` block (`reachable`, `fingerprint`, `drift`, `endpoint_info`), and a `recommendation` when the two sides disagree. An unreachable endpoint is not an error — the remote block reports `reachable: False` alongside the last known figures.
 

@@ -427,3 +427,33 @@ class TestUpdateJobsEdgeCases:
         # Verify env file was updated
         updated_job = database.get_jobs_by_ids(db_path, [job_id])[0]
         assert str(env_file.resolve()) in updated_job['env_file']
+
+
+class TestUpdateRangesAreBoundedByTheDatabase:
+    """As for `info`: proves the `resolve_job_ids` wiring in update.py is
+    actually reached, not merely that the helper it calls is tested."""
+
+    def test_a_range_past_the_last_job_is_refused(self, setup_test_jobs):
+        db_path, _ = setup_test_jobs
+        with patch('parslbox.commands.update.path_utils.DB_FILE', db_path):
+            r = CliRunner().invoke(update_app, ['1-100000000', '--status', 'Done'],
+                                   env={"COLUMNS": "400"})
+        assert r.exit_code != 0
+        assert "highest job id" in r.output
+        assert len(r.output) < 300
+
+    def test_a_bare_unknown_id_still_reports_no_updates(self, setup_test_jobs):
+        db_path, _ = setup_test_jobs
+        with patch('parslbox.commands.update.path_utils.DB_FILE', db_path):
+            r = CliRunner().invoke(update_app, ['99999', '--status', 'Done'],
+                                   env={"COLUMNS": "400"})
+        assert r.exit_code == 0
+        assert "No jobs were updated" in r.output
+
+    def test_an_id_too_large_for_sqlite_is_refused_cleanly(self, setup_test_jobs):
+        db_path, _ = setup_test_jobs
+        with patch('parslbox.commands.update.path_utils.DB_FILE', db_path):
+            r = CliRunner().invoke(update_app, ['9' * 30, '--status', 'Done'],
+                                   env={"COLUMNS": "400"})
+        assert r.exit_code != 0
+        assert "out of range" in r.output

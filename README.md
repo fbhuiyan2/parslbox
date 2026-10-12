@@ -193,9 +193,11 @@ Main methods:
 - `filter_jobs(...)` — returns job IDs matching filters (status, app, tag, path, input)
 - `get_job(job_id)`, `get_jobs_by_ids(ids)`
 - `remove_job`, `remove_jobs`, `remove_all_jobs`
+- `resource_requirements(system, job_ids=None)` — how many nodes the jobs need
+- `command_lines(system, job_ids=None)` — preview the MPI/srun launch line
 - `qsub(...)` — submit via PBS
 - `sbatch(...)` — submit via SLURM
-- `run(...)` — execute jobs directly
+- `run(...)` — reserved; raises `NotImplementedError` (use the `pbx run` CLI)
 - `qdel(jobid, grace=30)` / `scancel(jobid, grace=30)` — graceful cancel of a running PBX batch job (SIGTERM → wait `grace` seconds → hard kill)
 
 Exceptions: `ParslBoxError`, `ValidationError`, `JobNotFoundError`

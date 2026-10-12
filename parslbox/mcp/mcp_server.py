@@ -14,6 +14,8 @@ from parslbox.utils import path_utils
 from parslbox.utils.path_utils import PbxPathError
 from parslbox.commands.helpers.job_id_parser import format_job_ids, group_failures
 from parslbox.mcp.schemas import (
+    CommandLinesSchema,
+    ResourceRequirementsSchema,
     schema_text_block,
     AddJobSchema,
     LocalInitSchema,
@@ -74,6 +76,22 @@ def _with_db_line(fn):
     return wrapper
 
 
+def _resolved_params(params) -> dict:
+    """Dump a schema, expanding its job-id tokens against the active database.
+
+    The schema validator deliberately leaves ranges unexpanded, because it
+    runs before this function has a database to bound them with. Here `pbx`
+    is bound, so '1-100000000' is refused on its endpoint rather than
+    becoming a hundred million integers.
+    """
+    from parslbox.commands.helpers.job_id_parser import resolve_job_ids
+
+    out = params.model_dump()
+    if out.get("job_ids") is not None:
+        out["job_ids"] = resolve_job_ids(out["job_ids"], pbx.db_path)
+    return out
+
+
 def _fmt_resources(job: dict) -> str:
     """Compact resource summary: 'nodes:5, ranks:60, gpus:60, nocc:1.0'."""
     nn = job.get('num_nodes', 1)
@@ -123,7 +141,9 @@ mcp = FastMCP(
         "- cancel_pbs_job: gracefully cancel a running PBS batch job (preferred over raw qdel — keeps DB accurate).\n"
         "- cancel_slurm_job: gracefully cancel a running SLURM batch job (preferred over raw scancel — keeps DB accurate).\n"
         "- remove_jobs: remove one or more jobs from the database.\n"
-        "- update_job: modify fields of an existing job (status, tag, input file, resources, dependencies, etc.). Note: app cannot be changed after job creation.\n"
+        "- update_jobs: modify fields of one or more existing jobs (status, tag, input file, resources, dependencies, etc.). Note: app cannot be changed after job creation.\n"
+        "- get_resource_requirements: how many nodes of a target system the jobs need. Read-only.\n"
+        "- get_command_lines: the MPI/srun line each job would be launched with on a target system. A preview; nothing runs.\n"
         "- filter_jobs: filter jobs by status, app, tag, path, or input file and return their IDs.\n"
         "- list_jobs: list jobs with full details, with optional filtering by status, app, tag, path, or input file.\n"
         "- get_job: get a single job's full details by its ID.\n"
@@ -486,14 +506,13 @@ def cancel_slurm_job(params: CancelJobSchema) -> str:
 
 
 @mcp.tool(
-    name="remove_job",
+    name="remove_jobs",
     description="Remove jobs from ParslBox",
 )
 @_with_db_line
 def remove_jobs(params: RemoveJobsSchema) -> str:
-    input_dict = params.model_dump()
     try:
-        removed_count = pbx.remove_jobs(**input_dict)
+        removed_count = pbx.remove_jobs(**_resolved_params(params))
     except Exception as e:
         return f"Exception occurred when removing jobs. Exception: {e}"
     
@@ -504,46 +523,122 @@ def remove_jobs(params: RemoveJobsSchema) -> str:
 
 
 @mcp.tool(
-    name="update_job",
-    description=("Update fields for an existing ParslBox job.\n\n"),
+    name="update_jobs",
+    description=("Update fields for one or more existing ParslBox jobs.\n\n"),
 )
 @_with_db_line
-def update_job(params: UpdateJobSchema) -> str:
-    input_dict = params.model_dump()
-    
-    # Extract job_id and convert to list for the API call
-    job_id = input_dict.pop('job_id')
-    input_dict['job_ids'] = [job_id]
-
+def update_jobs(params: UpdateJobSchema) -> str:
     try:
+        input_dict = _resolved_params(params)
+        job_ids = input_dict["job_ids"]
         updated_job_ids, failed_jobs, msg_log = pbx.update_jobs(**input_dict)
     except Exception as e:
-        return f"Exception occurred when updating job {job_id}. Exception: {e}"
+        return f"Exception occurred when updating jobs. Exception: {e}"
 
-    # Build response message
     response_parts = []
-    
-    if job_id in updated_job_ids:
-        response_parts.append(f"Successfully updated job {job_id}.")
-    elif failed_jobs:
-        # Find the specific error for this job
-        for failed_job_id, error_msg in failed_jobs:
-            if failed_job_id == job_id:
-                response_parts.append(f"Failed to update job {job_id}: {error_msg}")
-                break
-        else:
-            response_parts.append(f"Job {job_id} was not found or no fields were updated.")
-    else:
-        response_parts.append(f"Job {job_id} was not found or no fields were updated.")
-    
-    # Add warnings and info messages
+
+    if updated_job_ids:
+        response_parts.append(
+            f"Successfully updated {len(updated_job_ids)} job(s): "
+            f"{format_job_ids(updated_job_ids)}."
+        )
+
+    for failed_job_id, error_msg in failed_jobs:
+        response_parts.append(f"Failed to update job {failed_job_id}: {error_msg}")
+
+    untouched = sorted(set(job_ids) - set(updated_job_ids)
+                       - {fid for fid, _ in failed_jobs})
+    if untouched:
+        response_parts.append(
+            f"Not found, or no fields changed: {format_job_ids(untouched)}."
+        )
+
+    if not response_parts:
+        response_parts.append("No jobs were updated.")
+
     for warning in msg_log.get('warnings', []):
         response_parts.append(f"Warning: {warning}")
-    
+
     for info in msg_log.get('info', []):
         response_parts.append(f"Info: {info}")
-    
+
     return "\n".join(response_parts)
+
+
+@mcp.tool(
+    name="get_resource_requirements",
+    description=(
+        "How many nodes of a target system these jobs need. Read-only: nothing "
+        "is submitted and nothing in the database changes.\n\n"
+        "Counts only Ready/Restart jobs and reports the rest as skipped. "
+        "'simultaneous' is every job running at once; 'optimal' is what pbx "
+        "needs once it queues jobs behind each other."
+    ),
+)
+@_with_db_line
+def get_resource_requirements(params: ResourceRequirementsSchema) -> str:
+    try:
+        req = pbx.resource_requirements(**_resolved_params(params))
+    except Exception as e:
+        return f"Exception occurred when sizing jobs. Exception: {e}"
+
+    lines = [f"{req['system']}: {req['gpus_per_node']} GPUs/node, "
+             f"{req['cores_per_node']} cores/node",
+             f"schedulable: {req['schedulable']}"]
+    if req["skipped"]:
+        lines.append("skipped: " + ", ".join(f"{c} {s}" for s, c in req["skipped"].items()))
+    if not req["schedulable"]:
+        lines.append("No Ready/Restart jobs to size.")
+        return "\n".join(lines)
+
+    gpu = req["gpu"]
+    if gpu:
+        if not gpu["system_has_gpus"]:
+            lines.append(f"gpu: {gpu['jobs']} job(s) need {gpu['total_gpus']} GPUs, "
+                         f"but {req['system']} has none -- they cannot run here")
+        else:
+            lines.append(f"gpu: {gpu['jobs']} job(s), {gpu['total_gpus']} GPUs -> "
+                         f"{gpu['simultaneous']} nodes simultaneous / "
+                         f"{gpu['optimal']} optimal")
+            for j in gpu["oversized"]:
+                lines.append(f"  job {j['job_id']} wants {j['ngpus']} GPUs on one node, "
+                             f"more than the {gpu['gpus_per_node']} available")
+    cpu = req["cpu"]
+    if cpu:
+        lines.append(f"cpu: {cpu['jobs']} job(s), occupancy {cpu['total_occupancy']:.1f} -> "
+                     f"{cpu['simultaneous']} nodes simultaneous / {cpu['optimal']} optimal")
+    if req["total"]:
+        lines.append(f"total: {req['total']['simultaneous']} nodes simultaneous / "
+                     f"{req['total']['optimal']} optimal")
+    return "\n".join(lines)
+
+
+@mcp.tool(
+    name="get_command_lines",
+    description=(
+        "The MPI/srun line each job would be launched with on a target system. "
+        "A preview only -- nothing runs, and hostnames are placeholders.\n\n"
+        "Returns one line per job, so name the jobs you care about rather than "
+        "asking for a whole large database."
+    ),
+)
+@_with_db_line
+def get_command_lines(params: CommandLinesSchema) -> str:
+    try:
+        preview = pbx.command_lines(**_resolved_params(params))
+    except Exception as e:
+        return f"Exception occurred when building command lines. Exception: {e}"
+
+    rows = preview["jobs"]
+    if not rows:
+        return f"{preview['system']}: no jobs to preview."
+    lines = [f"{preview['system']} (hostnames are placeholders):"]
+    for r in rows:
+        if r["error"]:
+            lines.append(f"{r['job_id']}: error: {r['error']}")
+        else:
+            lines.append(f"{r['job_id']} [{r['resources']}] {r['command']}")
+    return "\n".join(lines)
 
 
 @mcp.tool(
@@ -656,6 +751,14 @@ def local_init(params: LocalInitSchema) -> str:
         f"db: {result['db_path']}",
         f"endpoint: {result['compute_endpoint'] or 'not configured'}",
     ]
+    check = result.get("endpoint_check")
+    if check is not None:
+        lines.append(
+            f"endpoint reachable: {check.get('host')}, python {check.get('python')}, "
+            f"parslbox {check.get('parslbox')}"
+            if check.get("reachable")
+            else f"endpoint did not answer: {check.get('error')}"
+        )
     lines += result.get("notes", [])
     lines.append(result["export_line"])
     return "\n".join(lines)

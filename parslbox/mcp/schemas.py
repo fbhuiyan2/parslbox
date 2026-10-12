@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing import List, Optional, Union
 
 
@@ -27,6 +27,32 @@ class McpSchema(BaseModel):
                     f"Valid arguments: {sorted(cls.model_fields)}"
                 )
         return data
+
+
+JobIdTokens = List[Union[int, str]]
+"""Job ids as the CLI accepts them: plain ids, ranges, or a mix."""
+
+
+def _check_job_id_tokens(value: JobIdTokens) -> List[str]:
+    """Check ['1-5', 8] for syntax and hand the tokens on unexpanded.
+
+    Ranges spare an agent from transcribing a hundred integers out of a
+    previous tool's output, where one corrupted element removes the wrong
+    job. Expanding them here would be the wrong place: a validator runs
+    before the tool body, so it has no database to size '1-100000000'
+    against and would build the hundred million integers before anything
+    could object. The tool bodies call `resolve_job_ids` instead.
+    """
+    from parslbox.commands.helpers.job_id_parser import validate_job_id_tokens
+
+    tokens = [str(v).strip() for v in value]
+    validate_job_id_tokens(tokens)
+    return tokens
+
+
+def _check_optional_job_id_tokens(value):
+    """As _check_job_id_tokens, but None means "every job" rather than "none"."""
+    return None if value is None else _check_job_id_tokens(value)
 
 
 def schema_text_block(model: type[BaseModel]) -> str:
@@ -203,6 +229,16 @@ class ListJobsSchema(McpSchema):
     )
 
 
+    limit: Optional[int] = Field(
+        default=None,
+        description=(
+            "Return only the first N jobs, or the last N for a negative N. "
+            "Omit for every match. A large database answers with one line per "
+            "job, so set this unless you need the whole list."
+        ),
+    )
+
+
 class GetJobSchema(McpSchema):
     """Schema for getting a single job's full details by ID."""
 
@@ -217,6 +253,53 @@ class GetJobsByIdsSchema(McpSchema):
     job_ids: List[int] = Field(
         description="List of job IDs to retrieve.",
     )
+
+
+class ResourceRequirementsSchema(McpSchema):
+    """Schema for sizing jobs against a target system."""
+
+    system: str = Field(
+        description=(
+            "Target system. Options are 'polaris', 'sophia', 'crux', "
+            "'aurora-tile', 'aurora-gpu', 'lcrc-swing', 'lcrc-improv', "
+            "'pinnacles-cenvalarc', 'perlmutter-gpu', 'perlmutter-cpu' and "
+            "'perlmutter-gpu-srun'."
+        ),
+    )
+
+    job_ids: Optional[JobIdTokens] = Field(
+        default=None,
+        description=(
+            "Jobs to size. Accepts plain ids and ranges in any mix: "
+            "[1, 2, 3], ['1-50'], or [1, '5-10']; a range may not reach past "
+            "the last job in the database. Omit to size every job, which is "
+            "usually the question worth asking."
+        ),
+    )
+
+    _check = field_validator("job_ids")(_check_optional_job_id_tokens)
+
+
+class CommandLinesSchema(McpSchema):
+    """Schema for previewing the launch command of jobs on a target system."""
+
+    system: str = Field(
+        description=(
+            "Target system, e.g. 'aurora-tile' or 'polaris'. Same set as "
+            "get_resource_requirements."
+        ),
+    )
+
+    job_ids: Optional[JobIdTokens] = Field(
+        default=None,
+        description=(
+            "Jobs to preview. Accepts plain ids and ranges in any mix; a "
+            "range may not reach past the last job in the database. Omit "
+            "for every job, though one line comes back per job."
+        ),
+    )
+
+    _check = field_validator("job_ids")(_check_optional_job_id_tokens)
 
 
 class QSubSchema(McpSchema):
@@ -273,6 +356,19 @@ class QSubSchema(McpSchema):
         default=0,
         ge=0,
         description="Number of retries for failed tasks (must be >= 0).",
+    )
+
+    loglevel: str = Field(
+        default="info",
+        description="Logging level for the orchestrator (e.g. 'debug', 'info', 'warning').",
+    )
+
+    dynamic: bool = Field(
+        default=True,
+        description=(
+            "Keep discovering jobs added to the database after the run starts. "
+            "Set false to pin the run to the jobs matched at submit time."
+        ),
     )
 
     sched_opts: Optional[List[str]] = Field(
@@ -368,6 +464,19 @@ class SBatchSchema(McpSchema):
         description="Number of retries for failed tasks (must be >= 0).",
     )
 
+    loglevel: str = Field(
+        default="info",
+        description="Logging level for the orchestrator (e.g. 'debug', 'info', 'warning').",
+    )
+
+    dynamic: bool = Field(
+        default=True,
+        description=(
+            "Keep discovering jobs added to the database after the run starts. "
+            "Set false to pin the run to the jobs matched at submit time."
+        ),
+    )
+
     sched_opts: Optional[List[str]] = Field(
         default=None,
         description=(
@@ -430,17 +539,31 @@ class CancelJobSchema(McpSchema):
 class RemoveJobsSchema(McpSchema):
     """Schema for removing existing job in the database"""
 
-    job_ids: List[int] = Field(
-        description="List of job IDs to remove",
+    job_ids: JobIdTokens = Field(
+        description=(
+            "Job IDs to remove. Accepts plain ids and ranges in any mix: "
+            "[1, 2, 3], ['1-5'], or [1, '5-10', 12]. Use a range rather than "
+            "listing every id. All or nothing: if any id does not exist "
+            "nothing is removed, and a range may not reach past the last job "
+            "in the database."
+        ),
     )
+
+    _check = field_validator("job_ids")(_check_job_id_tokens)
 
 
 class UpdateJobSchema(McpSchema):
     """Schema for updating an existing job in the database."""
 
-    job_id: int = Field(
-        description="Job ID to update.",
+    job_ids: JobIdTokens = Field(
+        description=(
+            "Job IDs to update, all receiving the same changes. Accepts plain "
+            "ids and ranges in any mix: [1, 2, 3], ['1-5'], or [1, '5-10', 12]. "
+            "A range may not reach past the last job in the database."
+        ),
     )
+
+    _check = field_validator("job_ids")(_check_job_id_tokens)
 
     status: Optional[str] = Field(
         default=None,
@@ -641,6 +764,15 @@ class LocalInitSchema(McpSchema):
             "Allow creating this project inside an existing one. False by default: "
             "nesting works, since PBX_DB_PATH decides which database is in use, but "
             "it is far more often an accident than an intention."
+        ),
+    )
+
+    verify: bool = Field(
+        default=False,
+        description=(
+            "Ping the Compute endpoint once the project exists and report the "
+            "result under 'endpoint_check'. Skipped when no endpoint is "
+            "configured yet. Can take up to 60 seconds if the endpoint is down."
         ),
     )
 

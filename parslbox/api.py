@@ -18,7 +18,6 @@ from concurrent.futures import as_completed
 
 from parslbox.database import database
 from parslbox.utils import path_utils
-from parslbox.utils import pbx_config_utils as config_utils
 from parslbox.apps.app_registry import (
     get_app_config,
     is_app_registered,
@@ -67,15 +66,15 @@ class ParslBox:
     Example:
         >>> from parslbox.api import ParslBox
         >>> pbx = ParslBox()
-        >>> job_id = pbx.add_job(
-        ...     path="/path/to/simulation",
+        >>> job_ids, failures, log = pbx.add_jobs(
+        ...     paths=["/path/to/simulation"],
         ...     app="lammps-kk",
         ...     config="polaris",
         ...     ngpus=2,
         ...     tag="production"
         ... )
         >>> jobs = pbx.list_jobs(status="Ready", app="lammps-kk")
-        >>> pbx.update_job(job_id, status="Submitted")
+        >>> pbx.update_jobs(job_ids, status="Submitted")
     """
 
     def __init__(
@@ -222,8 +221,10 @@ class ParslBox:
         Returns:
             True if job was removed, False if not found
         """
-        count = database.remove_jobs_by_id(self.db_path, [job_id])
-        return count > 0
+        try:
+            return database.remove_jobs_by_id(self.db_path, [job_id]) > 0
+        except ValueError:
+            return False
 
     def remove_jobs(self, job_ids: List[int]) -> int:
         """
@@ -234,8 +235,15 @@ class ParslBox:
 
         Returns:
             Number of jobs removed
+
+        Raises:
+            ValidationError: If any requested id is absent. Nothing is
+                removed; the message names the missing ids in range notation.
         """
-        return database.remove_jobs_by_id(self.db_path, job_ids)
+        try:
+            return database.remove_jobs_by_id(self.db_path, job_ids)
+        except ValueError as e:
+            raise ValidationError(str(e))
 
     def remove_all_jobs(self) -> int:
         """
@@ -335,6 +343,7 @@ class ParslBox:
         path: Optional[str] = None,
         in_file: Optional[str] = None,
         num_nodes: Optional[int] = None,
+        limit: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """
         List jobs from the database with optional filtering.
@@ -346,14 +355,25 @@ class ParslBox:
             path: Filter by path (partial match)
             in_file: Filter by input file (partial match)
             num_nodes: Filter by number of nodes (exact match)
+            limit: Keep only the first N rows, or the last N for a negative
+                N. None returns everything, matching `pbx ls all`.
 
         Returns:
             List of job dictionaries
+
+        Raises:
+            ValidationError: limit is 0, which says nothing about intent --
+                pass None for every row.
         """
-        return database.get_jobs(
+        if limit == 0:
+            raise ValidationError("limit=0 is ambiguous. Omit limit to list every job.")
+        jobs = database.get_jobs(
             self.db_path, status=status, app=app, tag=tag, path=path,
             in_file=in_file, num_nodes=num_nodes
         )
+        if limit is None or abs(limit) >= len(jobs):
+            return jobs
+        return jobs[:limit] if limit > 0 else jobs[limit:]
     
     def filter_jobs(
         self,
@@ -430,6 +450,66 @@ class ParslBox:
 
     # ==================== Job Execution Methods ====================
 
+    def resource_requirements(self, system: str,
+                              job_ids: Optional[List[int]] = None) -> Dict[str, Any]:
+        """
+        How many nodes of `system` these jobs would need.
+
+        Only Ready/Restart jobs are counted; the rest come back under
+        'skipped'. Nothing is submitted and nothing is changed.
+
+        Args:
+            system: Target system, e.g. 'aurora-tile', 'polaris'.
+            job_ids: Jobs to analyse. None analyses every job in the
+                database, which is the usual question for a whole project.
+
+        Returns:
+            Dict with 'system', 'gpus_per_node', 'cores_per_node',
+            'schedulable', 'skipped', and 'gpu' / 'cpu' / 'total' blocks
+            (None when that class of job is absent).
+
+        Raises:
+            ValidationError: `system` is not a configured system.
+        """
+        from parslbox.commands.helpers import resource_req
+
+        jobs = (database.get_jobs(self.db_path) if job_ids is None
+                else database.get_jobs_by_ids(self.db_path, job_ids))
+        try:
+            return resource_req.compute_requirements(jobs, system)
+        except resource_req.UnknownSystemError as e:
+            raise ValidationError(str(e))
+
+    def command_lines(self, system: str,
+                      job_ids: Optional[List[int]] = None) -> Dict[str, Any]:
+        """
+        The MPI/srun line each job would be launched with on `system`.
+
+        A preview only: nothing runs, hostnames are placeholders, and any
+        rankfiles the command names are generated into a temporary directory
+        that is removed before returning.
+
+        Args:
+            system: Target system, e.g. 'aurora-tile', 'polaris'.
+            job_ids: Jobs to preview. None previews every job.
+
+        Returns:
+            Dict with 'system' and 'jobs', one entry per job holding
+            'job_id', 'app', 'resources', 'command' and 'error'.
+
+        Raises:
+            ValidationError: `system` is not a configured system.
+        """
+        from parslbox.commands.helpers import resource_req
+
+        jobs = (database.get_jobs(self.db_path) if job_ids is None
+                else database.get_jobs_by_ids(self.db_path, job_ids))
+        try:
+            return resource_req.build_command_lines(jobs, system,
+                                                    config_path=self.config_path)
+        except resource_req.UnknownSystemError as e:
+            raise ValidationError(str(e))
+
     def run(
         self,
         config: str,
@@ -479,6 +559,7 @@ class ParslBox:
         retries: int = 0,
         loglevel: str = "info",
         sched_opts: Optional[List[str]] = None,
+        dynamic: bool = True,
         respawn: Optional[int] = None,
         no_local: bool = False,
         push_dirs: bool = False,
@@ -499,6 +580,8 @@ class ParslBox:
             retries: Number of retries for failed tasks
             loglevel: Logging level
             sched_opts: List of extra PBS directive strings
+            dynamic: Keep discovering jobs added after the run starts.
+                False pins the run to the jobs matched at submit time.
             respawn: Enable the self-respawn chain. When set, at walltime the
                 orchestrator marks in-flight jobs Restart and auto-resubmits the
                 next link. The integer is the number of remaining auto-resubmissions
@@ -536,6 +619,7 @@ class ParslBox:
                 loglevel=loglevel,
                 config_path=self.config_path,
                 sched_opts=sched_opts,
+                dynamic=dynamic,
                 respawn=respawn,
                 db_path=self.db_path,
                 no_local=no_local,
@@ -563,6 +647,7 @@ class ParslBox:
         retries: int = 0,
         loglevel: str = "info",
         sched_opts: Optional[List[str]] = None,
+        dynamic: bool = True,
         respawn: Optional[int] = None,
         no_local: bool = False,
         push_dirs: bool = False,
@@ -583,6 +668,8 @@ class ParslBox:
             retries: Number of retries for failed tasks
             loglevel: Logging level
             sched_opts: List of extra SLURM directive strings
+            dynamic: Keep discovering jobs added after the run starts.
+                False pins the run to the jobs matched at submit time.
             respawn: Enable the self-respawn chain. When set, at walltime the
                 orchestrator marks in-flight jobs Restart and auto-resubmits the
                 next link. The integer is the number of remaining auto-resubmissions
@@ -619,6 +706,7 @@ class ParslBox:
                 loglevel=loglevel,
                 config_path=self.config_path,
                 sched_opts=sched_opts,
+                dynamic=dynamic,
                 respawn=respawn,
                 db_path=self.db_path,
                 no_local=no_local,
@@ -643,6 +731,7 @@ class ParslBox:
         transfer_remote_root: Optional[str] = None,
         remote_config: Optional[str] = None,
         nested_ok: bool = False,
+        verify: bool = False,
     ) -> Dict[str, Any]:
         """
         Create or adopt a local project in `directory`.
@@ -664,10 +753,16 @@ class ParslBox:
             nested_ok: Allow creating a project inside another one. False by
                 default, because doing it accidentally is more likely than
                 doing it on purpose.
+            verify: Ping the Compute endpoint once the project exists, and
+                report the result under 'endpoint_check'. Skipped silently
+                when no endpoint is configured, as the CLI does.
 
         Returns:
             Dict with 'action' ('created', 'adopted' or 'existing'),
-            'db_path', 'export_line', and any 'notes'.
+            'db_path', 'export_line', and any 'notes'. With verify and an
+            endpoint configured, also 'endpoint_check' -- compute.ping()'s
+            dict, which reports an unreachable endpoint as
+            {'reachable': False, 'error': ...} rather than raising.
 
         Raises:
             ValidationError: The directory cannot hold a project -- a
@@ -689,7 +784,7 @@ class ParslBox:
         except project_mod.LocalProjectError as e:
             raise ValidationError(str(e))
         proj = outcome["project"]
-        return {
+        result = {
             "action": outcome["action"],
             "local_root": str(proj.local_root),
             "remote_root": proj.remote_root,
@@ -698,6 +793,10 @@ class ParslBox:
             "export_line": proj.export_line,
             "notes": outcome["notes"],
         }
+        if verify and proj.compute_endpoint:
+            from parslbox.local import compute
+            result["endpoint_check"] = compute.ping(proj.compute_endpoint)
+        return result
 
     def local_status(self, check_remote: bool = True) -> Dict[str, Any]:
         """

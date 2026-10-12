@@ -24,7 +24,7 @@ python -m parslbox.mcp.mcp_server --port 8080
 python -m parslbox.mcp.mcp_server --stdio
 ```
 
-Exposed tools: `use_database`, `add_jobs`, `submit_pbs_job`, `submit_slurm_job`, `cancel_pbs_job`, `cancel_slurm_job`, `remove_jobs`, `update_job`, `filter_jobs`, `list_jobs`, `get_job`, `get_jobs`, `local_init`, `local_status`, `local_push`, `local_pull`.
+Exposed tools: `use_database`, `add_jobs`, `submit_pbs_job`, `submit_slurm_job`, `cancel_pbs_job`, `cancel_slurm_job`, `remove_jobs`, `update_jobs`, `filter_jobs`, `list_jobs`, `get_job`, `get_jobs`, `get_resource_requirements`, `get_command_lines`, `local_init`, `local_status`, `local_push`, `local_pull`.
 
 ### Which database the server is on
 
@@ -67,6 +67,23 @@ The arguments are also in the JSON schema, but there they sit behind a `$ref`
 that some models do not follow — they guess at the shape of `params` and the
 call is malformed before any validation runs. Restating the names costs a few
 dozen tokens and removes that failure.
+
+`remove_jobs` and `update_jobs` take job ids the way the CLI does — plain
+ids, ranges, or a mix:
+
+```
+update_jobs(params={"job_ids": [1, 2, "5-10"], "ngpus": 6})
+```
+
+`update_jobs` applies the same change to every id in one call. Prefer a range
+over listing every id: transcribing a long id list from a previous tool's
+output is where bulk removals go wrong.
+
+A range may not reach past the last job in the database, so a slipped
+keystroke turning `1-10` into `1-100000000` comes back as an error rather
+than as a very long pause. `remove_jobs` is additionally all-or-nothing: if
+any id does not exist, nothing is removed and the missing ones are named in
+the same range notation (`No job with id 6-40`).
 
 An unknown argument is rejected rather than ignored, and the error names the
 valid ones:

@@ -363,9 +363,9 @@ def update(
     """
     Updates one or more fields for a given set of jobs.
     """
-    from parslbox.commands.helpers.job_id_parser import parse_job_ids, format_job_ids, group_failures
+    from parslbox.commands.helpers.job_id_parser import resolve_job_ids, format_job_ids, group_failures
     try:
-        job_ids = parse_job_ids(job_ids)
+        job_ids = resolve_job_ids(job_ids, path_utils.DB_FILE)
     except ValueError as e:
         typer.secho(f"❌ Error: {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)

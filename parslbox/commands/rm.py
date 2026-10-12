@@ -21,14 +21,11 @@ def rm(
             typer.echo("❌ Operation cancelled.")
             raise typer.Exit()
     else:
-        from parslbox.commands.helpers.job_id_parser import parse_job_ids
+        from parslbox.commands.helpers.job_id_parser import resolve_job_ids
         try:
-            int_ids = parse_job_ids(job_ids)
+            int_ids = resolve_job_ids(job_ids, path_utils.DB_FILE)
             count = database.remove_jobs_by_id(path_utils.DB_FILE, int_ids)
-            if count > 0:
-                typer.secho(f"🗑️ Removed {count} job(s).", fg=typer.colors.YELLOW)
-            else:
-                typer.secho("⚠️ No jobs found with the specified IDs.", fg=typer.colors.RED)
+            typer.secho(f"🗑️ Removed {count} job(s).", fg=typer.colors.YELLOW)
         except ValueError as e:
             typer.secho(f"❌ Error: {e}", fg=typer.colors.RED)
             raise typer.Exit(code=1)

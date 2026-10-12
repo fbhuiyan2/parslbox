@@ -222,6 +222,11 @@ pbx rm all
 pbx rm $(pbx filter --status done)
 ```
 
+All or nothing: if any id named does not exist, nothing is removed and the
+missing ones are reported in range notation. A range reaching past the last
+job in the database is refused outright, so a mistyped `1-100000000` costs
+nothing.
+
 ---
 
 ## `pbx qsub` / `pbx sbatch`

@@ -237,8 +237,8 @@ class TestLayerAlignment:
         import parslbox.mcp.mcp_server as m
 
         with patch.object(m.pbx, "update_jobs", return_value=([1], [], {})) as mock_upd:
-            m.update_job(MagicMock(model_dump=lambda: {
-                "job_id": 1, "app_args": "-var T 300",
+            m.update_jobs(MagicMock(model_dump=lambda: {
+                "job_ids": [1], "app_args": "-var T 300",
             }))
         assert mock_upd.call_args.kwargs["app_args"] == "-var T 300"
 
@@ -714,3 +714,591 @@ class TestSchemaTextBlock:
         t = [x for x in tools if x.name == "add_jobs"][0]
         for field in ("paths", "app", "config", "nnodes", "ngpus", "tag"):
             assert field in t.description
+
+
+# ------------- Bulk ids: ranges, plural update, tool naming ---------------- #
+
+
+def _db_with(n_jobs, tmp_path):
+    """A database holding job ids 1..n_jobs, for bounding ranges against."""
+    from parslbox.database import database
+    db = tmp_path / "mcp.db"
+    database.initialize_database(db)
+    for i in range(n_jobs):
+        database.add_job(db_path=db, path=f"/w/j{i}", app="python", num_nodes=1,
+                         ngpus=0, node_occupancy=1.0, tag="t", in_file=None,
+                         ranks_per_node=1)
+    return db
+
+
+class TestJobIdRanges:
+    """An agent doing a bulk delete used to transcribe every id from a prior
+    tool's output. One corrupted element removes the wrong job, so the MCP
+    layer takes the same range syntax the CLI has always accepted.
+
+    Expansion happens in the tool body, not the schema validator: the
+    validator runs before any database is in reach, so it could not refuse
+    '1-100000000' without first building it.
+    """
+
+    def _ids_reaching(self, tokens, tmp_path, n_jobs=20):
+        import parslbox.mcp.mcp_server as m
+        db = _db_with(n_jobs, tmp_path)
+        with patch.object(m.pbx, "db_path", db), \
+             patch.object(m.pbx, "remove_jobs", return_value=0) as mock_rm:
+            m.remove_jobs(MagicMock(model_dump=lambda: {"job_ids": tokens}))
+        return mock_rm.call_args.kwargs["job_ids"]
+
+    def test_remove_expands_a_range(self, tmp_path):
+        assert self._ids_reaching(["5-8"], tmp_path) == [5, 6, 7, 8]
+
+    def test_ids_and_ranges_mix(self, tmp_path):
+        assert self._ids_reaching([1, 2, "5-7"], tmp_path) == [1, 2, 5, 6, 7]
+
+    def test_plain_ints_still_work_and_are_sorted_unique(self, tmp_path):
+        assert self._ids_reaching([3, 1, 2, 3], tmp_path) == [1, 2, 3]
+
+    def test_update_takes_ranges_too(self, tmp_path):
+        import parslbox.mcp.mcp_server as m
+        db = _db_with(20, tmp_path)
+        with patch.object(m.pbx, "db_path", db), \
+             patch.object(m.pbx, "update_jobs",
+                          return_value=([1, 2, 3], [], {})) as mock_upd:
+            m.update_jobs(MagicMock(model_dump=lambda: {
+                "job_ids": ["1-3"], "ngpus": 6}))
+        assert mock_upd.call_args.kwargs["job_ids"] == [1, 2, 3]
+
+    def test_a_backwards_range_is_refused(self):
+        import pytest
+        from pydantic import ValidationError
+        from parslbox.mcp.schemas import RemoveJobsSchema
+        with pytest.raises(ValidationError, match="start must be <= end"):
+            RemoveJobsSchema(job_ids=["5-1"])
+
+    def test_the_cli_parser_is_reused_not_reimplemented(self, tmp_path):
+        # If these diverge, the same argument means different things in two
+        # layers, which is worse than the feature being missing.
+        from parslbox.commands.helpers.job_id_parser import parse_job_ids
+        tokens = ["1-3", "7", "10-12"]
+        assert self._ids_reaching(tokens, tmp_path) == parse_job_ids(tokens)
+
+    def test_the_schema_hands_on_tokens_rather_than_expanding_them(self):
+        """The whole point: a hundred million integers are never built."""
+        from parslbox.mcp.schemas import RemoveJobsSchema
+        assert RemoveJobsSchema(job_ids=["1-100000000"]).job_ids == ["1-100000000"]
+
+    def test_a_range_past_the_last_job_is_refused_by_the_tool(self, tmp_path):
+        import parslbox.mcp.mcp_server as m
+        db = _db_with(5, tmp_path)
+        with patch.object(m.pbx, "db_path", db), \
+             patch.object(m.pbx, "remove_jobs") as mock_rm:
+            out = m.remove_jobs(MagicMock(model_dump=lambda: {
+                "job_ids": ["1-100000000"]}))
+        assert mock_rm.call_count == 0
+        assert "1-100000000" in out and "5" in out
+
+    def test_a_bare_id_past_the_last_job_is_not_refused(self, tmp_path):
+        """Only ranges are bounded. One id costs nothing to carry, and each
+        command already reports the ids it could not find."""
+        assert self._ids_reaching([99999], tmp_path, n_jobs=5) == [99999]
+
+
+class TestUpdateJobsIsPlural:
+    """update_job took one id while the CLI took ranges and api.update_jobs
+    took a list, so retuning five jobs cost five round trips -- and models
+    measurably stopped partway through."""
+
+    def test_schema_field_is_plural(self):
+        from parslbox.mcp.schemas import UpdateJobSchema
+        assert "job_ids" in UpdateJobSchema.model_fields
+        assert "job_id" not in UpdateJobSchema.model_fields
+
+    def test_the_old_singular_name_is_refused_and_the_new_one_named(self):
+        import pytest
+        from pydantic import ValidationError
+        from parslbox.mcp.schemas import UpdateJobSchema
+        with pytest.raises(ValidationError) as exc:
+            UpdateJobSchema(job_id=1, ngpus=6)
+        assert "job_ids" in str(exc.value)
+
+    def test_every_id_reaches_the_api_in_one_call(self):
+        from unittest.mock import patch, MagicMock
+        import parslbox.mcp.mcp_server as m
+        with patch.object(m.pbx, "update_jobs",
+                          return_value=([1, 2, 3], [], {})) as mock_upd:
+            out = m.update_jobs(MagicMock(model_dump=lambda: {
+                "job_ids": [1, 2, 3], "ngpus": 6,
+            }))
+        assert mock_upd.call_count == 1
+        assert mock_upd.call_args.kwargs["job_ids"] == [1, 2, 3]
+        assert "3 job(s)" in out
+
+    def test_partial_failure_names_both_sides(self):
+        from unittest.mock import patch, MagicMock
+        import parslbox.mcp.mcp_server as m
+        with patch.object(m.pbx, "update_jobs",
+                          return_value=([1], [(2, "bad status")], {})):
+            out = m.update_jobs(MagicMock(model_dump=lambda: {
+                "job_ids": [1, 2, 3], "ngpus": 6,
+            }))
+        assert "Successfully updated 1 job(s)" in out
+        assert "Failed to update job 2: bad status" in out
+        assert "3" in out.split("Not found")[-1]   # 3 was neither updated nor failed
+
+
+class TestToolNamesArePlural:
+    def test_registered_names(self):
+        import asyncio
+        from parslbox.mcp.mcp_server import mcp
+        names = {t.name for t in asyncio.run(mcp.list_tools())}
+        assert {"update_jobs", "remove_jobs"} <= names
+        assert "update_job" not in names and "remove_job" not in names
+
+    def test_docs_list_the_real_names(self):
+        from pathlib import Path
+        doc = Path(__file__).resolve().parents[1] / "docs" / "agentic_usage.md"
+        text = doc.read_text()
+        assert "`update_jobs`" in text and "`remove_jobs`" in text
+
+
+class TestSubmitLoglevelReachesMcp:
+    """api.qsub accepted loglevel but no schema field declared it, so every
+    MCP submission was pinned to the default with no way to say otherwise."""
+
+    def test_both_submit_schemas_offer_it(self):
+        from parslbox.mcp.schemas import QSubSchema, SBatchSchema
+        assert "loglevel" in QSubSchema.model_fields
+        assert "loglevel" in SBatchSchema.model_fields
+
+    def test_it_defaults_to_info(self):
+        from parslbox.mcp.schemas import QSubSchema
+        s = QSubSchema(config="polaris", job_name="j", queue="q",
+                       select="1", walltime=10)
+        assert s.loglevel == "info"
+
+    def test_it_reaches_the_api(self):
+        from unittest.mock import patch, MagicMock
+        import parslbox.mcp.mcp_server as m
+        with patch.object(m.pbx, "qsub",
+                          return_value={"success": True}) as mock_qsub:
+            m.submit_pbs_job(MagicMock(model_dump=lambda: {
+                "config": "polaris", "job_name": "j", "queue": "q",
+                "select": "1", "walltime": 10, "loglevel": "debug",
+            }))
+        assert mock_qsub.call_args.kwargs["loglevel"] == "debug"
+
+
+class TestInstructionsMatchRegisteredTools:
+    """The server's `instructions` block lists the tools in prose, by hand.
+    It drifted twice unnoticed -- it advertised `remove_jobs` while the tool
+    was `remove_job`, and kept naming `update_job` after the rename. The
+    instructions are the first thing a model reads, so a wrong name there
+    sends it to a tool that does not exist."""
+
+    @staticmethod
+    def _advertised():
+        import re
+        from parslbox.mcp.mcp_server import mcp
+        body = mcp.instructions.split("Available capabilities:")[1]
+        return {m.group(1) for m in re.finditer(r"^- (\w+):", body, re.M)}
+
+    @staticmethod
+    def _registered():
+        import asyncio
+        from parslbox.mcp.mcp_server import mcp
+        return {t.name for t in asyncio.run(mcp.list_tools())}
+
+    def test_nothing_advertised_that_does_not_exist(self):
+        assert not (self._advertised() - self._registered())
+
+    def test_nothing_registered_goes_unadvertised(self):
+        assert not (self._registered() - self._advertised())
+
+
+class TestDynamicReachesEveryLayer:
+    """submit_job has always had `dynamic`, and qsub.py forwarded it, but
+    api.qsub never declared it -- so a static submission was reachable only
+    from the CLI, and silently defaulted to dynamic everywhere else."""
+
+    def test_api_declares_it(self):
+        import inspect
+        from parslbox.api import ParslBox
+        for name in ("qsub", "sbatch"):
+            sig = inspect.signature(getattr(ParslBox, name))
+            assert "dynamic" in sig.parameters, name
+            assert sig.parameters["dynamic"].default is True, name
+
+    def test_both_schemas_offer_it(self):
+        from parslbox.mcp.schemas import QSubSchema, SBatchSchema
+        assert QSubSchema.model_fields["dynamic"].default is True
+        assert SBatchSchema.model_fields["dynamic"].default is True
+
+    def test_false_reaches_the_submit_helper(self):
+        from unittest.mock import patch, MagicMock
+        import parslbox.mcp.mcp_server as m
+        with patch.object(m.pbx, "qsub", return_value={"success": True}) as mock:
+            m.submit_pbs_job(MagicMock(model_dump=lambda: {
+                "config": "polaris", "job_name": "j", "queue": "q",
+                "select": "1", "walltime": 10, "dynamic": False,
+            }))
+        assert mock.call_args.kwargs["dynamic"] is False
+
+    def test_api_forwards_it_to_the_scheduler_wrapper(self):
+        from unittest.mock import patch
+        from parslbox.api import ParslBox
+        with patch("parslbox.api.submit_to_scheduler",
+                   return_value={"success": True}) as mock:
+            with patch.object(ParslBox, "__init__", lambda self: None):
+                pbx = ParslBox()
+                pbx.config_path = None
+                pbx.db_path = None
+                pbx.qsub(config="polaris", job_name="j", queue="q",
+                         select="1", walltime=10, dynamic=False)
+        assert mock.call_args.kwargs["dynamic"] is False
+
+
+class TestLocalInitVerify:
+    """`--verify` pinged the endpoint after init, but only from the CLI."""
+
+    def test_schema_and_api_offer_it(self):
+        import inspect
+        from parslbox.api import ParslBox
+        from parslbox.mcp.schemas import LocalInitSchema
+        assert inspect.signature(ParslBox.local_init).parameters["verify"].default is False
+        assert LocalInitSchema.model_fields["verify"].default is False
+
+    def test_no_ping_unless_asked(self):
+        from unittest.mock import patch, MagicMock
+        from parslbox.api import ParslBox
+        proj = MagicMock(local_root="/p", remote_root="/r", db_path="/p/db",
+                         compute_endpoint="uuid", export_line="export X=1")
+        with patch("parslbox.local.project.init_project",
+                   return_value={"action": "created", "project": proj, "notes": []}), \
+             patch("parslbox.local.compute.ping") as ping, \
+             patch.object(ParslBox, "__init__", lambda self: None):
+            pbx = ParslBox()
+            out = pbx.local_init("/p", remote_root="/r")
+        ping.assert_not_called()
+        assert "endpoint_check" not in out
+
+    def test_ping_result_is_returned_when_asked(self):
+        from unittest.mock import patch, MagicMock
+        from parslbox.api import ParslBox
+        proj = MagicMock(local_root="/p", remote_root="/r", db_path="/p/db",
+                         compute_endpoint="uuid", export_line="export X=1")
+        with patch("parslbox.local.project.init_project",
+                   return_value={"action": "created", "project": proj, "notes": []}), \
+             patch("parslbox.local.compute.ping",
+                   return_value={"reachable": True, "host": "aurora"}) as ping, \
+             patch.object(ParslBox, "__init__", lambda self: None):
+            pbx = ParslBox()
+            out = pbx.local_init("/p", remote_root="/r", verify=True)
+        ping.assert_called_once_with("uuid")
+        assert out["endpoint_check"]["host"] == "aurora"
+
+    def test_skipped_when_there_is_no_endpoint_to_ping(self):
+        from unittest.mock import patch, MagicMock
+        from parslbox.api import ParslBox
+        proj = MagicMock(local_root="/p", remote_root="/r", db_path="/p/db",
+                         compute_endpoint=None, export_line="export X=1")
+        with patch("parslbox.local.project.init_project",
+                   return_value={"action": "created", "project": proj, "notes": []}), \
+             patch("parslbox.local.compute.ping") as ping, \
+             patch.object(ParslBox, "__init__", lambda self: None):
+            pbx = ParslBox()
+            out = pbx.local_init("/p", remote_root="/r", verify=True)
+        ping.assert_not_called()
+        assert "endpoint_check" not in out
+
+
+class TestMcpSchemasTrackTheApi:
+    """Every MCP tool is `pbx.<method>(**params.model_dump())`, so the schema's
+    field set -- not the API signature -- decides what a caller can reach. An
+    undeclared parameter is not an error, it is silently pinned to the API's
+    default. That is how `loglevel` and `dynamic` went missing unnoticed, so
+    the two lists get compared here rather than by hand."""
+
+    PAIRS = {
+        "AddJobSchema": "add_jobs", "FilterJobsSchema": "filter_jobs",
+        "ListJobsSchema": "list_jobs", "GetJobSchema": "get_job",
+        "GetJobsByIdsSchema": "get_jobs_by_ids", "QSubSchema": "qsub",
+        "SBatchSchema": "sbatch", "RemoveJobsSchema": "remove_jobs",
+        "UpdateJobSchema": "update_jobs", "LocalInitSchema": "local_init",
+        "LocalStatusSchema": "local_status", "LocalPushSchema": "local_push",
+        "LocalPullSchema": "local_pull",
+        "ResourceRequirementsSchema": "resource_requirements",
+        "CommandLinesSchema": "command_lines",
+        "CancelJobSchema": "qdel",
+    }
+
+    # Schemas with no single API method behind them, and why.
+    UNPAIRED = {"UseDatabaseSchema"}   # rebinds the server's ParslBox instance
+
+    # Deliberate omissions only. Anything else is drift.
+    ALLOWED_GAPS = {}
+
+    def test_every_schema_is_checked_by_this_guard(self):
+        # A guard with a hand-written pair list has the same drift hole as the
+        # lists it guards: a new schema left out of PAIRS is simply not checked.
+        import inspect
+        from parslbox.mcp import schemas as S
+        from parslbox.mcp.schemas import McpSchema
+        defined = {n for n, o in vars(S).items()
+                   if inspect.isclass(o) and issubclass(o, McpSchema) and o is not McpSchema}
+        assert defined - set(self.PAIRS) - self.UNPAIRED == set()
+
+    def test_qdel_and_scancel_stay_interchangeable(self):
+        # One schema serves both, so a parameter added to only one would be
+        # reachable for that scheduler and silently defaulted for the other.
+        import inspect
+        from parslbox.api import ParslBox
+        assert (inspect.signature(ParslBox.qdel).parameters.keys()
+                == inspect.signature(ParslBox.scancel).parameters.keys())
+
+    def test_no_api_parameter_is_unreachable_over_mcp(self):
+        import inspect
+        from parslbox.api import ParslBox
+        from parslbox.mcp import schemas as S
+        missing = {}
+        for schema_name, api_name in self.PAIRS.items():
+            fields = set(getattr(S, schema_name).model_fields)
+            params = {p for p in inspect.signature(getattr(ParslBox, api_name)).parameters
+                      if p != "self"}
+            gap = params - fields - set(self.ALLOWED_GAPS.get(schema_name, ()))
+            if gap:
+                missing[schema_name] = sorted(gap)
+        assert not missing, f"API parameters with no MCP field: {missing}"
+
+    def test_no_mcp_field_is_rejected_by_the_api(self):
+        import inspect
+        from parslbox.api import ParslBox
+        from parslbox.mcp import schemas as S
+        extra = {}
+        for schema_name, api_name in self.PAIRS.items():
+            fields = set(getattr(S, schema_name).model_fields)
+            params = {p for p in inspect.signature(getattr(ParslBox, api_name)).parameters
+                      if p != "self"}
+            if fields - params:
+                extra[schema_name] = sorted(fields - params)
+        assert not extra, f"MCP fields the API will not accept: {extra}"
+
+
+class TestListJobsLimit:
+    """`pbx ls 20` has always been able to cap its output; the API and MCP
+    returned every matching row with no way to ask for fewer, which fights
+    the rule that MCP answers stay token-efficient."""
+
+    @staticmethod
+    def _pbx(rows):
+        from unittest.mock import patch
+        from parslbox.api import ParslBox
+        patcher = patch("parslbox.api.database.get_jobs", return_value=rows)
+        return patcher, ParslBox.list_jobs
+
+    def test_positive_keeps_the_first_n(self):
+        from unittest.mock import patch
+        from parslbox.api import ParslBox
+        rows = [{"job_id": i} for i in range(1, 11)]
+        with patch("parslbox.api.database.get_jobs", return_value=rows), \
+             patch.object(ParslBox, "__init__", lambda self: None):
+            pbx = ParslBox()
+            pbx.db_path = None
+            assert [j["job_id"] for j in pbx.list_jobs(limit=3)] == [1, 2, 3]
+
+    def test_negative_keeps_the_last_n(self):
+        from unittest.mock import patch
+        from parslbox.api import ParslBox
+        rows = [{"job_id": i} for i in range(1, 11)]
+        with patch("parslbox.api.database.get_jobs", return_value=rows), \
+             patch.object(ParslBox, "__init__", lambda self: None):
+            pbx = ParslBox()
+            pbx.db_path = None
+            assert [j["job_id"] for j in pbx.list_jobs(limit=-3)] == [8, 9, 10]
+
+    def test_omitted_returns_everything(self):
+        from unittest.mock import patch
+        from parslbox.api import ParslBox
+        rows = [{"job_id": i} for i in range(1, 11)]
+        with patch("parslbox.api.database.get_jobs", return_value=rows), \
+             patch.object(ParslBox, "__init__", lambda self: None):
+            pbx = ParslBox()
+            pbx.db_path = None
+            assert len(pbx.list_jobs()) == 10
+
+    def test_a_limit_past_the_end_is_not_an_error(self):
+        from unittest.mock import patch
+        from parslbox.api import ParslBox
+        rows = [{"job_id": i} for i in range(1, 4)]
+        with patch("parslbox.api.database.get_jobs", return_value=rows), \
+             patch.object(ParslBox, "__init__", lambda self: None):
+            pbx = ParslBox()
+            pbx.db_path = None
+            assert len(pbx.list_jobs(limit=99)) == 3
+
+    def test_zero_is_refused_the_way_the_cli_refuses_it(self):
+        import pytest
+        from unittest.mock import patch
+        from parslbox.api import ParslBox, ValidationError
+        with patch.object(ParslBox, "__init__", lambda self: None):
+            pbx = ParslBox()
+            pbx.db_path = None
+            with pytest.raises(ValidationError, match="ambiguous"):
+                pbx.list_jobs(limit=0)
+
+    def test_the_cli_refuses_zero_too(self):
+        # Both layers must mean the same thing by 0, or the same argument
+        # behaves differently depending on where it is typed.
+        import pytest
+        from parslbox.commands.helpers.ls_cmd_helpers import parse_ls_count
+        with pytest.raises(ValueError, match="Use 'all'"):
+            parse_ls_count("0")
+
+    def test_the_schema_offers_it(self):
+        from parslbox.mcp.schemas import ListJobsSchema
+        assert ListJobsSchema.model_fields["limit"].default is None
+
+
+# ---------------- Resource sizing and command-line preview ----------------- #
+
+
+class TestResourceAndCommandLineTools:
+    """`--req` and `--cmdline` were CLI-only. An agent could not even work the
+    numbers out by hand, because GPUS_PER_NODE and CORES_PER_NODE are not
+    reachable through any other tool."""
+
+    REQ = {
+        "system": "aurora-tile", "gpus_per_node": 12, "cores_per_node": 208,
+        "schedulable": 3, "skipped": {"Done": 2},
+        "gpu": {"jobs": 2, "total_gpus": 16, "gpus_per_node": 12,
+                "system_has_gpus": True, "oversized": [],
+                "simultaneous": 2, "optimal": 1},
+        "cpu": {"jobs": 1, "total_occupancy": 0.5, "simultaneous": 1, "optimal": 1},
+        "total": {"simultaneous": 3, "optimal": 2},
+    }
+
+    def test_both_tools_are_registered(self):
+        import asyncio
+        from parslbox.mcp.mcp_server import mcp
+        names = {t.name for t in asyncio.run(mcp.list_tools())}
+        assert {"get_resource_requirements", "get_command_lines"} <= names
+
+    def test_sizing_reports_the_numbers_and_what_it_skipped(self):
+        from unittest.mock import patch, MagicMock
+        import parslbox.mcp.mcp_server as m
+        with patch.object(m.pbx, "resource_requirements", return_value=self.REQ):
+            out = m.get_resource_requirements(MagicMock(model_dump=lambda: {
+                "system": "aurora-tile", "job_ids": None}))
+        assert "12 GPUs/node" in out and "208 cores/node" in out
+        assert "schedulable: 3" in out
+        assert "2 Done" in out
+        assert "2 nodes simultaneous / 1 optimal" in out
+        assert "total: 3 nodes simultaneous / 2 optimal" in out
+
+    def test_sizing_says_so_when_there_is_nothing_to_size(self):
+        from unittest.mock import patch, MagicMock
+        import parslbox.mcp.mcp_server as m
+        empty = {**self.REQ, "schedulable": 0, "gpu": None, "cpu": None,
+                 "total": None, "skipped": {"Done": 2}}
+        with patch.object(m.pbx, "resource_requirements", return_value=empty):
+            out = m.get_resource_requirements(MagicMock(model_dump=lambda: {
+                "system": "aurora-tile", "job_ids": None}))
+        assert "No Ready/Restart jobs" in out
+
+    def test_a_gpu_job_on_a_cpu_system_is_called_out(self):
+        from unittest.mock import patch, MagicMock
+        import parslbox.mcp.mcp_server as m
+        req = {**self.REQ, "system": "crux", "gpus_per_node": 0, "cpu": None,
+               "total": None,
+               "gpu": {"jobs": 1, "total_gpus": 4, "gpus_per_node": 0,
+                       "system_has_gpus": False, "oversized": []}}
+        with patch.object(m.pbx, "resource_requirements", return_value=req):
+            out = m.get_resource_requirements(MagicMock(model_dump=lambda: {
+                "system": "crux", "job_ids": None}))
+        assert "cannot run here" in out
+
+    def test_an_oversized_job_names_itself(self):
+        from unittest.mock import patch, MagicMock
+        import parslbox.mcp.mcp_server as m
+        req = {**self.REQ, "gpu": {**self.REQ["gpu"],
+                                   "oversized": [{"job_id": 7, "ngpus": 99}]}}
+        with patch.object(m.pbx, "resource_requirements", return_value=req):
+            out = m.get_resource_requirements(MagicMock(model_dump=lambda: {
+                "system": "aurora-tile", "job_ids": None}))
+        assert "job 7 wants 99 GPUs" in out
+
+    def test_command_lines_render_one_line_per_job(self):
+        from unittest.mock import patch, MagicMock
+        import parslbox.mcp.mcp_server as m
+        preview = {"system": "aurora-tile", "jobs": [
+            {"job_id": 1, "app": "vasp", "resources": "1N/4G",
+             "command": "mpiexec -n 4 ...", "error": None},
+            {"job_id": 2, "app": "python", "resources": None,
+             "command": None, "error": "bad mpi stanza"},
+        ]}
+        with patch.object(m.pbx, "command_lines", return_value=preview):
+            out = m.get_command_lines(MagicMock(model_dump=lambda: {
+                "system": "aurora-tile", "job_ids": [1, 2]}))
+        assert "1 [1N/4G] mpiexec -n 4 ..." in out
+        assert "2: error: bad mpi stanza" in out
+
+    def test_an_unknown_system_comes_back_as_a_message_not_a_crash(self):
+        from unittest.mock import patch, MagicMock
+        import parslbox.mcp.mcp_server as m
+        from parslbox.api import ValidationError
+        with patch.object(m.pbx, "resource_requirements",
+                          side_effect=ValidationError("Unknown system 'x'")):
+            out = m.get_resource_requirements(MagicMock(model_dump=lambda: {
+                "system": "x", "job_ids": None}))
+        assert "Unknown system" in out
+
+    def test_both_tools_take_ranges(self, tmp_path):
+        import parslbox.mcp.mcp_server as m
+        db = _db_with(20, tmp_path)
+        req = {"system": "polaris", "gpus_per_node": 4, "cores_per_node": 64,
+               "schedulable": 0, "skipped": {}, "gpu": None, "cpu": None,
+               "total": None}
+        with patch.object(m.pbx, "db_path", db), \
+             patch.object(m.pbx, "resource_requirements",
+                          return_value=req) as mock_req:
+            m.get_resource_requirements(MagicMock(model_dump=lambda: {
+                "system": "polaris", "job_ids": ["1-3"]}))
+        assert mock_req.call_args.kwargs["job_ids"] == [1, 2, 3]
+
+        with patch.object(m.pbx, "db_path", db), \
+             patch.object(m.pbx, "command_lines",
+                          return_value={"system": "polaris", "jobs": []}) as mock_cmd:
+            m.get_command_lines(MagicMock(model_dump=lambda: {
+                "system": "polaris", "job_ids": [1, "5-6"]}))
+        assert mock_cmd.call_args.kwargs["job_ids"] == [1, 5, 6]
+
+    def test_omitting_ids_means_every_job_not_none_of_them(self):
+        from parslbox.mcp.schemas import ResourceRequirementsSchema
+        assert ResourceRequirementsSchema(system="polaris").job_ids is None
+
+    def test_the_system_argument_is_required(self):
+        import pytest
+        from pydantic import ValidationError as PydanticError
+        from parslbox.mcp.schemas import ResourceRequirementsSchema
+        with pytest.raises(PydanticError):
+            ResourceRequirementsSchema(job_ids=[1])
+
+    def test_command_lines_reports_a_failure_as_a_message(self):
+        # get_resource_requirements had this covered and get_command_lines
+        # did not, so its whole error branch was free to say anything.
+        from unittest.mock import patch, MagicMock
+        import parslbox.mcp.mcp_server as m
+        from parslbox.api import ValidationError
+        with patch.object(m.pbx, "command_lines",
+                          side_effect=ValidationError("Unknown system 'x'")):
+            out = m.get_command_lines(MagicMock(model_dump=lambda: {
+                "system": "x", "job_ids": None}))
+        assert "Unknown system" in out
+
+    def test_command_lines_says_so_when_there_is_nothing_to_preview(self):
+        from unittest.mock import patch, MagicMock
+        import parslbox.mcp.mcp_server as m
+        with patch.object(m.pbx, "command_lines",
+                          return_value={"system": "polaris", "jobs": []}):
+            out = m.get_command_lines(MagicMock(model_dump=lambda: {
+                "system": "polaris", "job_ids": None}))
+        assert "no jobs to preview" in out

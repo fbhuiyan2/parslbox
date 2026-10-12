@@ -730,6 +730,29 @@ class TestAddCommand:
         import json
         assert [int(x) for x in json.loads(child['parents'])] == [1, 2, 3, 5]
 
+    def test_parents_range_past_the_last_job_is_refused(self, temp_db, temp_job_dirs, mock_system_config):
+        """`--parents` was rewired to `resolve_job_ids`; without this the
+        one-line change can be reverted and '1-100000000' once again builds
+        a hundred million integers before anything checks the database."""
+        self._seed_parents(temp_db, 5)
+        runner = CliRunner()
+        with patch('parslbox.commands.add.path_utils.DB_FILE', temp_db), \
+             patch('parslbox.system_configs.loader.get_system_config', return_value=mock_system_config), \
+             patch('parslbox.apps.app_registry.is_app_registered', return_value=True), \
+             patch('parslbox.apps.app_registry.get_app_config', return_value={
+                 'INPUT_REQUIRED': True, 'DFLT_INPUT': 'in.lammps',
+             }):
+            result = runner.invoke(add_app, [
+                str(temp_job_dirs["job1"]),
+                "--app", "lammps-kk", "--config", "polaris",
+                "--ngpus", "2", "--tag", "child",
+                "--parents", "1-100000000",
+            ])
+        assert result.exit_code != 0
+        assert "highest job id" in result.stdout
+        assert len(result.stdout) < 400
+        assert not [j for j in database.get_jobs(temp_db) if j['tag'] == 'child']
+
     def test_parents_mixed_ranges_and_singles(self, temp_db, temp_job_dirs, mock_system_config):
         """--parents '1-2 4 6-7' should expand to [1,2,4,6,7]."""
         self._seed_parents(temp_db, 7)

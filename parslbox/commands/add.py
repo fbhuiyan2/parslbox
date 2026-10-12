@@ -276,9 +276,9 @@ def add(
         # Parse parents string for CLI (supports ranges like "1-5 10 14-20")
         final_parents = None
         if parents:
-            from parslbox.commands.helpers.job_id_parser import parse_job_ids
+            from parslbox.commands.helpers.job_id_parser import resolve_job_ids
             try:
-                final_parents = parse_job_ids(parents.split())
+                final_parents = resolve_job_ids(parents.split(), path_utils.DB_FILE)
             except ValueError as e:
                 typer.secho(
                     f"❌ Error: Invalid parent job IDs ({e}). "
