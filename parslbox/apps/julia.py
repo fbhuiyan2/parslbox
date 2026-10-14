@@ -99,7 +99,7 @@ class JuliaApp(AppBase):
             logger.warning(f"Job {job_id}: {PBX_STATUS_FILE} not found. Marking as Failed.")
             return "Failed"
         try:
-            status = status_file.read_text().strip()
+            status = status_file.read_text(encoding="utf-8", errors="replace").strip()
             logger.info(f"Job {job_id}: Status report: {status}")
             return status
         finally:
