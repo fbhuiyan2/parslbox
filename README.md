@@ -280,7 +280,7 @@ All three env vars are automatically forwarded into the `pbx qsub`/`pbx sbatch` 
 
 ### Run directory
 
-The default run directory (`~/.parslbox/runs/<timestamp>/`) is not env-var-controlled. Override per-run via the `--rundir /custom/path` CLI flag on `pbx qsub` / `pbx sbatch`. `pbx run` accepts `--rundir` too, but its generated scripts use the original `--run-dir`.
+The default run directory (`~/.parslbox/runs/<timestamp>/`) is not env-var-controlled. Override per-run via the `--rundir /custom/path` CLI flag on `pbx qsub` / `pbx sbatch`. `pbx run` takes `--rundir` as well as its original `--run-dir`, and accepts either in a generated script.
 
 ## Resource Manager
 

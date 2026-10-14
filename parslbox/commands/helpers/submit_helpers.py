@@ -250,7 +250,7 @@ def submit_job(
             0 = no resubmit, chain ends after this run). Pass None to disable.
 
     Returns:
-        Dictionary with submission details including job_id and run_dir.
+        Dictionary with submission details including job_id and rundir.
         When respawn is set, also includes 'respawn_template_file' pointing
         to the generated template path.
 

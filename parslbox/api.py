@@ -594,7 +594,7 @@ class ParslBox:
                 directories over Globus Transfer before submitting.
 
         Returns:
-            Dictionary with submission details including job_id and run_dir.
+            Dictionary with submission details including job_id and rundir.
             When respawn is set, also includes 'respawn_template_file'.
 
         Raises:
@@ -682,7 +682,7 @@ class ParslBox:
                 directories over Globus Transfer before submitting.
 
         Returns:
-            Dictionary with submission details including job_id and run_dir.
+            Dictionary with submission details including job_id and rundir.
             When respawn is set, also includes 'respawn_template_file'.
 
         Raises:
