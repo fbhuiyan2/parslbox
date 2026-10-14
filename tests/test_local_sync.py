@@ -214,8 +214,8 @@ def test_submit_remote_pushes_submits_and_pulls(wired, monkeypatch):
             assert payload["db_path"] == wired.remote_db_path
             assert payload["kwargs"]["queue"] == "debug"
             return {"ok": True, "result": {"success": True, "job_id": "12345.aurora",
-                                           "rundir": payload["run_dir"],
-                                           "submit_file": payload["run_dir"] + "/submit.sh"}}
+                                           "rundir": payload["rundir"],
+                                           "submit_file": payload["rundir"] + "/submit.sh"}}
         return fn(*args)
 
     monkeypatch.setattr(compute.ComputeClient, "run", fake_run)
@@ -278,7 +278,7 @@ def test_submit_remote_goes_through_after_a_pull(wired, monkeypatch):
     def fake_run(self, fn, *args, **kw):
         if fn is compute.remote_submit:
             return {"ok": True, "result": {"success": True, "job_id": "9.aurora",
-                                           "rundir": args[0]["run_dir"],
+                                           "rundir": args[0]["rundir"],
                                            "submit_file": "x"}}
         return fn(*args)
 
@@ -964,13 +964,18 @@ def test_a_failed_transfer_still_records_the_database_that_landed(
               dirs=[wired_transfer.local_root / "run_a"])
 
 
-def test_the_remote_payload_key_is_still_run_dir(wired, monkeypatch):
-    """The payload crosses to a separately-installed parslbox on the endpoint.
+_SUBMIT_KWARGS = {"config_name": "aurora-gpu", "job_name": "t",
+                  "queue": "debug", "select": "1", "walltime": 10}
 
-    `compute.remote_submit` reads `payload["run_dir"]`, so renaming this key
-    in step with the user-facing result key would quietly drop the custom run
-    directory whenever the two sides are on different versions -- it reads
-    through `.get`, so there would be no error, just the default directory.
+
+def test_the_remote_payload_key_is_rundir(wired, monkeypatch):
+    """Both ends of the Globus Compute call must spell this key the same way.
+
+    The writer here and the reader in `compute.remote_submit` are separate
+    parslbox installs on separate machines, updated independently. The reader
+    goes through `.get`, so a mismatch raises nothing -- the custom run
+    directory is simply dropped and the job lands in the default one. Changing
+    this key means redeploying the endpoint in the same breath.
     """
     seen = {}
 
@@ -978,15 +983,36 @@ def test_the_remote_payload_key_is_still_run_dir(wired, monkeypatch):
         if fn is compute.remote_submit:
             seen.update(args[0])
             return {"ok": True, "result": {"success": True, "job_id": "1.aurora",
-                                           "rundir": args[0]["run_dir"]}}
+                                           "rundir": args[0]["rundir"]}}
         return fn(*args)
 
     monkeypatch.setattr(compute.ComputeClient, "run", fake_run)
-    result = sync.submit_remote(
-        wired.db_path,
-        {"config_name": "aurora-gpu", "job_name": "t", "queue": "debug",
-         "select": "1", "walltime": 10},
-        run_dir=wired.local_root / "myrun",
-    )
-    assert "run_dir" in seen and "rundir" not in seen
-    assert result["remote_rundir"] == seen["run_dir"]
+    result = sync.submit_remote(wired.db_path, dict(_SUBMIT_KWARGS),
+                                run_dir=wired.local_root / "myrun")
+    assert "rundir" in seen and "run_dir" not in seen
+    assert result["remote_rundir"] == seen["rundir"]
+
+
+def test_the_endpoint_reads_the_key_the_payload_writes(wired, monkeypatch):
+    """Run the real reader against a payload the real writer built.
+
+    The two sides live in different modules with nothing to couple them, so
+    the test above could stay green against a reader looking for any other
+    name. Here `remote_submit` actually runs, and the directory has to come
+    out the far end as submit_job's `run_dir` keyword.
+    """
+    import parslbox.commands.helpers.submit_helpers as submit_helpers
+    seen = {}
+    # remote_submit exports these; pre-set so monkeypatch restores them.
+    monkeypatch.setenv("PBX_DB_PATH", "")
+    monkeypatch.setenv("PBX_CONFIG_PATH", "")
+    monkeypatch.setattr(submit_helpers, "submit_job",
+                        lambda **kw: seen.update(kw) or {"success": True})
+    # No canned result: let every remote call reach its real implementation.
+    monkeypatch.setattr(compute.ComputeClient, "run",
+                        lambda self, fn, *a, **kw: fn(*a))
+
+    sync.submit_remote(wired.db_path, dict(_SUBMIT_KWARGS),
+                       run_dir=wired.local_root / "myrun")
+    assert seen["run_dir"] == Path(sync.remote_run_dir(
+        wired, wired.local_root / "myrun"))

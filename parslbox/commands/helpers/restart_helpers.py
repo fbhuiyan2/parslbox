@@ -31,8 +31,10 @@ _FORBIDDEN_RESTART_PATCH_FIELDS = {
 }
 
 # Required args that MUST be present in a respawn_template.sh's `pbx run` line.
-# If any of these are missing, the chain stops with a clear error.
-_REQUIRED_RUN_ARGS = ("--respawn", "--config", "--run-dir")
+# If any of these are missing, the chain stops with a clear error. A tuple
+# means any one of those spellings will do: `pbx run` takes both --run-dir and
+# --rundir, and a hand-edited template may use either.
+_REQUIRED_RUN_ARGS = ("--respawn", "--config", ("--run-dir", "--rundir"))
 
 
 # ============================================================
@@ -134,7 +136,11 @@ def validate_pbx_run_line(template_text: str) -> str:
         )
     # If the template has multiple, pick the last (matches the template structure).
     run_line = run_lines[-1]
-    missing = [arg for arg in _REQUIRED_RUN_ARGS if arg not in run_line]
+    missing = []
+    for arg in _REQUIRED_RUN_ARGS:
+        spellings = arg if isinstance(arg, tuple) else (arg,)
+        if not any(s in run_line for s in spellings):
+            missing.append(" or ".join(spellings))
     if missing:
         raise ValueError(
             f"respawn_template.sh's `pbx run` line is missing required arg(s): "

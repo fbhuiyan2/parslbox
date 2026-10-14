@@ -346,5 +346,6 @@ Engine used by qsub/sbatch — not for direct use. Full runtime reference: [`pbx
 
 - `--dynamic` (default) re-queries the DB for runnable jobs each dispatch pass (and lets multiple runs share one DB); `--static` claims the runnable set once up front. Neither idles — a run exits when nothing runnable remains.
 - Triggers a graceful shutdown automatically before walltime (30s grace, 90s under `--respawn`) so in-flight jobs are reconciled cleanly: `Running` → `Killed` by default (or `Restart`/`Failed` under `--respawn`), and claimed-but-not-yet-running jobs revert to `Ready`/`Restart`.
+- `--run-dir` names the Parsl run directory; `--rundir` is accepted as an alias so a hand-typed run in an interactive allocation matches `pbx qsub`/`pbx sbatch`. Generated scripts always write `--run-dir`, and the respawn chain accepts either spelling when it re-reads the line.
 - `--walltime-seconds` (required) is injected by the generated batch script; it is what the shutdown timing above is measured against.
 - `--respawn N` is set internally by `pbx qsub --respawn N` / `pbx sbatch --respawn N`. It turns on the walltime-time auto-resubmission step. Do not invoke `pbx run` with it directly — use `pbx qsub --respawn N`. The `restart()` hook runs lazily per-job as each `Restart`-status job is dispatched, at every `pbx run` invocation, regardless of `--respawn`.

@@ -38,12 +38,14 @@ class TestTheCliFlag:
         assert result.exit_code != 0
         assert "No such option" in result.output
 
-    def test_pbx_run_keeps_run_dir(self):
-        """The generated submit.sh calls `pbx run --run-dir`, so renaming this
-        one too would break every template already written to disk."""
+    def test_pbx_run_keeps_run_dir_and_also_takes_rundir(self):
+        """`pbx run` cannot drop `--run-dir`: the generated submit.sh calls it
+        by that name, and restart_helpers parses the line back at every
+        respawn. It accepts `--rundir` as well, purely so a hand-typed run
+        inside an interactive allocation matches qsub/sbatch."""
         out = _help("run")
         assert "--run-dir" in out
-        assert "--rundir" not in out
+        assert "--rundir" in out
 
 
 class TestTheApiKeyword:

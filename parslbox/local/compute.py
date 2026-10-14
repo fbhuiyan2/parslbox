@@ -129,11 +129,11 @@ def remote_submit(payload: dict) -> dict:
     kwargs["db_path"] = Path(payload["db_path"])
     if payload.get("config_path"):
         kwargs["config_path"] = Path(payload["config_path"])
-    if payload.get("run_dir"):
+    if payload.get("rundir"):
         # No chdir: submit_job already runs the scheduler with cwd=run_dir, and
         # a worker process is reused, so changing its directory would leak into
         # whatever task lands on it next.
-        kwargs["run_dir"] = Path(payload["run_dir"])
+        kwargs["run_dir"] = Path(payload["rundir"])
 
     try:
         from parslbox.commands.helpers.submit_helpers import submit_job

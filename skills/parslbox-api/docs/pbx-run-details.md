@@ -238,7 +238,7 @@ You can edit `respawn_template.sh` freely between links — your edits persist f
 - `--respawn <N>` is regex-replaced with the decremented value. Any manual edit to that number will be overwritten next cycle. **Do not edit it.**
 - The header comment at the top of every generated template restates this.
 
-If a required arg is missing from the `pbx run` line at resubmit time (`--respawn`, `--config`, `--run-dir`), the orchestrator logs a clear error and stops the chain — it will not submit a malformed script.
+If a required arg is missing from the `pbx run` line at resubmit time (`--respawn`, `--config`, and `--run-dir` or its `--rundir` alias), the orchestrator logs a clear error and stops the chain — it will not submit a malformed script.
 
 ### Resource recalc + node cap
 

@@ -61,7 +61,7 @@ def run(
     ],
     run_dir: Annotated[
         Path,
-        typer.Option("--run-dir", help="The directory for Parsl run files.")
+        typer.Option("--run-dir", "--rundir", help="The directory for Parsl run files.")
     ] = None,
     apps: Annotated[
         Optional[str],
