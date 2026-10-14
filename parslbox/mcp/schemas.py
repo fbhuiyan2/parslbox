@@ -330,7 +330,7 @@ class QSubSchema(McpSchema):
         description="Project/account name. Optional — omit if your cluster does not require one.",
     )
 
-    run_dir: Optional[Path] = Field(
+    rundir: Optional[Path] = Field(
         default=None,
         description="Custom run directory (default: timestamped directory under ~/.parslbox/runs).",
     )
@@ -438,7 +438,7 @@ class SBatchSchema(McpSchema):
         description="Project/account name. Optional — omit if your cluster does not require one.",
     )
 
-    run_dir: Optional[Path] = Field(
+    rundir: Optional[Path] = Field(
         default=None,
         description="Custom run directory (default: timestamped directory under ~/.parslbox/runs).",
     )

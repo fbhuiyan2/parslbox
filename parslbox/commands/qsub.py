@@ -90,9 +90,9 @@ def qsub(
         Optional[str],
         typer.Option("--project", "-A", help="Project/account name.")
     ] = None,
-    run_dir: Annotated[
+    rundir: Annotated[
         Optional[Path],
-        typer.Option("--run-dir", help="Custom run directory (default: timestamped directory).")
+        typer.Option("--rundir", help="Custom run directory (default: timestamped directory).")
     ] = None,
     apps: Annotated[
         Optional[str],
@@ -152,7 +152,7 @@ def qsub(
             select=select,
             walltime=walltime_minutes,
             project=project,
-            run_dir=run_dir,
+            run_dir=rundir,
             apps=apps_list,
             tags=tags_list,
             retries=retries,
@@ -183,7 +183,7 @@ def qsub(
                 raise typer.Exit(code=1)
             return
 
-        typer.secho(f"\U0001f4c1 Created run directory: {result['run_dir']}", fg=typer.colors.BLUE)
+        typer.secho(f"\U0001f4c1 Created run directory: {result['rundir']}", fg=typer.colors.BLUE)
         typer.secho(f"\U0001f4dd Generated submit script: {result['submit_file']}", fg=typer.colors.GREEN)
         console.print(render_submit_script_panel(result['submit_file']))
 
@@ -207,7 +207,7 @@ def qsub(
             job_id = result.get("pbs_job_id", result.get("job_id", "UNKNOWN"))
             typer.secho(f"\U0001f680 Job submitted successfully! Job ID: {job_id}", fg=typer.colors.GREEN)
             typer.secho(f"\U0001f4ca Monitor with: qstat {job_id}", fg=typer.colors.BLUE)
-            typer.secho(f"\U0001f4c1 Run directory: {result['run_dir']}", fg=typer.colors.BLUE)
+            typer.secho(f"\U0001f4c1 Run directory: {result['rundir']}", fg=typer.colors.BLUE)
             render_app_summary(result, config_name, "qdel")
         else:
             typer.secho(f"\u274c Error submitting job: {result['error']}", fg=typer.colors.RED)

@@ -553,7 +553,7 @@ class ParslBox:
         select: str,
         walltime: Union[int, float, str],
         project: Optional[str] = None,
-        run_dir: Optional[Path] = None,
+        rundir: Optional[Path] = None,
         apps: Optional[List[str]] = None,
         tags: Optional[List[str]] = None,
         retries: int = 0,
@@ -574,7 +574,7 @@ class ParslBox:
             select: PBS select specification (e.g., '4', '2:ncpus=32:ngpus=4', '1:ncpus=16+2:ncpus=32:ngpus=2')
             walltime: Wall time (default: minutes). Supports h/d suffixes (e.g., 90, 4.25h, 3.5d)
             project: Project/account name
-            run_dir: Custom run directory (default: timestamped)
+            rundir: Custom run directory (default: timestamped)
             apps: List of apps to run
             tags: List of tags to run
             retries: Number of retries for failed tasks
@@ -612,7 +612,7 @@ class ParslBox:
                 select=select,
                 walltime=walltime_minutes,
                 project=project,
-                run_dir=run_dir,
+                run_dir=rundir,
                 apps=apps,
                 tags=tags,
                 retries=retries,
@@ -641,7 +641,7 @@ class ParslBox:
         select: str,
         walltime: Union[int, float, str],
         project: Optional[str] = None,
-        run_dir: Optional[Path] = None,
+        rundir: Optional[Path] = None,
         apps: Optional[List[str]] = None,
         tags: Optional[List[str]] = None,
         retries: int = 0,
@@ -662,7 +662,7 @@ class ParslBox:
             select: Number of nodes
             walltime: Wall time (default: minutes). Supports h/d suffixes (e.g., 90, 4.25h, 3.5d)
             project: Project/account name
-            run_dir: Custom run directory (default: timestamped)
+            rundir: Custom run directory (default: timestamped)
             apps: List of apps to run
             tags: List of tags to run
             retries: Number of retries for failed tasks
@@ -699,7 +699,7 @@ class ParslBox:
                 select=select,
                 walltime=walltime_minutes,
                 project=project,
-                run_dir=run_dir,
+                run_dir=rundir,
                 apps=apps,
                 tags=tags,
                 retries=retries,

@@ -187,7 +187,7 @@ class TestInstancePathsReachSubmitJob:
         pbx, _ = api_pbs
         result = pbx.qsub(apps=["lammps-kk"], tags=["prod-run"], **self._kwargs)
 
-        script = (Path(result["run_dir"]) / "submit.sh").read_text()
+        script = (Path(result["rundir"]) / "submit.sh").read_text()
         assert f'export PBX_DB_PATH="{db_with_tags}"' in script
         assert f'export PBX_CONFIG_PATH="{tmp_path / "pbx_config.yaml"}"' in script
 
@@ -199,7 +199,7 @@ class TestInstancePathsReachSubmitJob:
         pbx, _ = api_slurm
         result = pbx.sbatch(apps=["lammps-kk"], tags=["prod-run"], **self._kwargs)
 
-        script = (Path(result["run_dir"]) / "submit.sh").read_text()
+        script = (Path(result["rundir"]) / "submit.sh").read_text()
         assert f'export PBX_DB_PATH="{db_with_tags}"' in script
         assert f'export PBX_CONFIG_PATH="{tmp_path / "pbx_config.yaml"}"' in script
 
@@ -213,6 +213,36 @@ class TestInstancePathsReachSubmitJob:
         pbx, _ = api_pbs
         result = pbx.qsub(apps=["lammps-kk"], tags=["prod-run"], **self._kwargs)
 
-        script = (Path(result["run_dir"]) / "submit.sh").read_text()
+        script = (Path(result["rundir"]) / "submit.sh").read_text()
         assert f'export PBX_DB_PATH="{db_with_tags}"' in script
         assert "stale.db" not in script
+
+
+class TestTheResultKeyIsRundir:
+    """`result["rundir"]`, matching the `rundir=` keyword that set it.
+
+    The submit.sh *template* variable stays `{run_dir}`, because that is the
+    placeholder spelling in every config.yaml already written.
+    """
+    _kwargs = dict(
+        config="aurora-tile", job_name="t", queue="debug",
+        select="1", walltime=10, project="proj",
+    )
+
+    def test_the_old_key_is_gone(self, api_pbs, db_with_tags):
+        pbx, _ = api_pbs
+        result = pbx.qsub(apps=["lammps-kk"], tags=["prod-run"], **self._kwargs)
+        assert "rundir" in result
+        assert "run_dir" not in result
+
+    def test_sbatch_too(self, api_slurm, db_with_tags):
+        pbx, _ = api_slurm
+        result = pbx.sbatch(apps=["lammps-kk"], tags=["prod-run"], **self._kwargs)
+        assert "rundir" in result
+        assert "run_dir" not in result
+
+    def test_the_template_placeholder_is_still_run_dir(self, api_pbs, db_with_tags):
+        pbx, _ = api_pbs
+        result = pbx.qsub(apps=["lammps-kk"], tags=["prod-run"], **self._kwargs)
+        script = (Path(result["rundir"]) / "submit.sh").read_text()
+        assert "--run-dir " in script, "the {run_dir} placeholder stopped resolving"

@@ -392,7 +392,7 @@ class TestRemoteSubmissionIsVisibleToTheAgent:
 
     BASE = {"success": True, "job_id": "8819271.aurora", "run_dir": "/lus/x/run",
             "remote": True, "endpoint": "ep-uuid",
-            "remote_run_dir": "/lus/flare/projects/ABC/me/p1/pbx_runs/1",
+            "remote_rundir": "/lus/flare/projects/ABC/me/p1/pbx_runs/1",
             "push": {"bytes": 4096}}
 
     def test_it_names_the_endpoint_and_the_remote_run_dir(self, monkeypatch):

@@ -238,7 +238,7 @@ is removed before returning. An unknown system raises `ValidationError`.
 
 ## `qsub` — submit a PBS batch
 
-Generates the batch script, validates `tags` against the DB (literal **and** glob entries must each match at least one Ready job), aborts cleanly if nothing is runnable, and submits. Returns a dict with `success`, `job_id`, `run_dir`, and — when validation ran — `matched_jobs`, `resolved_tags`, and `app_summary`. `app_summary` is one entry per app in the submission with `app`, `executable`, `env_state` (`configured` / `no_system_entry` / `no_app_block`) and a human-readable `detail` — an app with no per-system block still submits and still runs, with an empty executable, so check it. When `respawn` is set, the result dict also includes `respawn_template_file` (path to the generated `respawn_template.sh`).
+Generates the batch script, validates `tags` against the DB (literal **and** glob entries must each match at least one Ready job), aborts cleanly if nothing is runnable, and submits. Returns a dict with `success`, `job_id`, `rundir`, and — when validation ran — `matched_jobs`, `resolved_tags`, and `app_summary`. `app_summary` is one entry per app in the submission with `app`, `executable`, `env_state` (`configured` / `no_system_entry` / `no_app_block`) and a human-readable `detail` — an app with no per-system block still submits and still runs, with an empty executable, so check it. When `respawn` is set, the result dict also includes `respawn_template_file` (path to the generated `respawn_template.sh`).
 
 ```python
 result = pbx.qsub(
@@ -253,7 +253,7 @@ result = pbx.qsub(
     retries=1,
     dynamic=True,                  # False pins the run to the jobs matched now
 )
-print(result["job_id"], result["run_dir"])
+print(result["job_id"], result["rundir"])
 print("matched", result.get("matched_jobs"), "tags →", result.get("resolved_tags"))
 ```
 
@@ -309,7 +309,7 @@ result = pbx.sbatch(
     sched_opts=["#SBATCH --qos=regular", "#SBATCH --constraint=gpu"],
     respawn=2,  # optional self-respawn chain
 )
-print(result["job_id"], result["run_dir"])
+print(result["job_id"], result["rundir"])
 ```
 
 ---

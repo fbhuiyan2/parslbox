@@ -239,7 +239,7 @@ Both commands share identical flag names — there is no `--partition`, `--nodes
 - `--queue/-q` — PBS queue name (qsub) / SLURM partition name (sbatch).
 - `--select` — PBS select spec (qsub), e.g. `4` or `2:ncpus=32:ngpus=4` / number of nodes (sbatch), e.g. `2`.
 
-**Optional**: `--run-dir`, `--apps/-a`, `--tags/-t`, `--retries`, `--sched-opts`, `--dynamic`/`--static`, `--respawn N`, `--loglevel`, `--no-local`, `--push-dirs`
+**Optional**: `--rundir`, `--apps/-a`, `--tags/-t`, `--retries`, `--sched-opts`, `--dynamic`/`--static`, `--respawn N`, `--loglevel`, `--no-local`, `--push-dirs`
 
 Notes:
 - `--walltime` defaults to **minutes**; supports `h` and `d` suffixes (`90`, `4.25h`, `3.5d`).

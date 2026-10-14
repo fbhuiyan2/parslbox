@@ -214,7 +214,7 @@ def test_submit_remote_pushes_submits_and_pulls(wired, monkeypatch):
             assert payload["db_path"] == wired.remote_db_path
             assert payload["kwargs"]["queue"] == "debug"
             return {"ok": True, "result": {"success": True, "job_id": "12345.aurora",
-                                           "run_dir": payload["run_dir"],
+                                           "rundir": payload["run_dir"],
                                            "submit_file": payload["run_dir"] + "/submit.sh"}}
         return fn(*args)
 
@@ -278,7 +278,7 @@ def test_submit_remote_goes_through_after_a_pull(wired, monkeypatch):
     def fake_run(self, fn, *args, **kw):
         if fn is compute.remote_submit:
             return {"ok": True, "result": {"success": True, "job_id": "9.aurora",
-                                           "run_dir": args[0]["run_dir"],
+                                           "rundir": args[0]["run_dir"],
                                            "submit_file": "x"}}
         return fn(*args)
 
@@ -962,3 +962,31 @@ def test_a_failed_transfer_still_records_the_database_that_landed(
     _collection(monkeypatch, _DiskCollection(tmp_path))
     sync.push(db_path=wired_transfer.db_path,
               dirs=[wired_transfer.local_root / "run_a"])
+
+
+def test_the_remote_payload_key_is_still_run_dir(wired, monkeypatch):
+    """The payload crosses to a separately-installed parslbox on the endpoint.
+
+    `compute.remote_submit` reads `payload["run_dir"]`, so renaming this key
+    in step with the user-facing result key would quietly drop the custom run
+    directory whenever the two sides are on different versions -- it reads
+    through `.get`, so there would be no error, just the default directory.
+    """
+    seen = {}
+
+    def fake_run(self, fn, *args, **kw):
+        if fn is compute.remote_submit:
+            seen.update(args[0])
+            return {"ok": True, "result": {"success": True, "job_id": "1.aurora",
+                                           "rundir": args[0]["run_dir"]}}
+        return fn(*args)
+
+    monkeypatch.setattr(compute.ComputeClient, "run", fake_run)
+    result = sync.submit_remote(
+        wired.db_path,
+        {"config_name": "aurora-gpu", "job_name": "t", "queue": "debug",
+         "select": "1", "walltime": 10},
+        run_dir=wired.local_root / "myrun",
+    )
+    assert "run_dir" in seen and "rundir" not in seen
+    assert result["remote_rundir"] == seen["run_dir"]

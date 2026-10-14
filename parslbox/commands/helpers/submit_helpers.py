@@ -505,7 +505,7 @@ def submit_job(
         result_dict = {
             "success": True,
             "job_id": job_id,
-            "run_dir": str(run_dir),
+            "rundir": str(run_dir),
             "submit_file": str(submit_file),
             "respawn_template_file": str(respawn_template_file) if respawn_template_file else None,
             "matched_jobs": matched_count,
@@ -523,7 +523,7 @@ def submit_job(
         return {
             "success": False,
             "error": e.stderr,
-            "run_dir": str(run_dir),
+            "rundir": str(run_dir),
             "submit_file": str(submit_file),
             "respawn_template_file": str(respawn_template_file) if respawn_template_file else None,
             "matched_jobs": matched_count,
@@ -568,7 +568,7 @@ def render_remote_result(
 
     typer.secho(f"\U0001f30e Submitted on endpoint {str(result.get('endpoint'))[:8]}…",
                 fg=typer.colors.CYAN)
-    typer.secho(f"\U0001f4c1 Remote run directory: {result.get('remote_run_dir')}",
+    typer.secho(f"\U0001f4c1 Remote run directory: {result.get('remote_rundir')}",
                 fg=typer.colors.BLUE)
     typer.secho(f"\U0001f4dd Remote submit script: {result.get('submit_file')}",
                 fg=typer.colors.BLUE)

@@ -307,7 +307,7 @@ def _remote_lines(status: dict) -> list:
     if not status.get("remote"):
         return []
     lines = [f"Submitted on remote Compute endpoint {status.get('endpoint')}.",
-             f"Remote run directory: {status.get('remote_run_dir')}"]
+             f"Remote run directory: {status.get('remote_rundir')}"]
     push = status.get("push") or {}
     if push.get("bytes") is not None:
         lines.append(f"Pushed {push['bytes']} bytes of database first.")
@@ -348,14 +348,14 @@ def submit_pbs_job(params: QSubSchema) -> str:
 
     if status.get("success") is True:
         job_id = status.get("job_id", status.get("pbs_job_id", "UNKNOWN"))
-        run_dir = status.get("run_dir", "UNKNOWN")
+        rundir = status.get("rundir", "UNKNOWN")
         matched = status.get("matched_jobs")
         resolved = status.get("resolved_tags")
         respawn_template = status.get("respawn_template_file")
         lines = [
             f"Job was submitted successfully.",
             f"PBS job ID: {job_id}",
-            f"Run directory: {run_dir}",
+            f"Run directory: {rundir}",
         ]
         if matched is not None:
             lines.append(f"Matched {matched} runnable job(s) in DB.")
@@ -368,11 +368,11 @@ def submit_pbs_job(params: QSubSchema) -> str:
         return "\n".join(lines)
     else:
         error_msg = status.get("error", "Unknown error")
-        run_dir = status.get("run_dir", "UNKNOWN")
+        rundir = status.get("rundir", "UNKNOWN")
         return (
             "Failed to submit job.\n"
             f"Error: {error_msg}\n"
-            f"Run directory (if created): {run_dir}"
+            f"Run directory (if created): {rundir}"
         )
 
 
@@ -403,14 +403,14 @@ def submit_slurm_job(params: SBatchSchema) -> str:
 
     if status.get("success") is True:
         job_id = status.get("job_id", status.get("slurm_job_id", "UNKNOWN"))
-        run_dir = status.get("run_dir", "UNKNOWN")
+        rundir = status.get("rundir", "UNKNOWN")
         matched = status.get("matched_jobs")
         resolved = status.get("resolved_tags")
         respawn_template = status.get("respawn_template_file")
         lines = [
             f"SLURM job was submitted successfully.",
             f"SLURM job ID: {job_id}",
-            f"Run directory: {run_dir}",
+            f"Run directory: {rundir}",
         ]
         if matched is not None:
             lines.append(f"Matched {matched} runnable job(s) in DB.")
@@ -423,11 +423,11 @@ def submit_slurm_job(params: SBatchSchema) -> str:
         return "\n".join(lines)
     else:
         error_msg = status.get("error", "Unknown error")
-        run_dir = status.get("run_dir", "UNKNOWN")
+        rundir = status.get("rundir", "UNKNOWN")
         return (
             "Failed to submit SLURM job.\n"
             f"Error: {error_msg}\n"
-            f"Run directory (if created): {run_dir}"
+            f"Run directory (if created): {rundir}"
         )
 
 

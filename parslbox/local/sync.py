@@ -475,7 +475,7 @@ def submit_remote(db_path, kwargs: Dict[str, Any], run_dir=None,
 
     result = dict(outcome["result"])
     result["remote"] = True
-    result["remote_run_dir"] = target
+    result["remote_rundir"] = target
     result["endpoint"] = project.compute_endpoint
     result["push"] = steps["push"]
     if "dirs" in steps:
