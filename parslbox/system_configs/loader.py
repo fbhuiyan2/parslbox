@@ -97,9 +97,9 @@ def get_system_config(name: str) -> SystemConfig:
 def get_system_specs() -> list[dict]:
     """Name and hardware specs for every configured system.
 
-    Read off the class attributes rather than an instance: a config's
-    __init__ validates the environment it expects to be running in, and the
-    machine asking which systems exist is usually not one of them.
+    Read off the class attributes rather than an instance: these are plain
+    class constants, so constructing eleven configs to read five of them
+    each buys nothing.
 
     Returns:
         list[dict]: One dict per system with 'name', 'scheduler',
