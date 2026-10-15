@@ -19,12 +19,13 @@ from concurrent.futures import as_completed
 from parslbox.database import database
 from parslbox.utils import path_utils
 from parslbox.apps.app_registry import (
+    APP_FACTORY,
     get_app_config,
     is_app_registered,
     get_app_instance,
     get_registered_apps,
 )
-from parslbox.system_configs.loader import get_system_config, load_config
+from parslbox.system_configs.loader import get_system_config, get_system_specs, load_config
 from parslbox.resource_manager.exceptions import InsufficientResources
 from parslbox.resource_manager.models import create_job_resource_spec
 from parslbox.utils.logging_utils import setup_logging
@@ -121,6 +122,107 @@ class ParslBox:
                 f"Please run 'pbx config' to create a configuration file, "
                 f"or provide config_path parameter to an existing config."
             )
+
+    # ==================== Setup Methods ====================
+
+    @staticmethod
+    def create_config(
+        path: Union[str, Path],
+        systems: List[str],
+        apps: Optional[List[str]] = None,
+        force: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Write a config.yaml for the given systems and apps.
+
+        This is the programmatic form of `pbx config`, for first-time setup
+        and for adding a second, project-local config later. A static method
+        because ParslBox() raises FileNotFoundError when no config exists --
+        which is exactly when this is needed.
+
+        Use available_systems() and available_apps() to find valid names;
+        both must be chosen by the caller, there is no prompting here.
+
+        Args:
+            path: Directory for the config. '.' is the current directory,
+                  '~' or 'home' is ~/.parslbox, anything else is used as
+                  given. Required -- unlike the CLI, nothing is prompted, and
+                  defaulting would write to ~/.parslbox unannounced.
+            systems: System names to include. At least one.
+            apps: Built-in app names to include. None or [] means ['python'].
+            force: Rename an existing config.yaml to
+                   'config.yaml.backup.<timestamp>' and write a fresh one.
+                   Without it an existing config is an error. The old file is
+                   renamed, never deleted.
+
+        Returns:
+            Dict with 'config_path', 'db_path', 'db_from_env',
+            'config_env_var' ({'PBX_CONFIG_PATH': dir} when the config is not
+            in ~/.parslbox, else None), 'systems_selected', 'apps_selected'
+            and 'backed_up' (the backup filename, or None).
+
+        Raises:
+            ValidationError: Unknown system or app name, no systems given, or
+                a config already exists at that path and force is False.
+
+        Note:
+            This also initializes the job database, at PBX_DB_PATH if set and
+            ~/.parslbox otherwise -- not next to the config. An existing
+            database is left alone; its jobs are not touched.
+        """
+        from parslbox.commands.config import config_setup
+
+        # Before str(path) -- str(None) is the directory name "None", which
+        # config_setup would happily create.
+        if path is None:
+            raise ValidationError(
+                "'path' is required: the directory to write config.yaml into "
+                "('.' for the current directory, '~' for ~/.parslbox)"
+            )
+        if systems is None:
+            raise ValidationError(
+                "'systems' is required: choose from available_systems()"
+            )
+
+        try:
+            return config_setup(
+                path=str(path), systems=systems, apps=apps, force=force
+            )
+        except (ValueError, FileExistsError) as e:
+            raise ValidationError(str(e))
+
+    # ==================== Discovery Methods ====================
+
+    @staticmethod
+    def available_systems() -> List[Dict[str, Any]]:
+        """
+        Every HPC system ParslBox is configured for, with its hardware.
+
+        The names returned here are what `config=` / `system=` take
+        everywhere else in this API. A static method because the answer is
+        built in and does not depend on a database or a config file.
+
+        Returns:
+            List of dicts with 'name', 'scheduler' ('PBS' or 'SLURM'),
+            'cores_per_node', 'gpus_per_node' (0 on CPU-only systems),
+            'gpu_type' (None there) and 'mpi_backend'.
+        """
+        return get_system_specs()
+
+    def available_apps(self) -> Dict[str, List[str]]:
+        """
+        App identifiers accepted by `app=`, split by where they come from.
+
+        Custom apps are whatever this instance's config.yaml declares under
+        `custom_apps:`, so a different config_path gives a different answer.
+
+        Returns:
+            Dict with 'builtin' and 'custom' lists. 'custom' is empty when
+            the config declares none.
+        """
+        builtin = list(APP_FACTORY)
+        every = get_registered_apps(self.config_path)
+        return {"builtin": builtin, "custom": [a for a in every if a not in builtin]}
 
     # ==================== Job Management Methods ====================
 

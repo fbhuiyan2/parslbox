@@ -94,6 +94,31 @@ def get_system_config(name: str) -> SystemConfig:
     
     return config_class()
 
+def get_system_specs() -> list[dict]:
+    """Name and hardware specs for every configured system.
+
+    Read off the class attributes rather than an instance: a config's
+    __init__ validates the environment it expects to be running in, and the
+    machine asking which systems exist is usually not one of them.
+
+    Returns:
+        list[dict]: One dict per system with 'name', 'scheduler',
+            'cores_per_node', 'gpus_per_node', 'gpu_type' (None on CPU-only
+            systems) and 'mpi_backend'.
+    """
+    return [
+        {
+            "name": name,
+            "scheduler": cls.SCHEDULER,
+            "cores_per_node": cls.CORES_PER_NODE,
+            "gpus_per_node": cls.GPUS_PER_NODE,
+            "gpu_type": cls.GPU_TYPE,
+            "mpi_backend": cls.MPI_BACKEND,
+        }
+        for name, cls in CONFIG_FACTORIES.items()
+    ]
+
+
 def get_available_systems() -> list[str]:
     """
     Get list of all available system configuration names.

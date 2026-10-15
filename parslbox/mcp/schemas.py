@@ -3,6 +3,15 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing import List, Optional, Union
 
+from parslbox.apps.app_registry import APP_FACTORY
+from parslbox.system_configs.loader import get_available_systems
+
+# Built from the registries at import, not retyped. These lists appeared in
+# five descriptions by hand and had already drifted -- 'orca' was missing from
+# the app list, so no agent could learn the app existed.
+_SYSTEMS = ", ".join(f"'{s}'" for s in get_available_systems())
+_BUILTIN_APPS = ", ".join(f"'{a}'" for a in APP_FACTORY)
+
 
 class McpSchema(BaseModel):
     """Reject unknown arguments, and say what the valid ones are.
@@ -96,10 +105,13 @@ class AddJobSchema(McpSchema):
         ),
     )
     app: str = Field(
-        description="The application type. Built-in options are 'lammps-kk', 'vasp', 'python' and 'julia'. Custom apps may also be available.",
+        description=(
+            f"The application type. Built-in options are {_BUILTIN_APPS}. A "
+            "config may declare more; list_systems_and_apps reports them."
+        ),
     )
     config: str = Field(
-        description="The name of the configuration to use. Options are 'polaris', 'sophia', 'crux', 'aurora-tile', 'aurora-gpu', 'lcrc-swing', 'lcrc-improv', 'pinnacles-cenvalarc', 'perlmutter-gpu', 'perlmutter-cpu' and 'perlmutter-gpu-srun'",
+        description=f"The name of the configuration to use. Options are {_SYSTEMS}.",
     )
     tag: Optional[str] = Field(
         default=None,
@@ -259,12 +271,7 @@ class ResourceRequirementsSchema(McpSchema):
     """Schema for sizing jobs against a target system."""
 
     system: str = Field(
-        description=(
-            "Target system. Options are 'polaris', 'sophia', 'crux', "
-            "'aurora-tile', 'aurora-gpu', 'lcrc-swing', 'lcrc-improv', "
-            "'pinnacles-cenvalarc', 'perlmutter-gpu', 'perlmutter-cpu' and "
-            "'perlmutter-gpu-srun'."
-        ),
+        description=f"Target system. Options are {_SYSTEMS}.",
     )
 
     job_ids: Optional[JobIdTokens] = Field(
@@ -284,10 +291,7 @@ class CommandLinesSchema(McpSchema):
     """Schema for previewing the launch command of jobs on a target system."""
 
     system: str = Field(
-        description=(
-            "Target system, e.g. 'aurora-tile' or 'polaris'. Same set as "
-            "get_resource_requirements."
-        ),
+        description=f"Target system. Options are {_SYSTEMS}.",
     )
 
     job_ids: Optional[JobIdTokens] = Field(
@@ -306,7 +310,7 @@ class QSubSchema(McpSchema):
     """Schema for generating and submitting a PBS job via ParslBox."""
 
     config: str = Field(
-        description="The name of the configuration to use. Options are 'polaris', 'sophia', 'crux', 'aurora-tile', 'aurora-gpu', 'lcrc-swing', 'lcrc-improv', 'pinnacles-cenvalarc', 'perlmutter-gpu', 'perlmutter-cpu' and 'perlmutter-gpu-srun'",
+        description=f"The name of the configuration to use. Options are {_SYSTEMS}.",
     )
 
     job_name: str = Field(
@@ -414,7 +418,7 @@ class SBatchSchema(McpSchema):
     """Schema for generating and submitting a SLURM job via ParslBox."""
 
     config: str = Field(
-        description="The name of the configuration to use.",
+        description=f"The name of the configuration to use. Options are {_SYSTEMS}.",
     )
 
     job_name: str = Field(

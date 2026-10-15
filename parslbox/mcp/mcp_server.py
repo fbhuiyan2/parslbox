@@ -142,6 +142,7 @@ mcp = FastMCP(
         "- cancel_slurm_job: gracefully cancel a running SLURM batch job (preferred over raw scancel — keeps DB accurate).\n"
         "- remove_jobs: remove one or more jobs from the database.\n"
         "- update_jobs: modify fields of one or more existing jobs (status, tag, input file, resources, dependencies, etc.). Note: app cannot be changed after job creation.\n"
+        "- list_systems_and_apps: the HPC systems and app identifiers this server accepts. Read-only.\n"
         "- get_resource_requirements: how many nodes of a target system the jobs need. Read-only.\n"
         "- get_command_lines: the MPI/srun line each job would be launched with on a target system. A preview; nothing runs.\n"
         "- filter_jobs: filter jobs by status, app, tag, path, or input file and return their IDs.\n"
@@ -155,6 +156,33 @@ mcp = FastMCP(
         "- local_pull: bring the remote database back down.\n\n"
     ),
 )
+
+
+@mcp.tool(
+    name="list_systems_and_apps",
+    description=(
+        "The HPC systems and app identifiers every other tool accepts.\n\n"
+        "Systems come with the hardware that decides how a job is sized: scheduler, "
+        "cores and GPUs per node, and MPI backend. Apps are the built-ins plus "
+        "whatever the bound config.yaml declares under custom_apps, so the answer "
+        "follows use_database.\n\n"
+        "Call this before asking the user to choose a system -- the names alone do "
+        "not say which are PBS and which are SLURM, or which have GPUs."
+    ),
+)
+def list_systems_and_apps() -> str:
+    lines = []
+    for s in pbx.available_systems():
+        gpus = (f"{s['gpus_per_node']}x {s['gpu_type']}" if s["gpus_per_node"]
+                else "no gpu")
+        lines.append(
+            f"{s['name']}: {s['scheduler']}, {gpus}, {s['cores_per_node']} cores, "
+            f"{s['mpi_backend']}"
+        )
+    apps = pbx.available_apps()
+    lines.append(f"apps builtin: {', '.join(apps['builtin'])}")
+    lines.append(f"apps custom: {', '.join(apps['custom']) or 'none'}")
+    return "\n".join(lines)
 
 
 @mcp.tool(

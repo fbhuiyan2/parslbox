@@ -59,9 +59,7 @@ def main_callback(ctx: typer.Context):
         if response.lower() in ["y", "yes", ""]:
             # Run pbx config
             from parslbox.commands.config import config as config_cmd_func
-            import parslbox.commands.config as config_module
-            config_module._is_interactive = True
-            
+
             try:
                 config_cmd_func(path=None)  # Will use PBX_CONFIG_PATH or default
             except typer.Exit:

@@ -702,8 +702,15 @@ class TestSchemaTextBlock:
 
         tools = asyncio.run(mcp.list_tools())
         assert tools
+        # Only a tool declared `def tool(params: XSchema)` puts its fields
+        # behind a $ref. One that takes no arguments has nothing to restate.
+        checked = 0
         for t in tools:
+            if "params" not in (t.inputSchema.get("properties") or {}):
+                continue
+            checked += 1
             assert "Arguments, all inside the single `params` object:" in t.description, t.name
+        assert checked
 
     def test_add_jobs_description_names_the_resource_fields(self):
         """These are the ones models most often guess wrong (nodes/gpus)."""

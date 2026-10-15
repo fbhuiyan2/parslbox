@@ -28,6 +28,9 @@ from parslbox.api import ParslBoxError, ValidationError, JobNotFoundError
 
 | Method | Purpose |
 | --- | --- |
+| `create_config(path, systems, apps=None, force=False)` | Write a config.yaml without prompting (staticmethod) |
+| `available_systems()` | List every configured HPC system with its hardware (staticmethod) |
+| `available_apps()` | App identifiers this config accepts, split into `builtin` and `custom` |
 | `add_jobs(paths, app, config, ...)` | Register one or more jobs in the DB |
 | `update_jobs(job_ids, ...)` | Mutate status / resources / dependencies of existing jobs |
 | `list_jobs(...)` | Return full job rows (dicts), optionally filtered |
@@ -48,6 +51,69 @@ from parslbox.api import ParslBoxError, ValidationError, JobNotFoundError
 | `local_push(force=False, with_dirs=False, ...)` | Send the local project's database to the remote machine, and optionally the job directories |
 | `local_pull(force=False)` | Bring the remote database back down |
 | `run(...)` | (Reserved — use `pbx run` CLI for full execution control) |
+
+---
+
+## `create_config`
+
+`pbx config` without the prompts, for setup from a script or an agent. A
+**staticmethod**: `ParslBox()` raises `FileNotFoundError` when no config.yaml
+exists, which is the case this method is for.
+
+```python
+ParslBox.create_config("/home/me/.parslbox", systems=["polaris", "crux"],
+                       apps=["lammps-kk", "vasp"])
+# {'config_path': '/home/me/.parslbox/config.yaml',
+#  'db_path': '/home/me/.parslbox/job_database_pbx.db', 'db_from_env': False,
+#  'config_env_var': None, 'systems_selected': ['polaris', 'crux'],
+#  'apps_selected': ['lammps-kk', 'vasp'], 'backed_up': None}
+```
+
+`path` is a directory and is required — the CLI prompts for it, and defaulting
+silently to `~/.parslbox` is the wrong surprise for a caller that meant the
+current project. `'.'` and `'~'` work as they do on the command line.
+
+Names come from `available_systems()` and `available_apps()['builtin']`, and
+both lists are validated before anything is written: a typo'd app name used to
+go straight into config.yaml and only surface later at `pbx add` as
+`Unknown application`.
+
+An existing config.yaml is an error unless `force=True`, which renames it to
+`config.yaml.backup.<timestamp>` and reports the name in `backed_up`. The old
+file is never deleted.
+
+`config_env_var` is `{'PBX_CONFIG_PATH': <dir>}` when the config is outside
+`~/.parslbox` — the caller is responsible for telling the user to export it.
+
+**It also initializes the job database**, at `PBX_DB_PATH` if set and
+`~/.parslbox` otherwise — *not* next to the config. An existing database is
+left as it is; no jobs are lost by creating a second config.
+
+---
+
+## `available_systems` / `available_apps`
+
+The names every other method takes. Nothing else in the API reports them, so
+without these a caller has to copy a system name out of the README.
+
+```python
+ParslBox.available_systems()
+# [{'name': 'polaris', 'scheduler': 'PBS', 'cores_per_node': 64,
+#   'gpus_per_node': 4, 'gpu_type': 'cuda', 'mpi_backend': 'mpich'}, ...]
+
+pbx.available_apps()
+# {'builtin': ['lammps-kk', 'vasp', 'python', 'julia', 'orca'], 'custom': []}
+```
+
+`available_systems()` is a **staticmethod**: `ParslBox()` raises
+`FileNotFoundError` when no config.yaml exists, which is exactly when a caller
+most needs to know which systems are selectable. `gpus_per_node` is `0` and
+`gpu_type` is `None` on CPU-only systems.
+
+`available_apps()` is an instance method because `custom` comes from this
+instance's config.yaml `custom_apps:` block — a different `config_path` gives a
+different answer. Built-ins cannot be overridden by a custom app of the same
+name, so the two lists never overlap.
 
 ---
 
