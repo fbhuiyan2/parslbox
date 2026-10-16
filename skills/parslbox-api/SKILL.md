@@ -27,6 +27,7 @@ pbx = ParslBox(config_path="...", db_path="...")
 |---|---|---|
 | `create_config(path, systems, apps=None, force=False)` | `dict` | Write a config.yaml — the programmatic `pbx config`. A staticmethod, for the first-time case where `ParslBox()` cannot be constructed. `apps=None` means `['python']`; `force=True` renames an existing config to `config.yaml.backup.<timestamp>` rather than deleting it. Also initializes the database (at `PBX_DB_PATH` or `~/.parslbox`, not beside the config); an existing one is kept. |
 | `available_systems()` | `List[dict]` | Every configured HPC system with `name`, `scheduler`, `cores_per_node`, `gpus_per_node`, `gpu_type`, `mpi_backend`. The names are what `config=` / `system=` take. A staticmethod — callable before a config.yaml exists. |
+| `builtin_apps()` | `List[str]` | The app identifiers that ship with ParslBox. A staticmethod — unlike `available_apps()` it needs no instance, so it works during first-time setup when no config.yaml exists. |
 | `available_apps()` | `dict` | `{'builtin': [...], 'custom': [...]}` — the identifiers `app=` accepts. `custom` is whatever this instance's config.yaml declares under `custom_apps:`. |
 | `add_jobs(paths, app, config, ...)` | `(ids, failures, msg_log)` | Register one or many jobs. `paths` is always `List[str]`. |
 | `list_jobs(status=, app=, tag=, path=, in_file=, num_nodes=, limit=)` | `List[dict]` | Job rows with optional filters (`num_nodes` is an exact match). `limit=N` keeps the first N, `limit=-N` the last N; omit for every row. |

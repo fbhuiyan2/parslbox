@@ -209,6 +209,20 @@ class ParslBox:
         """
         return get_system_specs()
 
+    @staticmethod
+    def builtin_apps() -> List[str]:
+        """
+        The app identifiers that ship with ParslBox.
+
+        A static method, unlike available_apps(): during first-time setup
+        there is no config.yaml, so there is no instance to ask, and
+        create_config() accepts built-ins only.
+
+        Returns:
+            List of app names, e.g. ['lammps-kk', 'vasp', 'python', ...].
+        """
+        return list(APP_FACTORY)
+
     def available_apps(self) -> Dict[str, List[str]]:
         """
         App identifiers accepted by `app=`, split by where they come from.

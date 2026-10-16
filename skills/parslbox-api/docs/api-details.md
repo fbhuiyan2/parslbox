@@ -30,6 +30,7 @@ from parslbox.api import ParslBoxError, ValidationError, JobNotFoundError
 | --- | --- |
 | `create_config(path, systems, apps=None, force=False)` | Write a config.yaml without prompting (staticmethod) |
 | `available_systems()` | List every configured HPC system with its hardware (staticmethod) |
+| `builtin_apps()` | The app identifiers shipped with ParslBox (staticmethod) |
 | `available_apps()` | App identifiers this config accepts, split into `builtin` and `custom` |
 | `add_jobs(paths, app, config, ...)` | Register one or more jobs in the DB |
 | `update_jobs(job_ids, ...)` | Mutate status / resources / dependencies of existing jobs |
@@ -109,6 +110,15 @@ pbx.available_apps()
 `FileNotFoundError` when no config.yaml exists, which is exactly when a caller
 most needs to know which systems are selectable. `gpus_per_node` is `0` and
 `gpu_type` is `None` on CPU-only systems.
+
+`builtin_apps()` is the staticmethod counterpart for the setup case: during
+first-time setup there is no config.yaml, so there is no instance to ask, and
+`create_config()` accepts built-ins only.
+
+```python
+ParslBox.builtin_apps()
+# ['lammps-kk', 'vasp', 'python', 'julia', 'orca']
+```
 
 `available_apps()` is an instance method because `custom` comes from this
 instance's config.yaml `custom_apps:` block — a different `config_path` gives a

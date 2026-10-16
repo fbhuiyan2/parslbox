@@ -15,6 +15,8 @@ ParslBox provides a CLI (`pbx`), a Python API, and an MCP server for AI-agent in
 
 Check out a quick [demo!](https://www.youtube.com/watch?v=DOu2VRQMVRU)
 
+> **Using an AI agent?** Point it at [`AGENTS.md`](AGENTS.md). To install and configure parslbox from scratch, have it follow [`skills/pbx-setup/SKILL.md`](skills/pbx-setup/SKILL.md) — a playbook it can read straight from this clone, no installation needed first.
+
 ## Highlights
 
 - **Job database:** Persistent SQLite tracking for job paths, resource requirements, dependencies, and status across sessions. Multiple isolated databases via `PBX_DB_PATH`
@@ -49,6 +51,8 @@ cd parslbox
 ```
 
 Then pick a Python environment manager below. Poetry (recommended) installs into the active environment and uses the committed `poetry.lock` for reproducible dependency resolution. pip is offered as an alternative.
+
+> **Deactivate conda first if it is active.** With a conda environment active (including `base`), Poetry ignores the virtualenv you created and installs into its own under `~/.cache/pypoetry/virtualenvs/` — `pbx` then never lands on your `PATH`. Run `conda deactivate` until `$CONDA_PREFIX` is empty, or use the conda instructions below instead.
 
 ### conda
 
@@ -206,7 +210,7 @@ Full per-method reference with examples: [`docs/api-details.md`](docs/api-detail
 
 ## Agentic usage
 
-ParslBox ships an **MCP server** and two **agent skills** (`parslbox-cli`, `parslbox-api`) that drop into any agentic harness — [Claude Code](https://claude.com/claude-code), [OpenCode](https://opencode.ai), or anything that speaks MCP. The MCP server exposes job add/submit/query/cancel as callable tools; the skills teach the agent the `pbx` CLI and the Python API. Install the MCP dependencies with `pip install ".[agentic]"`.
+ParslBox ships an **MCP server** and three **agent skills** (`parslbox-cli`, `parslbox-api`, `pbx-setup`) that drop into any agentic harness — [Claude Code](https://claude.com/claude-code), [OpenCode](https://opencode.ai), or anything that speaks MCP. The MCP server exposes job add/submit/query/cancel as callable tools; the skills teach the agent the `pbx` CLI and the Python API, and walk a first-time setup end to end. Install the MCP dependencies with `pip install ".[agentic]"`.
 
 See [`docs/agentic_usage.md`](docs/agentic_usage.md) for full setup — adding the MCP server and skills to Claude Code and OpenCode — plus best practices for driving parslbox from an agent.
 

@@ -3,7 +3,7 @@
 ParslBox is built to be driven by an AI agent as well as by hand. It ships two things you can add to any agentic harness:
 
 - **An MCP server** — exposes job add/submit/query/cancel as callable tools.
-- **Two skills** — `parslbox-cli` (the `pbx` shell commands) and `parslbox-api` (the Python `ParslBox` API). Each is a self-contained directory under [`skills/`](../skills) that teaches the agent how to use parslbox.
+- **Three skills** — `parslbox-cli` (the `pbx` shell commands), `parslbox-api` (the Python `ParslBox` API), and `pbx-setup` (a playbook that installs parslbox and writes a complete config from scratch; invoke it as `/pbx-setup`). Each is a self-contained directory under [`skills/`](../skills).
 
 Install the MCP dependencies with `pip install ".[agentic]"`.
 
@@ -185,7 +185,7 @@ claude        # (OpenCode: just run `opencode` — its timeout lives in opencode
 
 ## Skills
 
-The two skills live under [`skills/`](../skills) — `parslbox-cli` and `parslbox-api`. Each directory is self-contained (it bundles its own `docs/`), so you can install it either by copying or by symlinking.
+The skills live under [`skills/`](../skills) — `parslbox-cli`, `parslbox-api` and `pbx-setup`. Each directory is self-contained (it bundles its own `docs/`), so you can install it either by copying or by symlinking.
 
 ### Where skills live
 
@@ -194,10 +194,38 @@ The two skills live under [`skills/`](../skills) — `parslbox-cli` and `parslbo
 
 Because `~/.claude/skills/` is read by **both** tools, it's the best single home if you use both (see the conflict note below).
 
+### Install with the script (recommended)
+
+```bash
+scripts/install-skills.sh            # symlink into every harness it detects
+```
+
+It scans your home directory for the locations known agent harnesses read
+(`~/.claude/skills`, `~/.config/opencode/skills`, `~/.codex/skills`,
+`~/.agents/skills`, `~/.cursor/skills`, `~/.gemini/skills`,
+`~/.pi/agent/skills`, `~/.copilot/skills`, `~/.config/agents/skills`, and a
+few more) and installs only where the harness is already present.
+
+```bash
+scripts/install-skills.sh --harness claude,opencode   # pick explicitly
+scripts/install-skills.sh --all                       # every known harness
+scripts/install-skills.sh --copy                      # frozen copies, not links
+scripts/install-skills.sh --list                      # what is detected/installed
+scripts/install-skills.sh --check                     # exit 1 if missing or stale
+scripts/install-skills.sh --uninstall                 # remove only what it added
+```
+
+Symlinks are the default so `git pull` updates the installed skills. The
+script never replaces a directory it did not create, and `--uninstall` leaves
+anything it did not install alone.
+
+If it writes into more than one location a single harness reads, it says so —
+see the note on double-loading below.
+
 ### Install by copy (standalone snapshot)
 
 ```bash
-cp -r skills/parslbox-cli skills/parslbox-api ~/.claude/skills/
+cp -r skills/parslbox-cli skills/parslbox-api skills/pbx-setup ~/.claude/skills/
 ```
 
 A copy is frozen — re-copy after you pull repo updates.
@@ -207,6 +235,8 @@ A copy is frozen — re-copy after you pull repo updates.
 ```bash
 ln -s /abs/path/to/parslbox/skills/parslbox-cli ~/.claude/skills/parslbox-cli
 ln -s /abs/path/to/parslbox/skills/parslbox-api ~/.claude/skills/parslbox-api
+ln -s /abs/path/to/parslbox/skills/pbx-setup    ~/.claude/skills/pbx-setup
+# or: scripts/install-skills.sh --harness claude
 ```
 
 A symlink always reflects the repo, so `git pull` updates the skill automatically. Use absolute paths.
