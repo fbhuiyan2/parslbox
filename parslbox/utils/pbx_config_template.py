@@ -200,7 +200,7 @@ EXAMPLE_APP_TEMPLATE = '''#===== Example APP Template =====#
 #       # Add all necessary `module load` and `export` commands here.
 #       # Example:
 #       # module purge      # Always purge modules first in apps
-#       # module restore    # Then restore modules if you want
+#       # module reset      # Then restore the site default set
 #       # module load PrgEnv-gnu
 #       # module load ...
 #
@@ -244,7 +244,8 @@ app_name: # e.g., lammps-kk, vasp
   system_name: # e.g., polaris, sophia
     executable_path: "/path/to/your/software/executable/on/system"
     environment_setup: |
-      module restore
+      module purge
+      module reset
     # Optional: override system-level MPI settings for this app
     # mpi:
     #   use_gpu_wrapper: true
@@ -258,7 +259,7 @@ lammps-kk:
     executable_path: "/path/to/your/lammps/executable/on/polaris"
     environment_setup: |
       module purge
-      module restore
+      module reset
     # Optional: override system-level MPI settings
     # mpi:
     #   cpu_bind_method: rankfile
@@ -267,7 +268,7 @@ lammps-kk:
     executable_path: "/path/to/your/lammps/executable/on/sophia"
     environment_setup: |
       module purge
-      module restore
+      module reset
     # Optional: override system-level MPI settings
     # mpi:
     #   add: ["--mca btl ^openib"]

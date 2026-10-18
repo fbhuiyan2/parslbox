@@ -84,11 +84,24 @@ class TestTheFatalBlank:
         for system in ("polaris", "perlmutter-cpu"):
             assert "pbx_python_env_setup" in data[system]
 
-    def test_it_is_generated_empty(self, generated):
-        """Every line a comment -- which is why the playbook must fill it."""
+    def test_it_is_generated_without_an_activation_command(self, generated):
+        """The generated block holds module-management no-ops and comments and
+        nothing that puts `pbx` on PATH -- which is why the playbook must fill
+        it, and what the submit-time warning keys on."""
+        from parslbox.commands.helpers.submit_helpers import (
+            summarize_python_env_setup,
+        )
         block = yaml.safe_load(generated)["polaris"]["pbx_python_env_setup"]
         assert block.strip()
-        assert all(ln.strip().startswith("#") for ln in block.strip().splitlines())
+        assert summarize_python_env_setup(block, "polaris")["state"] == "unconfigured"
+
+    def test_it_ships_a_clean_module_environment(self, generated):
+        """Shipped live, not commented: the job inherits whatever the site's
+        shell init leaves behind, so the block starts by flattening it."""
+        block = yaml.safe_load(generated)["polaris"]["pbx_python_env_setup"]
+        live = [ln.strip() for ln in block.splitlines()
+                if ln.strip() and not ln.strip().startswith("#")]
+        assert live == ["module purge", "module reset"]
 
     def test_the_skill_names_the_key_and_the_symptom(self, skill_text):
         assert "pbx_python_env_setup" in skill_text
@@ -102,14 +115,36 @@ class TestTheFatalBlank:
             assert template.index("{pbx_python_env_setup}") < template.index("exec pbx run")
 
 
-class TestThePurgeRestoreRule:
+class TestThePurgeResetRule:
     def test_the_generator_emits_them_live_not_commented(self, generated):
         block = yaml.safe_load(generated)["vasp"]["polaris"]["environment_setup"]
         live = [ln.strip() for ln in block.splitlines() if not ln.strip().startswith("#")]
-        assert live[:2] == ["module purge", "module restore"]
+        assert live[:2] == ["module purge", "module reset"]
 
     def test_the_skill_says_to_keep_them(self, skill_text):
-        assert "module purge" in skill_text and "module restore" in skill_text
+        assert "module purge" in skill_text and "module reset" in skill_text
+
+    def test_no_doc_still_describes_it_as_purge_restore(self):
+        """The prose and the code sample drifted apart once: the heading said
+        `module reset` while the YAML comment under it still said "purge &
+        restore". sync-skill-docs.sh cannot catch that -- it only checks the
+        skill copies against the canonical doc, and all three carried the
+        same stale text."""
+        import pathlib
+        root = pathlib.Path(__file__).parent.parent
+        stale = []
+        for doc in list(root.glob("docs/*.md")) + list(root.glob("skills/**/*.md")):
+            text = doc.read_text()
+            for phrase in ("module restore", "purge & restore", "purge/restore"):
+                if phrase in text:
+                    stale.append(f"{doc.relative_to(root)}: {phrase}")
+        assert stale == []
+
+    def test_nothing_generated_still_says_restore(self, generated):
+        """`module restore` reloads the user's own saved collection, so two
+        people with the same config.yaml can get different environments.
+        `module reset` is the site default set for everyone."""
+        assert "module restore" not in generated
 
 
 class TestTheInstallBranch:

@@ -19,7 +19,7 @@ while placeholders remain.
   confirmation.
 - **Never pass `force=True` to `create_config`.** It renames the user's
   existing config. If one exists, show it and let the user decide.
-- **Never remove `module purge` / `module restore`** from an
+- **Never remove `module purge` / `module reset`** from an
   `environment_setup` block. Add below them.
 - Ask before writing outside the directory the user named.
 
@@ -223,17 +223,36 @@ Report `config_path` and `db_path` from the result.
 ## Phase 4 — Fill `pbx_python_env_setup` (required)
 
 This is the one that breaks jobs silently. It is substituted into
-`submit.sh` ahead of the final `exec pbx run`; left blank, the batch job
-dies with `pbx: command not found`.
+`submit.sh` ahead of the final `exec pbx run`; left unfilled, the batch job
+dies with `pbx: command not found` after the scheduler has already allocated
+the nodes.
 
-Edit the config so each selected system has the real activation commands:
+`pbx config` generates it with a module reset and comments:
 
 ```yaml
 polaris:
   pbx_python_env_setup: |
+    module purge
+    module reset
+    # Add your module load and conda activate commands here
+    ...
+```
+
+Keep the two `module` lines and add the real activation commands under them:
+
+```yaml
+polaris:
+  pbx_python_env_setup: |
+    module purge
+    module reset
     module load conda
     conda activate parslbox
 ```
+
+Do not try to solve this with PBS `-V` or SLURM `--export=ALL` instead. The
+job's own shell init runs after the inherited environment is applied, so the
+site's default modules can land on top of it and reorder `PATH`. This block
+runs last, which is why it wins.
 
 - **Setting up on the target machine** — use the environment from Phase 1. If
   it is a conda env, `module load conda` then `conda activate <name>`. If it
@@ -320,7 +339,7 @@ vasp:
     executable_path: "/soft/applications/vasp/6.4.2/bin/vasp_std"
     environment_setup: |
       module purge
-      module restore
+      module reset
       module load PrgEnv-nvhpc
       module load cray-libsci
 ```
@@ -338,13 +357,23 @@ On the target machine:
 ```bash
 grep -cE '^[[:space:]]*executable_path: "/path/to/your/' <config_path>   # expect 0
 python -c "
+import yaml
 from parslbox.api import ParslBox
+from parslbox.commands.helpers.submit_helpers import summarize_python_env_setup
 p = ParslBox(config_path='<config_path>')
 print('config ok:', p.config_path)
 print('apps:', p.available_apps())
+cfg = yaml.safe_load(open(p.config_path))
+known = {s['name'] for s in ParslBox.available_systems()}
+for name in sorted(known & set(cfg)):
+    print(name, summarize_python_env_setup(cfg[name].get('pbx_python_env_setup'), name)['state'])
 "
 pbx ls
 ```
+
+Every system must print `configured`. `unconfigured` means Phase 4 was not
+finished for that system — the same check runs at `pbx qsub`/`pbx sbatch`
+time and warns there, but by then the job is already queued.
 
 For a config written for a **different** machine, none of this can be checked
 here. Give the user the copy command and tell them to run the checks above

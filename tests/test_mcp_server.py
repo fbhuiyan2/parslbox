@@ -1309,3 +1309,33 @@ class TestResourceAndCommandLineTools:
             out = m.get_command_lines(MagicMock(model_dump=lambda: {
                 "system": "polaris", "job_ids": None}))
         assert "no jobs to preview" in out
+
+
+class TestSubmitToolsAdvertiseTheEnvSetupWarning:
+    """The LLM caller never sees the server source -- only the tool
+    description. A warning it has no cue to expect is a warning it skips."""
+
+    def _descriptions(self):
+        """Read what the server actually advertises, not the module globals --
+        the decorator keeps the text on the registered tool, and the bare
+        function carries none of it."""
+        import asyncio
+        from parslbox.mcp import mcp_server
+        tools = asyncio.run(mcp_server.mcp.list_tools())
+        return {
+            t.name: (t.description or "")
+            for t in tools
+            if t.name in ("submit_pbs_job", "submit_slurm_job")
+        }
+
+    def test_both_submit_tools_are_registered(self):
+        assert set(self._descriptions()) == {"submit_pbs_job", "submit_slurm_job"}
+
+    def test_both_submit_tools_mention_the_line(self):
+        for name, desc in self._descriptions().items():
+            assert "env_setup" in desc, f"{name} never mentions the line"
+
+    def test_they_say_what_it_means(self):
+        for name, desc in self._descriptions().items():
+            assert "pbx_python_env_setup" in desc, name
+            assert "command not found" in desc, name

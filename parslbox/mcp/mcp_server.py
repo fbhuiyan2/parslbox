@@ -305,9 +305,19 @@ def _app_summary_lines(status: dict, cancel_cmd: str) -> list:
             f"(or `pbx {cancel_cmd} {job_id}` if it already started).",
         ]
 
+    env_setup = status.get("env_setup_summary") or {}
+    env_lines = []
+    if env_setup.get("state") == "unconfigured":
+        env_lines = ["pbx_python_env_setup: NOT SET UP -- " + env_setup["detail"]]
+
+    cancel_hint = (
+        f"If anything above looks wrong, cancel now: {cancel_cmd} {job_id} "
+        f"(or `pbx {cancel_cmd} {job_id}` if it already started)."
+    )
+
     summary = status.get("app_summary")
     if not summary:
-        return []
+        return [*env_lines, cancel_hint] if env_lines else []
 
     parts = []
     for e in summary:
@@ -320,8 +330,8 @@ def _app_summary_lines(status: dict, cancel_cmd: str) -> list:
         parts.append(f"{e['app']} [exe:{exe}, {state}]")
     return [
         "apps: " + " | ".join(parts),
-        f"If anything above looks wrong, cancel now: {cancel_cmd} {job_id} "
-        f"(or `pbx {cancel_cmd} {job_id}` if it already started).",
+        *env_lines,
+        cancel_hint,
     ]
 
 
@@ -362,7 +372,10 @@ def _remote_lines(status: dict) -> list:
         "including an `apps:` line resolving each app in the submission to its executable "
         "and env block on the target system (env:configured / NO SYSTEM ENTRY / NO APP BLOCK). "
         "Check that line: a missing block still submits and still runs, with an empty "
-        "executable. Cancel with the command given there if it looks wrong."
+        "executable. A `pbx_python_env_setup: NOT SET UP` line may also appear; that one is more "
+        "serious, because the system's `pbx_python_env_setup` has no command activating an "
+        "environment and the job will die with `pbx: command not found` once the nodes are "
+        "allocated. Cancel with the command given there if either looks wrong."
     ),
 )
 @_with_db_line
@@ -417,7 +430,10 @@ def submit_pbs_job(params: QSubSchema) -> str:
         "including an `apps:` line resolving each app in the submission to its executable "
         "and env block on the target system (env:configured / NO SYSTEM ENTRY / NO APP BLOCK). "
         "Check that line: a missing block still submits and still runs, with an empty "
-        "executable. Cancel with the command given there if it looks wrong."
+        "executable. A `pbx_python_env_setup: NOT SET UP` line may also appear; that one is more "
+        "serious, because the system's `pbx_python_env_setup` has no command activating an "
+        "environment and the job will die with `pbx: command not found` once the nodes are "
+        "allocated. Cancel with the command given there if either looks wrong."
     ),
 )
 @_with_db_line

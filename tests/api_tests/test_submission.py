@@ -246,3 +246,65 @@ class TestTheResultKeyIsRundir:
         result = pbx.qsub(apps=["lammps-kk"], tags=["prod-run"], **self._kwargs)
         script = (Path(result["rundir"]) / "submit.sh").read_text()
         assert "--run-dir " in script, "the {run_dir} placeholder stopped resolving"
+
+
+class TestEnvSetupSummaryReachesTheApi:
+    """`api.qsub`/`api.sbatch` return submit_job's dict verbatim, so the key
+    arrives without API-layer code. These pin that it keeps arriving."""
+
+    _kwargs = dict(
+        config="aurora-tile", job_name="t", queue="debug",
+        select="1", walltime=10, project="proj",
+    )
+
+    def test_qsub_reports_a_configured_block(self, api_pbs, db_with_tags):
+        pbx, _ = api_pbs
+        result = pbx.qsub(apps=["lammps-kk"], tags=["prod-run"], **self._kwargs)
+        assert result["env_setup_summary"]["state"] == "configured"
+
+    def test_sbatch_reports_a_configured_block(self, api_slurm, db_with_tags):
+        pbx, _ = api_slurm
+        result = pbx.sbatch(apps=["lammps-kk"], tags=["prod-run"], **self._kwargs)
+        assert result["env_setup_summary"]["state"] == "configured"
+
+    def test_an_unedited_block_is_reported_unconfigured(self, db_with_tags, tmp_path):
+        cfg = _make_pbs_config()
+        cfg["aurora-tile"]["pbx_python_env_setup"] = (
+            "module purge\nmodule reset\n# conda activate your_env\n"
+        )
+        fake_config = tmp_path / "pbx_config.yaml"
+        fake_config.write_text("schedulers: {}\n")
+        with patch("parslbox.commands.helpers.submit_helpers.load_config",
+                   return_value=cfg), \
+             patch("parslbox.commands.helpers.submit_helpers.subprocess.run") as mock_run, \
+             patch("parslbox.commands.helpers.submit_helpers.get_default_run_dir",
+                   return_value=tmp_path / "fake_run"):
+            mock_run.return_value = MagicMock(stdout="12345.pbs01\n", returncode=0)
+            pbx = ParslBox(db_path=db_with_tags, config_path=fake_config)
+            result = pbx.qsub(apps=["lammps-kk"], tags=["prod-run"], **self._kwargs)
+        assert result["env_setup_summary"]["state"] == "unconfigured"
+        assert "pbx: command not found" in result["env_setup_summary"]["detail"]
+
+
+class TestMalformedEnvSetupIsATypedApiError:
+    """Forgetting the `|` makes YAML read the block as a list. It used to be
+    interpolated into submit.sh as a Python repr and fail on the compute
+    node; now it is refused by name, before anything is queued."""
+
+    def test_qsub_raises_validation_error_naming_the_key(self, db_with_tags, tmp_path):
+        cfg = _make_pbs_config()
+        cfg["aurora-tile"]["pbx_python_env_setup"] = ["module load conda"]
+        fake_config = tmp_path / "pbx_config.yaml"
+        fake_config.write_text("schedulers: {}\n")
+        with patch("parslbox.commands.helpers.submit_helpers.load_config",
+                   return_value=cfg), \
+             patch("parslbox.commands.helpers.submit_helpers.subprocess.run") as mock_run, \
+             patch("parslbox.commands.helpers.submit_helpers.get_default_run_dir",
+                   return_value=tmp_path / "fake_run"):
+            mock_run.return_value = MagicMock(stdout="1.pbs01\n", returncode=0)
+            pbx = ParslBox(db_path=db_with_tags, config_path=fake_config)
+            with pytest.raises(ValidationError, match="pbx_python_env_setup"):
+                pbx.qsub(config="aurora-tile", job_name="t", queue="debug",
+                         select="1", walltime=10, project="proj",
+                         apps=["lammps-kk"], tags=["prod-run"])
+            mock_run.assert_not_called()

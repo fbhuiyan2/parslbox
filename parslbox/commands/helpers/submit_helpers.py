@@ -101,6 +101,81 @@ def summarize_app_configs(
     return summary
 
 
+# Module-management commands can only ever subtract from the environment, so a
+# block containing nothing else cannot put `pbx` on PATH. The generated config
+# ships exactly these two, which is what makes "unedited" detectable.
+_ENV_NOOP_COMMANDS = {"module purge", "module reset", "module restore"}
+
+
+def summarize_python_env_setup(
+    block: Optional[str],
+    config_name: str,
+) -> Dict[str, Any]:
+    """Decide whether `<system>.pbx_python_env_setup` was ever filled in.
+
+    That block is spliced into the submit script ahead of `exec pbx run`, so
+    it is the only thing that puts `pbx` on PATH inside the job. Left as
+    generated, the scheduler allocates the nodes and the script dies with
+    `pbx: command not found` -- minutes of queue time for nothing. Checking
+    against the generated text would go stale the moment its wording changes,
+    so classify by content instead: strip comments and blank lines, split on
+    the shell separators, discard the module-management no-ops, and see
+    whether anything is left. Joining the generated lines as
+    `module purge && module reset` is still nothing.
+
+    `state` is 'configured' or 'unconfigured'.
+
+    Raises:
+        ValidationError: if the config holds a non-string there -- a list or a
+            mapping would otherwise be interpolated into the submit script as
+            its Python repr and fail on the compute node.
+    """
+    if block is not None and not isinstance(block, str):
+        raise ValidationError(
+            f"`{config_name}.pbx_python_env_setup` must be shell text, got "
+            f"{type(block).__name__}. Write it as a YAML block scalar:\n"
+            f"  {config_name}:\n"
+            f"    pbx_python_env_setup: |\n"
+            f"      module load conda\n"
+            f"      conda activate your_env"
+        )
+
+    # A `#` only opens a comment at the start of a word, so this leaves
+    # `export P="a#b"` alone while dropping `module purge  # flatten`.
+    # Comments go first: a trailing backslash inside one does not continue
+    # the line, so joining before stripping would splice the next command
+    # into a comment and lose it.
+    uncommented = [
+        re.split(r"(?:^|\s)#", line, maxsplit=1)[0]
+        for line in (block or "").splitlines()
+    ]
+    # Then join continuations. Left split, a dangling `\` is itself a token
+    # that is not in the no-op set, so `module purge && \` + `module reset`
+    # would read as a configured block when it is still nothing.
+    joined = re.sub(r"\\[ \t]*\n", " ", "\n".join(uncommented))
+
+    live = []
+    for line in joined.splitlines():
+        for part in re.split(r"&&|\|\||;", line):
+            # Collapse runs of whitespace so `module  purge` and a tab-indented
+            # one are still recognised as the no-op they are.
+            part = " ".join(part.split()).rstrip("\\").strip()
+            if part and part not in _ENV_NOOP_COMMANDS:
+                live.append(part)
+
+    if live:
+        return {"state": "configured", "detail": f"configured for {config_name}"}
+    return {
+        "state": "unconfigured",
+        "detail": (
+            f"`pbx_python_env_setup` for {config_name} has no command that "
+            f"activates an environment, so `pbx` will not be on PATH inside "
+            f"the job and the batch script will likely die with "
+            f"\"pbx: command not found\" once the nodes are allocated"
+        ),
+    }
+
+
 def render_app_summary(result: Dict[str, Any], config_name: str, cancel_cmd: str) -> None:
     """Print the per-app resolution block plus the cancel-now hint.
 
@@ -129,6 +204,10 @@ def render_app_summary(result: Dict[str, Any], config_name: str, cancel_cmd: str
             else:
                 typer.secho(f"     env setup:  {entry['detail']}",
                             fg=typer.colors.YELLOW)
+
+    env_setup = result.get("env_setup_summary") or {}
+    if env_setup.get("state") == "unconfigured":
+        typer.secho(f"\u26a0  {env_setup['detail']}.", fg=typer.colors.YELLOW)
 
     if not job_id:
         return
@@ -361,6 +440,7 @@ def submit_job(
     # Get system-specific python environment setup
     system_config = config[config_name]
     pbx_python_env_setup = system_config.get('pbx_python_env_setup', '')
+    env_setup_summary = summarize_python_env_setup(pbx_python_env_setup, config_name)
 
     # Determine run directory
     if run_dir is None:
@@ -511,6 +591,7 @@ def submit_job(
             "matched_jobs": matched_count,
             "resolved_tags": list(tags) if tags else None,
             "app_summary": app_summary,
+            "env_setup_summary": env_setup_summary,
         }
         if scheduler_type == "pbs":
             result_dict["pbs_job_id"] = job_id
@@ -529,6 +610,7 @@ def submit_job(
             "matched_jobs": matched_count,
             "resolved_tags": list(tags) if tags else None,
             "app_summary": app_summary,
+            "env_setup_summary": env_setup_summary,
         }
     except FileNotFoundError:
         raise ValidationError(

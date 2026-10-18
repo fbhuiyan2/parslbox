@@ -45,11 +45,13 @@ Shell commands that make the `pbx` command available on the compute node.
 They are substituted into the generated `submit.sh` ahead of the final
 `exec pbx run` (the exported `PBX_*` variables sit between the two).
 
-Generated as comments only:
+Generated with a module reset and nothing else:
 
 ```yaml
 polaris:
   pbx_python_env_setup: |
+    module purge
+    module reset
     # Add your module load and conda activate commands here
     # Example:
     # module load conda
@@ -59,14 +61,27 @@ polaris:
 **Leave it as-is and your batch job dies with `pbx: command not found`** — the
 scheduler starts the job, the script reaches `exec pbx run`, and there is no
 `pbx` on `PATH`. Fill it with whatever activates the environment you installed
-parslbox into on that machine:
+parslbox into on that machine, keeping the reset at the top:
 
 ```yaml
 polaris:
   pbx_python_env_setup: |
+    module purge
+    module reset
     module load conda
     conda activate parslbox
 ```
+
+`qsub`/`sbatch` warn right after submitting if this block still has no command
+that activates anything, and print the `qdel`/`scancel` line so you can kill
+the job before it reaches the front of the queue. It is a warning, not a
+refusal — there is no flag to silence it.
+
+**Do not rely on the scheduler to carry your login environment in** (PBS `-V`,
+SLURM `--export=ALL`). The job's own shell init runs *after* the inherited
+copy is applied, so a site's default modules can reassert themselves on top of
+it and reorder `PATH`. Commands in this block run last, just before
+`exec pbx run`, which is why they win.
 
 This is per system, and it describes the **target** machine. A config written
 on a laptop for Polaris must carry Polaris's activation commands.
@@ -86,22 +101,22 @@ environment.
 ### 3. `<app>.<system>.environment_setup` — usually needed
 
 Shell commands run on the compute node before the application launches.
-Generated with `module purge` / `module restore` already active:
+Generated with `module purge` / `module reset` already active:
 
 ```yaml
 vasp:
   polaris:
     environment_setup: |
-      # Start with purge & restore so worker subprocesses
+      # Start with purge & reset so worker subprocesses
       # get a clean module environment (avoids subtle errors).
       module purge
-      module restore
+      module reset
       # Add app-specific environment setup below
       # module load ...
 ```
 
-**Keep `module purge` and `module restore` at the top** and add the app's
-module loads below them. The purge/restore pair gives worker subprocesses a
+**Keep `module purge` and `module reset` at the top** and add the app's
+module loads below them. The purge/reset pair gives worker subprocesses a
 clean module environment; dropping it causes subtle, hard-to-trace failures.
 
 ---
@@ -116,7 +131,9 @@ carries a commented example-app template containing the same string:
 grep -nE '^[[:space:]]*executable_path: "/path/to/your/' ~/.parslbox/config.yaml
 ```
 
-An unfilled `pbx_python_env_setup` block contains only comment lines.
+An unfilled `pbx_python_env_setup` block has no live line beyond
+`module purge` / `module reset` — which is exactly what the submit-time
+warning checks.
 
 ---
 
