@@ -104,7 +104,7 @@ def update_jobs(
         raise ValidationError("--nocc must be between 0.0 and 1.0")
 
     if ranks_per_node is not None and ranks_per_node < 1:
-        raise ValidationError(f"--ranks-per-node must be a positive integer, got {ranks_per_node}")
+        raise ValidationError(f"ranks_per_node must be a positive integer, got {ranks_per_node}")
 
     # Handle environment file validation and processing
     final_env_file, env_info, env_warnings = validate_environment_file(env_file, db_path=db_path)
@@ -345,7 +345,7 @@ def update(
     ] = None,
     ranks_per_node: Annotated[
         Optional[int],
-        typer.Option("--ranks-per-node", "-rpn", help="Update the number of MPI ranks per node.")
+        typer.Option("--ranks-per-node", "-rpn", help="Update the number of MPI ranks per node. May exceed the job's GPUs or cores: ranks then round-robin over the GPUs and share the cores of the GPU they land on (CPU-only jobs share the job's cores).")
     ] = None,
     add_deps: Annotated[
         Optional[str],

@@ -22,7 +22,7 @@ Concise reference to the Resource Manager architecture, key concepts, and MPI co
     - Single-node sub-node jobs can share nodes.
     - Multi-node jobs get exclusive nodes (no sharing).
     - Single-node CPU jobs use `node_occupancy` to determine core count.
-    - GPU jobs assign 1 rank per GPU; also assign CPU cores with optional affinity.
+    - GPU jobs assign ranks to GPUs via `rank_distribution.py` (sharing allowed); also assign CPU cores with optional affinity.
 
 - `cpu_affinity.py`
   - `CPUAffinityManager`: optional affinity for CPU selection per GPU.
@@ -38,11 +38,58 @@ Concise reference to the Resource Manager architecture, key concepts, and MPI co
 
 ## Key Assumptions
 
-- GPU jobs: one MPI rank per GPU.
-- Cores per GPU (balanced CPU distribution) = `CORES_PER_NODE // GPUS_PER_NODE`.
+- Every rank gets at least one GPU (GPU jobs) and at least one core, as long as
+  the node has one to give. Ranks may outnumber either; see *Rank distribution*.
+- Cores per GPU (balanced CPU distribution) = `(CORES_PER_NODE - len(EXCLUDE_CORES)) // GPUS_PER_NODE`.
 - Sub-node CPU jobs: per-rank core sets assigned explicitly and bound via rankfile or `--cpu-bind list` (depending on launcher).
-- Full-node CPU jobs: core distribution handled by MPI (no per-rank core lists in assignment).
+- Full-node CPU jobs: per-rank core sets assigned explicitly, same as sub-node.
 - Multi-node jobs require completely free nodes.
+
+## Rank distribution
+
+`rank_distribution.py` is the single definition of how a node's GPUs and cores
+are split across the ranks placed on it. Both the scheduler and the `pbx info`
+command preview call it, so a preview cannot describe a placement the
+scheduler would not produce.
+
+- `ranks <= GPUs`: GPUs are blocked out between ranks, remainder first, so no
+  allocated GPU is left unmapped.
+- `ranks > GPUs`: ranks round-robin over the GPUs, one each, and the ranks
+  sharing a GPU share that GPU's core block. Several ranks per GPU is a
+  supported configuration (LAMMPS and GROMACS both use it).
+- `ranks <= cores` (CPU-only): disjoint contiguous core blocks, remainder to
+  the leading ranks.
+- `ranks > cores` (CPU-only): every rank is given the whole owned set instead
+  of one shared core, so the kernel can balance them. The set is still only
+  what the job owns, so concurrent jobs stay isolated.
+
+That last rule describes the **assignment**. Whether it reaches the launch
+line depends on `cpu_bind_method`, because not every form can express a set:
+
+| `cpu_bind_method` | oversubscribed CPU job gets |
+|---|---|
+| `rankfile`, `list` | the whole owned set per rank, as assigned |
+| srun (any method, sub-node) | `--cpu-bind=mask_cpu`, the whole set per rank |
+| `depth` | one exclusive core per rank — the set is **not** expressible |
+| `depth <N>` | N cores per rank, as configured, regardless of the assignment |
+| `cores`, `threads` | one core per rank; srun only, and unreachable via `pbx add` |
+| `none` | no binding at all — ranks float over the whole node |
+
+So on a `depth` system (crux) an oversubscribed CPU job still gets a
+one-exclusive-core-per-rank binding (`--depth 1`, `PE=1`, `--cpus-per-task 1`)
+rather than the shared set. With more ranks than cores the ranks necessarily
+stack onto the low-numbered cores and the rest of the owned set goes unused.
+srun has no `list` binding at all: its only per-task CPU forms
+are `map_cpu` (one cpu id per task) and `mask_cpu` (one bitmask per task), so
+`list` and `rankfile` both translate to `mask_cpu` there, built from node 0
+because SLURM applies the same mapping to every node.
+
+`ranks_per_node` is capped at `pbx add` time by hardware threads
+(`CORES_PER_NODE - EXCLUDE_CORES`); `pbx update` does not re-check it.
+Exceeding the job's own GPUs or cores warns rather than failing. A GPU count
+that does not divide evenly into the rank count also warns: the blocks then
+differ in size, and an app taking one GPU-count for every rank (LAMMPS
+`-k on g N`) can only use the smallest.
 
 ## Job Type Detection
 

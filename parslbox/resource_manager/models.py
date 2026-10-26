@@ -22,7 +22,9 @@ def create_job_resource_spec(job_data: dict) -> 'JobResourceSpec':
     Create JobResourceSpec directly from job database data.
 
     ranks_per_node must be correctly set in the database by the validator
-    at job creation time (e.g., ngpus for GPU jobs, 1 for Python).
+    at job creation time. The app supplies the default (ngpus for LAMMPS,
+    1 for Python); a user value overrides it and may exceed the job's GPUs
+    or cores.
     """
     return JobResourceSpec(
         job_id=job_data['job_id'],
@@ -166,10 +168,13 @@ class NodeResource:
         Assign GPUs and CPU cores to a job with affinity preference.
         
         Key assumptions:
-        - Each GPU rank gets exactly cores_per_gpu CPU cores
+        - Each GPU gets exactly cores_per_gpu CPU cores. Those go to whichever
+          rank holds the GPU, so a rank with several GPUs gets several blocks
+          and ranks sharing a GPU share one -- see rank_distribution.py
         - Affinity is preferred but not required (falls back to any available cores)
         - GPU-CPU affinity groups are non-overlapping in well-designed HPC systems
-        - cores_per_gpu = CORES_PER_NODE // GPUS_PER_NODE for balanced allocation
+        - cores_per_gpu = (CORES_PER_NODE - len(EXCLUDE_CORES)) // GPUS_PER_NODE,
+          floored at 1, for balanced allocation
         - Sequential assignment: GPU 0 gets affinity cores first, then GPU 1, etc.
         
         Args:
@@ -345,7 +350,7 @@ class JobResourceSpec:
     num_nodes: int = 1
     ngpus: int = 0  # Total GPUs needed (only relevant for single-node jobs)
     node_occupancy: float = 1.0  # For CPU-only jobs, fraction of node to use
-    ranks_per_node: int = 1  # MPI ranks per node (for CPU jobs)
+    ranks_per_node: int = 1  # MPI ranks per node (all job types)
     
     def __post_init__(self):
         """Validate the resource specification."""
@@ -450,12 +455,16 @@ class ResourceAssignment:
             raise ValueError("cpu_assignments must have same length as node_ids")
     
     def get_total_gpus(self) -> int:
-        """Get total number of GPUs assigned."""
-        total = 0
-        for node_assignments in self.gpu_assignments:
-            for rank, gpu_list in node_assignments.items():
-                total += len(gpu_list)
-        return total
+        """Get total number of distinct GPUs assigned.
+
+        Ranks may share a GPU, so summing per-rank list lengths would count
+        one device once per rank. Deduplication is per node because GPU ids
+        restart at 0 on each node.
+        """
+        return sum(
+            len({gpu for gpu_list in node_assignments.values() for gpu in gpu_list})
+            for node_assignments in self.gpu_assignments
+        )
     
     def is_single_node(self) -> bool:
         """Check if this is a single-node assignment."""

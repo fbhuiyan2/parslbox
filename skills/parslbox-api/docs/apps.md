@@ -20,7 +20,7 @@ ParslBox ships with built-in support for a small set of HPC apps, and lets you r
 
 **VASP** auto-detects whether to run `vasp_gpu` or `vasp_std` based on the system's GPU configuration. No `--input` flag needed.
 
-**LAMMPS (Kokkos)** is the only built-in LAMMPS variant. The default rank-per-node policy is 1 rank per GPU. Override with `--ranks-per-node/-rpn` if your input benefits from a different ratio.
+**LAMMPS (Kokkos)** is the only built-in LAMMPS variant. The default rank-per-node policy is 1 rank per GPU. Override with `--ranks-per-node/-rpn` if your input benefits from a different ratio — in either direction. More ranks than GPUs makes them share, round-robin, with the ranks on a GPU sharing its CPU cores. Fewer ranks than GPUs gives each rank a contiguous block of GPUs, but note that Kokkos binds **one GPU per MPI rank** (`-k on g N` is GPUs per *node*, and it selects `local_rank % N`), so the surplus GPUs in a block go unused — 1 rank per GPU is the only way to drive them all. pbx warns when ranks outnumber GPUs, and when the GPU count does not divide evenly into the rank count, since unequal blocks cannot be described by a single `-k on g N`. `ranks_per_node` is capped at `pbx add` time by the node's usable core count; `pbx update` does not re-check it.
 
 ---
 

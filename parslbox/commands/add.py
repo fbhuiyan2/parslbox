@@ -195,7 +195,7 @@ def add(
     ] = None,
     ranks_per_node: Annotated[
         Optional[int],
-        typer.Option("--ranks-per-node", "-rpn", help="Number of MPI ranks per node. If not specified, uses the app's default (e.g., 1 rank per GPU for LAMMPS, 1 rank per node for Python)."),
+        typer.Option("--ranks-per-node", "-rpn", help="Number of MPI ranks per node. If not specified, uses the app's default (e.g., 1 rank per GPU for LAMMPS, 1 rank per node for Python). May exceed the job's GPUs or cores: ranks then round-robin over the GPUs and share the cores of the GPU they land on (CPU-only jobs share the job's cores). pbx warns when that happens."),
     ] = None,
     mpi_opts: Annotated[
         Optional[str],

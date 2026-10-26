@@ -141,8 +141,17 @@ class AddJobSchema(McpSchema):
         default=None,
         ge=1,
         description=(
-            "Number of MPI ranks per node. If not specified, uses the app's default "
-            "(e.g., 1 rank per GPU for LAMMPS, 1 rank per node for Python). Must be a positive integer."
+            "MPI ranks PER NODE, so a job runs nnodes * ranks_per_node ranks in total. "
+            "If not specified, uses the app's default (e.g., 1 rank per GPU for LAMMPS, "
+            "1 rank per node for Python). Rejected above the node's usable core count "
+            "(cores minus any the system reserves). "
+            "May exceed the job's GPUs or cores: ranks then round-robin over the GPUs, one "
+            "each, and the ranks on a GPU share its cores; CPU-only jobs share the job's "
+            "cores. Fewer ranks than GPUs is also allowed and gives each rank a contiguous "
+            "block of GPUs. pbx warns both when ranks outnumber GPUs and when the GPU count "
+            "does not divide evenly into the rank count, since unequal blocks cannot be "
+            "expressed by apps that take one GPU-count for every rank (e.g. LAMMPS -k on g). "
+            "Note node_occupancy is forced to 1.0 when nnodes > 1."
         ),
     )
     mpi_opts: Optional[str] = Field(
@@ -611,7 +620,13 @@ class UpdateJobSchema(McpSchema):
     ranks_per_node: Optional[int] = Field(
         default=None,
         ge=1,
-        description="New ranks per node. Must be a positive integer.",
+        description=(
+            "New MPI ranks PER NODE. Must be a positive integer. May exceed the job's GPUs "
+            "or cores: ranks then round-robin over the GPUs and share the cores of the GPU "
+            "they land on; CPU-only jobs share the job's cores. Unlike add_jobs, update "
+            "performs no upper-bound check and emits no sharing warning, so a value above "
+            "the node's core count is stored as given and only fails when the job runs."
+        ),
     )
 
     add_deps: Optional[List[int]] = Field(

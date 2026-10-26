@@ -12,6 +12,7 @@ from typing import List, Dict, Optional, TYPE_CHECKING
 from .models import NodeResource, JobResourceSpec, ResourceAssignment, create_job_resource_spec
 from .exceptions import InsufficientResources, JobNotFound, InvalidResourceSpec
 from .cpu_affinity import CPUAffinityManager
+from .rank_distribution import distribute_cores, distribute_gpus
 from .node_failure_tracker import NodeFailureTracker, NodeHealth
 from .job_tracker import JobTracker
 
@@ -265,24 +266,15 @@ class ResourceManager:
                     node_occupancy=spec.node_occupancy
                 )
                 
-                # Distribute CPU cores evenly across ranks
-                cores_per_rank = max(1, num_cores_needed // spec.ranks_per_node)
-                remaining_cores = num_cores_needed % spec.ranks_per_node
-                
-                core_idx = 0
-                for rank in range(spec.ranks_per_node):
-                    # Give some ranks one extra core if cores don't divide evenly
-                    rank_core_count = cores_per_rank + (1 if rank < remaining_cores else 0)
-                    rank_cores = assigned_cores[core_idx:core_idx + rank_core_count]
-                    core_idx += rank_core_count
-                    
+                rank_cores = distribute_cores(assigned_cores, spec.ranks_per_node)
+                for rank, cores in enumerate(rank_cores):
                     assignment.assign_resources_to_rank(
                         rank=rank,
                         node_idx=0,
                         gpu_ids=[],  # No GPUs for CPU-only jobs
-                        cpu_ids=rank_cores
+                        cpu_ids=cores
                     )
-                
+
                 logger.info(f"Assigned CPU-only job {spec.job_id}: {num_cores_needed} cores across {spec.ranks_per_node} ranks")
                 return assignment
         
@@ -305,7 +297,9 @@ class ResourceManager:
         # Account for excluded cores when calculating cores per GPU
         excluded_cores = getattr(self.system_config, 'EXCLUDE_CORES', None) or []
         effective_cores_per_node = self.system_config.CORES_PER_NODE - len(excluded_cores)
-        cores_per_gpu = effective_cores_per_node // self.system_config.GPUS_PER_NODE
+        # Floor hits 0 on a config with fewer usable cores than GPUs, which
+        # would hand every rank an empty core list instead of failing.
+        cores_per_gpu = max(1, effective_cores_per_node // self.system_config.GPUS_PER_NODE)
         
         # Find a healthy node with enough GPUs and CPU cores
         for node in self.nodes:
@@ -323,14 +317,10 @@ class ResourceManager:
                     node_occupancy=spec.node_occupancy
                 )
                 
-                # Assign resources per rank
-                gpus_per_rank = max(1, spec.ngpus // spec.ranks_per_node)
-                cores_per_rank = len(cpu_assignments) // spec.ranks_per_node if cpu_assignments else 0
-                for rank in range(spec.ranks_per_node):
-                    rank_gpus = assigned_gpus[rank * gpus_per_rank : (rank + 1) * gpus_per_rank]
-                    rank_cores = []
-                    for g in range(rank * gpus_per_rank, min((rank + 1) * gpus_per_rank, len(cpu_assignments))):
-                        rank_cores.extend(cpu_assignments[g])
+                # Cores follow the GPU, so ranks sharing a GPU share its cores.
+                cores_by_gpu = dict(zip(assigned_gpus, cpu_assignments))
+                for rank, rank_gpus in enumerate(distribute_gpus(assigned_gpus, spec.ranks_per_node)):
+                    rank_cores = [c for g in rank_gpus for c in cores_by_gpu.get(g, [])]
 
                     assignment.assign_resources_to_rank(
                         rank=rank,
@@ -399,15 +389,8 @@ class ResourceManager:
         current_rank = 0
         for node_idx in range(spec.num_nodes):
             all_cores = node_cores[node_idx]
-            cores_per_rank = max(1, len(all_cores) // spec.ranks_per_node)
-            remaining = len(all_cores) % spec.ranks_per_node
 
-            core_idx = 0
-            for local_rank in range(spec.ranks_per_node):
-                rank_core_count = cores_per_rank + (1 if local_rank < remaining else 0)
-                rank_cores = all_cores[core_idx:core_idx + rank_core_count]
-                core_idx += rank_core_count
-
+            for rank_cores in distribute_cores(all_cores, spec.ranks_per_node):
                 assignment.assign_resources_to_rank(
                     rank=current_rank,
                     node_idx=node_idx,
@@ -451,7 +434,9 @@ class ResourceManager:
         # Account for excluded cores when calculating cores per GPU
         excluded_cores = getattr(self.system_config, 'EXCLUDE_CORES', None) or []
         effective_cores_per_node = self.system_config.CORES_PER_NODE - len(excluded_cores)
-        cores_per_gpu = effective_cores_per_node // self.system_config.GPUS_PER_NODE
+        # Floor hits 0 on a config with fewer usable cores than GPUs, which
+        # would hand every rank an empty core list instead of failing.
+        cores_per_gpu = max(1, effective_cores_per_node // self.system_config.GPUS_PER_NODE)
         
         # For each node, assign all GPUs with affinity
         for node in assigned_nodes:
@@ -488,15 +473,16 @@ class ResourceManager:
             if len(assigned_gpus) != gpus_on_node:
                 raise RuntimeError(f"GPU assignment mismatch: expected {gpus_on_node}, got {len(assigned_gpus)}")
 
-            gpus_per_rank = max(1, gpus_on_node // spec.ranks_per_node)
             cores_per_gpu_actual = len(assigned_cores) // len(assigned_gpus) if assigned_gpus else 0
 
-            for local_rank in range(spec.ranks_per_node):
-                rank_gpus = assigned_gpus[local_rank * gpus_per_rank : (local_rank + 1) * gpus_per_rank]
+            # Cores follow the GPU, so ranks sharing a GPU share its cores.
+            cores_by_gpu = {
+                gpu: assigned_cores[i * cores_per_gpu_actual:(i + 1) * cores_per_gpu_actual]
+                for i, gpu in enumerate(assigned_gpus)
+            }
 
-                start_core_idx = local_rank * gpus_per_rank * cores_per_gpu_actual
-                end_core_idx = min(start_core_idx + gpus_per_rank * cores_per_gpu_actual, len(assigned_cores))
-                rank_cores = assigned_cores[start_core_idx:end_core_idx]
+            for rank_gpus in distribute_gpus(assigned_gpus, spec.ranks_per_node):
+                rank_cores = [c for g in rank_gpus for c in cores_by_gpu.get(g, [])]
 
                 assignment.assign_resources_to_rank(
                     rank=current_rank,

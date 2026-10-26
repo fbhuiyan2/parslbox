@@ -156,24 +156,43 @@ def _synthetic_assignment(job_spec, gpus_per_node: int, effective_cores: int):
     """A ResourceAssignment with placeholder hostnames, for previewing only."""
     from parslbox.resource_manager.models import ResourceAssignment
 
+    from parslbox.resource_manager.rank_distribution import (
+        distribute_cores,
+        distribute_gpus,
+    )
+
     num_nodes = job_spec.num_nodes
     ranks_per_node = job_spec.ranks_per_node
-    cores_per_rank = effective_cores // ranks_per_node if ranks_per_node > 0 else effective_cores
 
+    # Mirror the scheduler exactly: same helpers, same shapes, so a previewed
+    # command cannot describe a placement that would never be produced.
     if job_spec.is_gpu_job():
         gpus_on_node = gpus_per_node if num_nodes > 1 else job_spec.ngpus
-        gpus_per_rank = max(1, gpus_on_node // ranks_per_node)
+        node_gpu_ids = list(range(gpus_on_node))
+        rank_gpus = distribute_gpus(node_gpu_ids, ranks_per_node)
+        cores_per_gpu = effective_cores // gpus_per_node if gpus_per_node else effective_cores
+        cores_by_gpu = {
+            gpu: list(range(gpu * cores_per_gpu, (gpu + 1) * cores_per_gpu))
+            for gpu in node_gpu_ids
+        }
+        rank_cores = [[c for g in gpus for c in cores_by_gpu[g]] for gpus in rank_gpus]
     else:
-        gpus_per_rank = 0
+        owned = max(1, int(effective_cores * job_spec.node_occupancy))
+        rank_gpus = [[] for _ in range(ranks_per_node)]
+        rank_cores = distribute_cores(list(range(owned)), ranks_per_node)
 
+    # Ranks are numbered globally, as the scheduler numbers them. Restarting
+    # at 0 on every node made the same rank key exist in several nodes, and
+    # the per-rank accessors concatenate across nodes -- so on a 2-node job
+    # every rank read back with its GPU list doubled.
     gpu_assignments, cpu_assignments = [], []
+    global_rank = 0
     for _ in range(num_nodes):
         node_gpus, node_cpus = {}, {}
-        for rank in range(ranks_per_node):
-            if job_spec.is_gpu_job():
-                node_gpus[rank] = list(range(rank * gpus_per_rank, (rank + 1) * gpus_per_rank))
-            start_core = rank * cores_per_rank
-            node_cpus[rank] = list(range(start_core, start_core + cores_per_rank))
+        for local_rank in range(ranks_per_node):
+            node_gpus[global_rank] = list(rank_gpus[local_rank])
+            node_cpus[global_rank] = list(rank_cores[local_rank])
+            global_rank += 1
         gpu_assignments.append(node_gpus)
         cpu_assignments.append(node_cpus)
 

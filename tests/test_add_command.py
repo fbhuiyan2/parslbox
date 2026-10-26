@@ -1,3 +1,4 @@
+import re
 import pytest
 import tempfile
 import sqlite3
@@ -157,6 +158,151 @@ class TestValidateResourceParameters:
         assert params['final_num_nodes'] == 2
         assert params['final_ngpus'] == 0
         assert params['final_ranks_per_node'] == 1
+
+
+class TestRanksMayOutnumberResources:
+    """`-rpn` above the job's GPU or core count used to be rejected for GPU
+    jobs and silently mis-allocated for CPU ones. Sharing is supported now,
+    so it warns instead -- LAMMPS and GROMACS both run several ranks per GPU.
+
+    The old bound was `GPUS_PER_NODE`, which is the node's capacity rather
+    than the job's: `-g 1 -rpn 6` slipped through it and produced five ranks
+    with no GPU at all.
+    """
+
+    @pytest.fixture
+    def sys_config(self):
+        mock = MagicMock()
+        mock.GPUS_PER_NODE = 4
+        mock.CORES_PER_NODE = 64
+        mock.EXCLUDE_CORES = None
+        return mock
+
+    def test_more_ranks_than_gpus_is_allowed(self, sys_config):
+        params, _, _ = validate_resource_parameters(
+            ngpus=1, nnodes=1, ranks_per_node=8, system_config=sys_config)
+        assert params['final_ranks_per_node'] == 8
+        assert params['final_ngpus'] == 1
+
+    def test_more_ranks_than_gpus_warns(self, sys_config):
+        _, _, warnings = validate_resource_parameters(
+            ngpus=1, nnodes=1, ranks_per_node=8, system_config=sys_config)
+        assert any("8 ranks per node share 1 GPU" in w for w in warnings)
+
+    def test_the_warning_says_how_many_ranks_land_on_each_gpu(self, sys_config):
+        _, _, warnings = validate_resource_parameters(
+            ngpus=2, nnodes=1, ranks_per_node=7, system_config=sys_config)
+        assert any("up to 4 ranks land on one GPU" in w for w in warnings)
+
+    def test_one_rank_per_gpu_says_nothing(self, sys_config):
+        _, _, warnings = validate_resource_parameters(
+            ngpus=4, nnodes=1, ranks_per_node=4, system_config=sys_config)
+        assert warnings == []
+
+    def test_fewer_ranks_than_gpus_says_nothing(self, sys_config):
+        _, _, warnings = validate_resource_parameters(
+            ngpus=4, nnodes=1, ranks_per_node=2, system_config=sys_config)
+        assert warnings == []
+
+    def test_multinode_gpu_bound_is_the_per_node_count(self, sys_config):
+        """Multi-node jobs take every GPU on each node, so `ngpus` is the
+        total and GPUS_PER_NODE is what a rank count competes with."""
+        _, _, warnings = validate_resource_parameters(
+            ngpus=8, nnodes=2, ranks_per_node=4, system_config=sys_config)
+        assert warnings == []
+
+    def test_multinode_gpu_oversubscription_warns_against_the_per_node_count(self, sys_config):
+        _, _, warnings = validate_resource_parameters(
+            ngpus=8, nnodes=2, ranks_per_node=6, system_config=sys_config)
+        assert any("6 ranks per node share 4 GPU(s) per node" in w for w in warnings)
+
+    def test_multinode_cpu_does_not_warn_about_a_fraction_it_will_not_get(self, sys_config):
+        """JobResourceSpec forces multi-node occupancy to 1.0 and the job
+        gets whole nodes, so 40 ranks on a 64-core node are not sharing.
+        Comparing against `nocc x cores` claimed they shared 32."""
+        _, _, warnings = validate_resource_parameters(
+            ngpus=0, nnodes=2, node_occupancy=0.5, ranks_per_node=40,
+            system_config=sys_config)
+        assert warnings == []
+
+    def test_uneven_gpu_blocks_warn(self, sys_config):
+        """6 GPUs across 4 ranks is [0,1] [2,3] [4] [5]. LAMMPS Kokkos takes
+        one `-k on g N` for every rank and cannot express that."""
+        sys_config.GPUS_PER_NODE = 6
+        _, _, warnings = validate_resource_parameters(
+            ngpus=6, nnodes=1, ranks_per_node=4, system_config=sys_config)
+        assert any("do not divide evenly" in w for w in warnings)
+        assert any("2 rank(s) get 2 GPUs and the rest get 1" in w for w in warnings)
+
+    def test_an_even_split_does_not_warn(self, sys_config):
+        sys_config.GPUS_PER_NODE = 6
+        _, _, warnings = validate_resource_parameters(
+            ngpus=6, nnodes=1, ranks_per_node=3, system_config=sys_config)
+        assert warnings == []
+
+    def test_more_ranks_than_owned_cores_is_allowed_and_warns(self, sys_config):
+        params, _, warnings = validate_resource_parameters(
+            ngpus=0, nnodes=1, node_occupancy=0.25, ranks_per_node=40,
+            system_config=sys_config)
+        assert params['final_ranks_per_node'] == 40
+        assert any("40 ranks per node share 16 core(s)" in w for w in warnings)
+
+    def test_the_core_bound_follows_occupancy_not_the_whole_node(self, sys_config):
+        """`-o 0.25 -rpn 40` owns 16 of 64 cores. The old check compared
+        against 64 and passed it silently."""
+        _, _, warnings = validate_resource_parameters(
+            ngpus=0, nnodes=1, node_occupancy=0.25, ranks_per_node=16,
+            system_config=sys_config)
+        assert warnings == []
+
+    def test_hardware_threads_are_still_a_hard_ceiling(self, sys_config):
+        from parslbox.commands.helpers.job_info_validator import ValidationError
+        with pytest.raises(ValidationError, match="exceeds usable cores per node"):
+            validate_resource_parameters(
+                ngpus=1, nnodes=1, ranks_per_node=65, system_config=sys_config)
+
+    def test_the_ceiling_excludes_reserved_cores(self, sys_config):
+        from parslbox.commands.helpers.job_info_validator import ValidationError
+        sys_config.EXCLUDE_CORES = [0, 1, 2, 3]
+        with pytest.raises(ValidationError, match=r"exceeds usable cores per node \(60\)"):
+            validate_resource_parameters(
+                ngpus=1, nnodes=1, ranks_per_node=61, system_config=sys_config)
+
+    def test_a_gpu_job_is_no_longer_capped_at_the_gpu_count(self, sys_config):
+        """Regression: this raised 'exceeds GPUs per node (4)'."""
+        params, _, _ = validate_resource_parameters(
+            ngpus=1, nnodes=1, ranks_per_node=64, system_config=sys_config)
+        assert params['final_ranks_per_node'] == 64
+
+    def _spec_string(self, sys_config, **kwargs):
+        from parslbox.commands.helpers.job_info_validator import (
+            calculate_resource_display_info,
+        )
+        params, _, _ = validate_resource_parameters(system_config=sys_config, **kwargs)
+        return calculate_resource_display_info(params, sys_config)['resource_spec_string']
+
+    def test_the_add_summary_counts_ranks_not_gpus(self, sys_config):
+        """It derived total ranks from `ngpus`, so a shared-GPU job was
+        announced as `r:1` while `pbx ls` showed the same job as `r:8`."""
+        assert self._spec_string(
+            sys_config, ngpus=1, nnodes=1, ranks_per_node=8) == "n:1-r:8-g:1-nocc:NA"
+
+    def test_the_add_summary_matches_what_ls_renders(self, sys_config):
+        """`pbx ls` builds the same string from num_nodes * ranks_per_node."""
+        for ngpus, nnodes, ranks in [(1, 1, 8), (4, 1, 4), (4, 1, 2), (8, 2, 6), (8, 2, 9)]:
+            params, _, _ = validate_resource_parameters(
+                ngpus=ngpus, nnodes=nnodes, ranks_per_node=ranks,
+                system_config=sys_config)
+            ls_style = (f"n:{params['final_num_nodes']}"
+                        f"-r:{params['final_num_nodes'] * params['final_ranks_per_node']}"
+                        f"-g:{params['final_ngpus']}-nocc:NA")
+            assert self._spec_string(
+                sys_config, ngpus=ngpus, nnodes=nnodes,
+                ranks_per_node=ranks) == ls_style
+
+    def test_one_rank_per_gpu_renders_as_before(self, sys_config):
+        assert self._spec_string(
+            sys_config, ngpus=2, nnodes=1, ranks_per_node=2) == "n:1-r:2-g:2-nocc:NA"
 
 
 class TestAddCommand:
@@ -649,13 +795,17 @@ class TestAddCommand:
             
             assert result.exit_code == 0
             assert "Single-node job on GPU system: auto-assigned 4 GPUs" in result.stdout
-            assert "Resource specification: n:1-r:4-g:4-nocc:NA" in result.stdout
+            # Python is 1 rank per node owning all 4 GPUs, so r:1. This read
+            # r:4 while the display derived ranks from the GPU count -- which
+            # disagreed with `pbx ls` on the very same job.
+            assert "Resource specification: n:1-r:1-g:4-nocc:NA" in result.stdout
 
             # Verify default values - GPU system auto-assigns GPUs
             jobs = database.get_jobs(temp_db)
             job = jobs[0]
             assert job['num_nodes'] == 1
             assert job['ngpus'] == 4
+            assert job['ranks_per_node'] == 1
             assert job['node_occupancy'] == 1.0
             assert job['status'] == 'Ready'
 
@@ -792,3 +942,108 @@ class TestAddCommand:
             ])
         assert result.exit_code != 0
         assert "Invalid parent job IDs" in result.stdout
+
+
+class TestGpuRequestOnACpuOnlySystem:
+    """`GPUS_PER_NODE == 0` (crux, perlmutter-cpu, lcrc-improv). The GPU
+    availability check only ran for single-node requests, so a multi-node GPU
+    request fell past it: it was accepted with ranks_per_node=0, which launches
+    `mpiexec -n 0`, and once the sharing warning started dividing by that count
+    it raised a raw ZeroDivisionError that `pbx add` does not catch."""
+
+    @pytest.fixture
+    def cpu_only(self):
+        mock = MagicMock()
+        mock.GPUS_PER_NODE = 0
+        mock.CORES_PER_NODE = 128
+        mock.EXCLUDE_CORES = None
+        return mock
+
+    @pytest.mark.parametrize("kwargs", [
+        dict(ngpus=2, nnodes=1),
+        dict(ngpus=2, nnodes=2),
+        dict(ngpus=2, nnodes=2, ranks_per_node=4),
+        dict(ngpus=1, nnodes=3, ranks_per_node=1),
+    ])
+    def test_it_is_rejected_for_every_node_count(self, cpu_only, kwargs):
+        from parslbox.commands.helpers.job_info_validator import ValidationError
+        with pytest.raises(ValidationError, match="this system has no GPUs"):
+            validate_resource_parameters(system_config=cpu_only, **kwargs)
+
+    def test_cpu_jobs_on_the_same_system_are_unaffected(self, cpu_only):
+        params, _, warnings = validate_resource_parameters(
+            node_occupancy=0.5, nnodes=1, ranks_per_node=40,
+            system_config=cpu_only)
+        assert params['final_ranks_per_node'] == 40
+        assert warnings == []          # 40 ranks fit in the 64 cores it owns
+
+    def test_cpu_sharing_still_warns_on_the_same_system(self, cpu_only):
+        _, _, warnings = validate_resource_parameters(
+            node_occupancy=0.5, nnodes=1, ranks_per_node=100,
+            system_config=cpu_only)
+        assert any("100 ranks per node share 64 core(s)" in w for w in warnings)
+
+
+_CLI_FLAG = re.compile(r"--[a-zA-Z]")
+
+
+class TestErrorTextReadsTheSameFromEveryLayer:
+    """`validate_resource_parameters` raises into the CLI, the API and the MCP
+    tool alike, so its messages must not spell parameters as CLI flags: the
+    MCP caller's field is `ranks_per_node` and there is no `--ranks-per-node`
+    anywhere in its schema. Nothing pinned this wording, so it could drift
+    back without failing anything."""
+
+    @pytest.fixture
+    def sys_config(self):
+        mock = MagicMock()
+        mock.GPUS_PER_NODE = 4
+        mock.CORES_PER_NODE = 64
+        mock.EXCLUDE_CORES = None
+        return mock
+
+    def test_the_ceiling_error_names_the_parameter_not_the_flag(self, sys_config):
+        from parslbox.commands.helpers.job_info_validator import ValidationError
+        with pytest.raises(ValidationError) as exc:
+            validate_resource_parameters(ngpus=4, nnodes=1, ranks_per_node=500,
+                                         system_config=sys_config)
+        msg = str(exc.value)
+        assert msg == "ranks_per_node (500) exceeds usable cores per node (64)"
+        assert not _CLI_FLAG.search(msg)
+
+    def test_the_positive_integer_error_names_the_parameter_not_the_flag(self, sys_config):
+        from parslbox.commands.helpers.job_info_validator import ValidationError
+        with pytest.raises(ValidationError) as exc:
+            validate_resource_parameters(ngpus=4, nnodes=1, ranks_per_node=0,
+                                         system_config=sys_config)
+        assert not _CLI_FLAG.search(str(exc.value))
+        assert "ranks_per_node" in str(exc.value)
+
+    def test_mps_is_only_suggested_on_nvidia(self):
+        """MPS is an NVIDIA service. Aurora is Intel, and the sharing warning
+        was telling its users to enable something that does not exist there."""
+        nvidia = MagicMock(GPUS_PER_NODE=4, CORES_PER_NODE=64,
+                           EXCLUDE_CORES=None, GPU_TYPE="cuda")
+        intel = MagicMock(GPUS_PER_NODE=4, CORES_PER_NODE=64,
+                          EXCLUDE_CORES=None, GPU_TYPE="intel")
+        _, _, nv = validate_resource_parameters(
+            ngpus=2, nnodes=1, ranks_per_node=8, system_config=nvidia)
+        _, _, it = validate_resource_parameters(
+            ngpus=2, nnodes=1, ranks_per_node=8, system_config=intel)
+        assert any("MPS" in w for w in nv)
+        assert not any("MPS" in w for w in it)
+        assert not any("CUDA" in w for w in it)
+        # both still say the ranks share
+        assert all(any("share 2 GPU(s)" in w for w in ws) for ws in (nv, it))
+
+    def test_no_warning_carries_cli_flag_syntax(self, sys_config):
+        """The warnings go into the API's msg_log and the MCP response string."""
+        for kwargs in (dict(ngpus=1, nnodes=1, ranks_per_node=8),
+                       dict(ngpus=4, nnodes=1, ranks_per_node=3),
+                       dict(node_occupancy=0.25, nnodes=1, ranks_per_node=40)):
+            _, _, warnings = validate_resource_parameters(
+                system_config=sys_config, **kwargs)
+            for w in warnings:
+                # `--` also appears as prose punctuation; only a dash pair
+                # glued to a word is flag syntax.
+                assert not _CLI_FLAG.search(w), (kwargs, w)

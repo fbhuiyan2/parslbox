@@ -270,7 +270,9 @@ class ParslBox:
             ngpus: Number of GPUs required (default: 0)
             nnodes: Number of nodes required (default: 1)
             node_occupancy: Node occupancy fraction for CPU-only jobs (0.0-1.0)
-            ranks_per_node: Number of MPI ranks per node
+            ranks_per_node: Number of MPI ranks per node. May exceed the job's
+                GPUs or cores; ranks then share them and a warning is returned
+                in msg_log['warnings']
             mpi_opts: Additional MPI options
             env_file: Path to environment setup file
             parents: List of parent job IDs
@@ -397,7 +399,9 @@ class ParslBox:
             env_file: New environment file path
             nnodes: New number of nodes
             node_occupancy: New node occupancy
-            ranks_per_node: New ranks per node
+            ranks_per_node: New ranks per node. May exceed the job's GPUs or
+                cores; ranks then share them. Unlike add_jobs, no upper bound
+                is checked and no sharing warning is returned
             add_deps: Parent job IDs to add
             rm_deps: Parent job IDs to remove
             app_args: Extra arguments appended to the application command; rebuilds

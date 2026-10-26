@@ -327,7 +327,7 @@ class TestUpdateJobsValidation:
 
     def test_validation_invalid_ranks_per_node(self, temp_db):
         """Test validation for invalid ranks per node."""
-        with pytest.raises(ValidationError, match="--ranks-per-node must be a positive integer"):
+        with pytest.raises(ValidationError, match="ranks_per_node must be a positive integer"):
             update_jobs(job_ids=[1], ranks_per_node=0, db_path=temp_db)
 
     def test_validation_gpu_cpu_conflict(self, temp_db):

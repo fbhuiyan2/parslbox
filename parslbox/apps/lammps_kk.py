@@ -37,10 +37,20 @@ class LammpsKokkosApp(AppBase):
         total_gpus = kwargs['total_gpus']
         app_config = kwargs['app_config']
         
-        # Determine how many GPUs each rank sees for KOKKOS -k on g N:
+        # `-k on g N` is GPUs per NODE, not per rank. Kokkos picks exactly one
+        # device per MPI rank -- src/KOKKOS/kokkos.cpp does
+        # `device = local_rank % ngpus; args.set_device_id(device)` -- so N only
+        # sets the modulus of that rank->device map. A rank can never drive more
+        # than one GPU, which is why asking for more GPUs than ranks leaves the
+        # surplus idle no matter what N is. Verified against the LAMMPS Kokkos
+        # docs and source, Oct 2026.
+        #
+        # N must therefore not exceed the smallest number of devices any rank
+        # can see, or a rank indexes past its own mask and lands on a device
+        # that is not there:
         # - map_gpu: 1 GPU per rank (srun binds each rank to 1 GPU)
         # - mask_gpu: multi-GPU per rank (e.g., mask_gpu:0x3,0xc → 2 GPUs/rank)
-        # - wrapper script: 1 GPU per rank via CUDA_VISIBLE_DEVICES
+        # - wrapper script: each rank sees only its own CUDA_VISIBLE_DEVICES
         # - none/absent: all GPUs visible to each rank
         from parslbox.system_configs.loader import get_system_config
         config_name = kwargs['config_name']
@@ -51,7 +61,12 @@ class LammpsKokkosApp(AppBase):
             mpi_commands = kwargs.get('mpi_commands', {})
             ranks_per_node = mpi_commands.get('PBX_RANKS_PER_NODE')
             if ranks_per_node:
-                lammps_gpu_count = min(total_gpus, gpus_per_node) // int(ranks_per_node)
+                # Defensive: the floor would reach 0 if ranks ever outnumbered
+                # GPUs here. They cannot -- mask_gpu is only emitted when some
+                # rank holds more than one GPU -- but `-k on g 0` makes Kokkos
+                # abort with "compiled with GPU-enabled backend but no GPUs are
+                # requested", so the guard is cheap insurance.
+                lammps_gpu_count = max(1, min(total_gpus, gpus_per_node) // int(ranks_per_node))
             else:
                 lammps_gpu_count = min(total_gpus, gpus_per_node)
         else:

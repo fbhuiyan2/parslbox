@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### Ranks may outnumber the job's GPUs or cores
+- **Asking for more ranks than resources silently produced ranks with nothing assigned.** 0.9.3 made `ranks_per_node` configurable and claimed to remove the 1-rank-per-GPU limitation, but only the *default* was removed — the allocator still handed resources out by slicing a list with the rank index, so ranks past the resource count got an empty GPU list and an empty core list. The job still launched: those ranks got no `ZE_AFFINITY_MASK`/`CUDA_VISIBLE_DEVICES` block in the wrapper (so they saw every GPU on the node), no line in the rankfile, and no CPU binding. Affected `-g 1 -rpn 6` (5 of 6 ranks bare), `-o 0.25 -rpn 200` (174 of 200 ranks with no cores), and `-g 6 -rpn 4` (GPUs 4 and 5 held by the job but mapped to no rank, so unusable by anything else).
+- **`--ranks-per-node` was bounded by node capacity, not by the job's allocation.** GPU jobs were checked against `GPUS_PER_NODE` and CPU jobs against `CORES_PER_NODE`, neither of which is what the job owns. That rejected legitimate sharing (`-g 1 -rpn 8` on a 6-GPU node) while letting the broken cases through.
+- New `resource_manager/rank_distribution.py` is the single definition of the split, used by both the scheduler and the `pbx info` command preview — the preview kept its own copy and was fabricating GPU ids the node does not have.
+- **Ranks sharing a GPU is now supported** (LAMMPS and GROMACS both want it): ranks round-robin over the allocated GPUs and the ranks on a GPU share its CPU cores. CPU-only jobs with more ranks than cores give every rank the whole owned set rather than pinning each to one shared core, so the kernel can balance them; the set is still only what the job owns, so concurrent jobs stay isolated. Whether that reaches the launch line depends on `cpu_bind_method`: `rankfile`, `list` and srun's `mask_cpu` can express a set, while `depth`/`cores`/`threads` carry a single number and fall back to one exclusive core per rank, so the ranks stack onto the low-numbered cores (crux).
+- `ranks_per_node` is now capped only by hardware threads (`CORES_PER_NODE - EXCLUDE_CORES`). Exceeding the job's own GPUs or cores warns at `pbx add` time instead of failing.
+- `ResourceAssignment.get_total_gpus()` counted a shared GPU once per rank; it now counts distinct devices, deduplicated per node (GPU ids restart at 0 on each node). It feeds every app's `total_gpus` argument.
+- `cores_per_rank` (which becomes `--depth` / `--cpus-per-task`) was read off rank 0 and extrapolated; with shared core blocks that over-claimed by the sharing factor. It is now the node's distinct core count divided by ranks, capped at the smallest rank's block — one number has to be a claim the shortest rank can meet, and an uneven split leaves ranks with different block sizes.
+- Placement is otherwise unchanged: CPU core blocks are bit-identical to before for every (cores, ranks) pair, and GPU blocks are identical whenever the GPU count divides evenly by the rank count. The non-divisible case necessarily changes — that is the stranding fix — so `-g 6 -rpn 4` goes from `[0],[1],[2],[3]` (GPUs 4 and 5 held but unused) to `[0,1],[2,3],[4],[5]`. `--depth` / `--cpus-per-task` likewise change for non-divisible core counts, where the old rank-0 value over-claimed (16 cores across 3 ranks reported 6 each, i.e. 18 of 16).
+- Uneven GPU blocks now warn at `pbx add`: an app that takes one GPU count for every rank, such as LAMMPS Kokkos `-k on g`, cannot express `[0,1],[2,3],[4],[5]`.
+- srun has no `list` CPU binding — its only per-task forms are `map_cpu` (one cpu id per task) and `mask_cpu` (one bitmask per task). `cpu_bind_method: list`, and `rankfile` which falls through to it, flattened each rank's whole core set into `map_cpu`, so SLURM read the second core of rank 0's block as rank 1's only CPU and every rank piled onto the first few cores. Both now emit `mask_cpu`. No shipped srun config selects either (they all use `cores`), but copying a `rankfile` system config onto a SLURM machine reached it.
+- `--cpu-bind=mask_cpu` was built by walking every node, but SLURM applies one per-node mapping to all nodes, so a multi-node list came out a multiple too long. Now built from node 0, matching `--gpu-bind`.
+- `cores_per_gpu` floored to 0 on a node with fewer usable cores than GPUs, handing every rank an empty core list; such a config now fails instead of launching unbound ranks.
+- `pbx add` reports total ranks as `nodes * ranks_per_node` in its summary; GPU jobs showed the GPU count there, so one job read `r:1` from `pbx add` and `r:8` from `pbx ls`.
+
 #### `pbx run` — one DB write per job during completion drain
 - **The status buffer never batched on the completion side.** The orchestrator loop handled exactly one finished future per pass and then flushed, so every flush carried a single row. `database.update_jobs` is one `UPDATE ... WHERE job_id IN (...)` — one connection, one commit — regardless of how many IDs it carries, so the cost is per *write*, not per row. A 24,000-job run performed 24,000 connection-opens and WAL commits instead of a handful. Dispatch was unaffected (it buffers in bulk and flushed correctly).
 - `schedule_helpers.drain_completions` now processes every future that has already finished before returning to dispatch, so one flush carries the whole batch. Batch size self-tunes: slower flushes let more completions accumulate, which shrinks the flush count. Falls back to the original bounded blocking wait when nothing is ready, so walltime is still re-checked at the poll cadence.
@@ -215,11 +230,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 #### Configurable `ranks_per_node` for GPU Jobs
-- **Removed hardcoded 1-rank-per-GPU limitation.** `ranks_per_node` is now configurable via `--ranks-per-node` at job submission time
+- **Removed hardcoded 1-rank-per-GPU limitation.** `ranks_per_node` is now configurable via `--ranks-per-node` at job submission time *(only the default was removed — the allocator still assumed the rule until Unreleased; see "Ranks may outnumber the job's GPUs or cores")*
 - **Per-app defaults via `get_default_ranks_per_node()` classmethod:**
   - LAMMPS/VASP/ORCA: 1 rank per GPU (preserves existing behavior)
   - Python/Julia: 1 rank per node
-- **Validation:** `ranks_per_node` must not exceed `GPUS_PER_NODE` (GPU jobs) or `CORES_PER_NODE` (CPU jobs)
+- **Validation:** `ranks_per_node` must not exceed `GPUS_PER_NODE` (GPU jobs) or `CORES_PER_NODE` (CPU jobs) *(superseded in Unreleased — the bound is now usable cores per node for both, and exceeding the job's own GPUs/cores warns instead of failing)*
 - **Multi-GPU per rank support:** `--gpu-bind=mask_gpu` used when ranks < GPUs (e.g., 2 ranks with 2 GPUs each)
 
 #### Python and Julia Now Use MPI Launch

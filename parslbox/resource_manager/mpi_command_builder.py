@@ -197,10 +197,24 @@ class MPICommandBuilder:
         # which correctly handles sub-node GPU jobs (e.g., 1 GPU on a 2-GPU node
         # gets 32 cores, not 64). Fall back to a simple calculation when no
         # per-rank assignment exists.
-        # Note: this assumes all ranks have the same number of cores.
-        rank0_cores = assignment.get_cpu_assignments_for_rank(0)
-        if rank0_cores:
-            cores_per_rank = len(rank0_cores)
+        # Count DISTINCT cores on the node: ranks sharing a GPU are each given
+        # that GPU's whole core block, so per-rank lengths overlap and summing
+        # them (or reading rank 0's) would claim more cores than exist. Flags
+        # like --depth and --cpus-per-task mean exclusive cores per rank.
+        # An uneven split also leaves ranks with different block sizes, and the
+        # flag is one number for all of them, so it must not exceed the
+        # smallest block or the shortest rank is told it owns cores it does not.
+        node_rank_cores = [
+            assignment.get_cpu_assignments_for_rank(rank)
+            for rank in assignment.get_ranks_for_node(0)
+        ]
+        node_cores = {core for cores in node_rank_cores for core in cores}
+        if node_cores:
+            if ranks_per_node > 0:
+                smallest_block = min(len(cores) for cores in node_rank_cores if cores)
+                cores_per_rank = max(1, min(len(node_cores) // ranks_per_node, smallest_block))
+            else:
+                cores_per_rank = len(node_cores)
         else:
             excluded_cores = getattr(self.system_config, 'EXCLUDE_CORES', None) or []
             effective_cores = self.system_config.CORES_PER_NODE - len(excluded_cores)
@@ -343,29 +357,14 @@ class MPICommandBuilder:
                     extra.append(f"--gpus-per-node={gpus_per_node}")
                 extra.extend(self._build_srun_gpu_bind(assignment))
             else:
-                # Full/multi-node: all GPUs on each node are used
+                # Full/multi-node: all GPUs on each node are used. Derive the
+                # binding from the assignment rather than recomputing it --
+                # `gpus_per_node // ranks_per_node` drops the remainder, so
+                # 6 GPUs across 4 ranks left GPUs 4 and 5 bound to no task
+                # while the job still held them.
                 if gpus_per_node > 0:
-                    ranks_per_node = job_spec.ranks_per_node
-                    if ranks_per_node >= gpus_per_node:
-                        # 1 GPU per rank or fewer: use map_gpu
-                        gpu_map = ",".join(str(i) for i in range(gpus_per_node))
-                        extra.extend([
-                            f"--gpus-per-node={gpus_per_node}",
-                            f"--gpu-bind=map_gpu:{gpu_map}",
-                        ])
-                    else:
-                        # Multi-GPU per rank: use mask_gpu
-                        gpus_per_rank = gpus_per_node // ranks_per_node
-                        masks = []
-                        for r in range(ranks_per_node):
-                            mask = 0
-                            for g in range(r * gpus_per_rank, (r + 1) * gpus_per_rank):
-                                mask |= (1 << g)
-                            masks.append(hex(mask))
-                        extra.extend([
-                            f"--gpus-per-node={gpus_per_node}",
-                            f"--gpu-bind=mask_gpu:{','.join(masks)}",
-                        ])
+                    extra.append(f"--gpus-per-node={gpus_per_node}")
+                    extra.extend(self._build_srun_gpu_bind(assignment))
 
         # CPU binding: sub-node srun uses mask_cpu for isolation between
         # concurrent steps; full/multi-node uses the configured method.
@@ -455,8 +454,8 @@ class MPICommandBuilder:
             return ["--rankfile", rankfile_path]
         
         elif backend == MPIBackend.SRUN:
-            # SRUN doesn't have native rankfile, fall back to cpu-bind map
-            logger.info("SRUN doesn't support rankfile, using cpu-bind map instead")
+            # SRUN has no rankfile; the equivalent is a per-task CPU mask.
+            logger.info("SRUN doesn't support rankfile, using --cpu-bind=mask_cpu instead")
             return self._build_list_binding(assignment, job_spec, job_path)
         
         return []
@@ -496,18 +495,13 @@ class MPICommandBuilder:
             return []
         
         elif backend == MPIBackend.SRUN:
-            # Build cpu-bind map for SRUN
-            cpu_map = []
-            for node_idx in range(len(assignment.node_ids)):
-                node_ranks = assignment.get_ranks_for_node(node_idx)
-                for rank in node_ranks:
-                    cpu_cores = assignment.get_cpu_assignments_for_rank(rank)
-                    if cpu_cores:
-                        cpu_map.append(",".join(map(str, cpu_cores)))
-            
-            if cpu_map:
-                return [f"--cpu-bind=map_cpu:{','.join(cpu_map)}"]
-            return []
+            # srun has no "list" binding: its only per-task CPU forms are
+            # map_cpu (ONE cpu id per task) and mask_cpu (one bitmask per
+            # task). This used to flatten every rank's whole core set into
+            # map_cpu, so SLURM read core 1 -- the second core of rank 0's
+            # block -- as rank 1's single CPU, piling every rank onto the
+            # first few cores and leaving the rest of the job's cores idle.
+            return self._build_srun_mask_cpu(assignment)
         
         return []
     
@@ -539,17 +533,20 @@ class MPICommandBuilder:
         return ["--cpus-per-task", str(cpus_per_task), f"--cpu-bind={method}"]
 
     def _build_srun_mask_cpu(self, assignment: 'ResourceAssignment') -> list:
-        """Build --cpu-bind=mask_cpu for srun sub-node jobs.
+        """Build --cpu-bind=mask_cpu for srun.
 
         Computes a per-rank hex bitmask from pbx-assigned core IDs so
         concurrent srun steps get non-overlapping CPU sets.
         """
+        # srun(1) on mask_cpu: "The mapping is specified for a node and
+        # identical mapping is applied to the tasks on every node." So the
+        # list is indexed by local task id and node 0 is the whole map;
+        # appending every node's ranks would make it a multiple too long.
         masks = []
-        for node_idx in range(len(assignment.node_ids)):
-            for rank in assignment.get_ranks_for_node(node_idx):
-                cores = assignment.get_cpu_assignments_for_rank(rank)
-                if cores:
-                    masks.append(cores_to_hex_mask(cores))
+        for rank in assignment.get_ranks_for_node(0):
+            cores = assignment.get_cpu_assignments_for_rank(rank)
+            if cores:
+                masks.append(cores_to_hex_mask(cores))
         if masks:
             return [f"--cpu-bind=mask_cpu:{','.join(masks)}"]
         return []
@@ -557,12 +554,14 @@ class MPICommandBuilder:
     def _build_srun_gpu_bind(self, assignment: 'ResourceAssignment') -> list:
         """Build --gpu-bind flags for srun. Uses map_gpu for 1 GPU per rank,
         mask_gpu for multi-GPU per rank."""
+        # SLURM indexes the map by local task id, so it describes one node.
+        # Every node carries the same per-rank layout, so node 0 is the map;
+        # walking all nodes would repeat it once per node.
         per_rank_gpus = []
-        for node_idx in range(len(assignment.node_ids)):
-            for rank in assignment.get_ranks_for_node(node_idx):
-                gpus = assignment.get_gpu_assignments_for_rank(rank)
-                if gpus:
-                    per_rank_gpus.append(gpus)
+        for rank in assignment.get_ranks_for_node(0):
+            gpus = assignment.get_gpu_assignments_for_rank(rank)
+            if gpus:
+                per_rank_gpus.append(gpus)
 
         if not per_rank_gpus:
             return []
