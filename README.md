@@ -168,21 +168,21 @@ Built-in: **lammps-kk**, **vasp**, **orca**, **python**, **julia**. Custom apps 
 
 ## Supported HPC Systems
 
+ParslBox ships with 26 system configs covering PBS and SLURM machines. A few prominent ones:
+
 | System | Scheduler | GPUs/Node | GPU Type | Cores/Node | MPI Backend |
 |--------|-----------|-----------|----------|------------|-------------|
-| **polaris** | PBS | 4 | NVIDIA A100 | 64 | MPICH |
 | **aurora-gpu** | PBS | 6 | Intel Max 1550 | 208 | MPICH |
 | **aurora-tile** | PBS | 12 (6x2 tiles) | Intel Max 1550 | 208 | MPICH |
-| **sophia** | PBS | 8 | NVIDIA A100 (DGX) | 128 | OpenMPI |
-| **crux** | PBS | 0 (CPU-only) | — | 256 | MPICH |
-| **lcrc-swing** | PBS | 8 | NVIDIA A100 | 64 | OpenMPI |
-| **lcrc-improv** | PBS | 0 (CPU-only) | — | 128 | OpenMPI |
-| **pinnacles-cenvalarc** | SLURM | 0 or 2 (auto-detected) | NVIDIA L40S / H200 NVL | 64 | srun |
+| **polaris** | PBS | 4 | NVIDIA A100 | 64 | MPICH |
 | **perlmutter-gpu** | SLURM | 4 | NVIDIA A100 | 128 | srun |
 | **perlmutter-cpu** | SLURM | 0 (CPU-only) | — | 128 | srun |
-| **perlmutter-gpu-srun** | SLURM | 4 | NVIDIA A100 | 128 | srun |
+| **kestrel-gpu** | SLURM | 4 | NVIDIA H100 | 128 | srun |
+| **kestrel-cpu** | SLURM | 0 (CPU-only) | — | 104 | srun |
 
-Each system defines its own MPI defaults, scheduler templates, and resource detection methods. New systems can be added by creating a config class inheriting from `BaseSystemConfig`.
+The full list, notes on which configs have not yet been run on their systems, and how to add your own: [`docs/hpc-systems.md`](docs/hpc-systems.md). Adding a system is a small change: one config module plus one entry in the loader registry.
+
+Each system defines its own MPI defaults, scheduler templates, and resource detection methods. New systems are config classes inheriting from `SystemConfig`.
 
 **Launcher placement:** most configs use `SimpleLauncher`, which concentrates all workers on the head node. For very large runs (above ~10k workers) head-node RAM becomes the scaling ceiling, so some configs instead place one Parsl manager per compute node (workers distributed across nodes): `perlmutter-gpu-srun` is a `SrunLauncher` variant of `perlmutter-gpu` for this purpose, and `aurora-tile` uses `MpiExecLauncher` per-node placement by default.
 

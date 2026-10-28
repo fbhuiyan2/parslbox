@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### New SLURM system configs
+- **`kestrel-cpu`, `kestrel-gpu`** (NLR Kestrel), **`delta-cpu`, `delta-gpu`, `delta-h200`** (NCSA Delta), **`anvil-cpu`, `anvil-gpu`, `anvil-ai`** (Purdue Anvil), **`expanse-cpu`, `expanse-gpu`** (SDSC Expanse), **`midway3-cpu`, `midway3-gpu`** (UChicago RCC Midway3), **`bridges2-cpu`, `bridges2-v100`, `bridges2-h100`** (PSC Bridges-2). All follow the `perlmutter-*` pattern: SLURM, `srun` backend, `cpu_bind_method: cores`, no CPU affinity. GPU counts and types are not hardcoded in the default scheduler options, because these sites share nodes; request them with `--sched-opts` (e.g. `#SBATCH --gpus=2` on Kestrel, `#SBATCH --gpus=h100-80:4` on Bridges-2, `#SBATCH --constraint=v100` on Midway3).
+- Written from each site's public documentation and **not yet run on the systems**. GPU worker counts come from the GPUs the job actually holds (never above `GPUS_PER_NODE * nodes`), so a sub-node allocation is not given workers for GPUs it lacks; sub-node `srun` itself is still unverified (see `resource_manager/README.md`).
+
 ### Fixed
 
 #### Ranks may outnumber the job's GPUs or cores

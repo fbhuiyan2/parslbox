@@ -14,6 +14,21 @@ from parslbox.system_configs.pinnacles_cenvalarc import PinnaclesCenvalarcConfig
 from parslbox.system_configs.perlmutter_gpu import PerlmutterGpuConfig
 from parslbox.system_configs.perlmutter_cpu import PerlmutterCpuConfig
 from parslbox.system_configs.perlmutter_gpu_srun import PerlmutterGpuSrunConfig
+from parslbox.system_configs.kestrel_cpu import KestrelCpuConfig
+from parslbox.system_configs.kestrel_gpu import KestrelGpuConfig
+from parslbox.system_configs.delta_cpu import DeltaCpuConfig
+from parslbox.system_configs.delta_gpu import DeltaGpuConfig
+from parslbox.system_configs.delta_h200 import DeltaH200Config
+from parslbox.system_configs.anvil_cpu import AnvilCpuConfig
+from parslbox.system_configs.anvil_gpu import AnvilGpuConfig
+from parslbox.system_configs.anvil_ai import AnvilAiConfig
+from parslbox.system_configs.expanse_cpu import ExpanseCpuConfig
+from parslbox.system_configs.expanse_gpu import ExpanseGpuConfig
+from parslbox.system_configs.midway3_cpu import Midway3CpuConfig
+from parslbox.system_configs.midway3_gpu import Midway3GpuConfig
+from parslbox.system_configs.bridges2_cpu import Bridges2CpuConfig
+from parslbox.system_configs.bridges2_v100 import Bridges2V100Config
+from parslbox.system_configs.bridges2_h100 import Bridges2H100Config
 
 # Create a dictionary that maps the config name to its configuration class
 CONFIG_FACTORIES = {
@@ -30,6 +45,21 @@ CONFIG_FACTORIES = {
     # srun launcher variant — distributes workers across compute nodes instead of
     # concentrating them on the head node. Use for runs > ~10k workers.
     "perlmutter-gpu-srun": PerlmutterGpuSrunConfig,
+    "kestrel-cpu": KestrelCpuConfig,
+    "kestrel-gpu": KestrelGpuConfig,
+    "delta-cpu": DeltaCpuConfig,
+    "delta-gpu": DeltaGpuConfig,
+    "delta-h200": DeltaH200Config,
+    "anvil-cpu": AnvilCpuConfig,
+    "anvil-gpu": AnvilGpuConfig,
+    "anvil-ai": AnvilAiConfig,
+    "expanse-cpu": ExpanseCpuConfig,
+    "expanse-gpu": ExpanseGpuConfig,
+    "midway3-cpu": Midway3CpuConfig,
+    "midway3-gpu": Midway3GpuConfig,
+    "bridges2-cpu": Bridges2CpuConfig,
+    "bridges2-v100": Bridges2V100Config,
+    "bridges2-h100": Bridges2H100Config,
     # To add a new system, create its module and add it here.
 }
 

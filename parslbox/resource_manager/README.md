@@ -141,6 +141,23 @@ MPI flags are built modularly and then optionally filtered/extended by overrides
 - Sub-node jobs: `--overlap` for concurrent step execution
 - No GPU wrapper scripts — SLURM handles GPU binding natively
 
+**SLURM sub-node allocations (untested).** On Perlmutter the batch job always
+holds the whole node, and three things in pbx rely on that:
+- the sub-node srun GPU path adds `--gpus-per-node=<GPUS_PER_NODE>`, a system
+  constant;
+- cores are numbered 0 up to `CORES_PER_NODE`, whatever cores the job was
+  actually given (`ResourceManager._initialize_nodes`);
+- CPU configs start `MAX_WORKERS_PER_NODE * nodes` workers regardless of the
+  cores held.
+
+On a shared-node system (Kestrel, Anvil, Delta, Expanse, Bridges-2, Midway3;
+this covers the GPU partitions and the shared CPU partitions such as
+Kestrel/Anvil/Expanse `shared` and Bridges-2 `RM-shared`) a batch job may hold
+fewer GPUs and a different set of cores than the node has, so these may not
+match what SLURM gave the job. Whether `map_gpu` ids are relative to the job's
+GPUs also depends on the site's `ConstrainDevices` setting. Use whole-node
+allocations until this has been checked on a real system.
+
 ## Overrides (Minimal and Intuitive)
 
 Apps may provide simple overrides in `config.yaml` to disable or add flags. If no overrides are present, defaults apply.
