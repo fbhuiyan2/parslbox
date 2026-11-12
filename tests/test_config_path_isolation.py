@@ -137,9 +137,7 @@ class TestRelativeModulePaths:
 class TestDefaultsUnchanged:
     def test_no_config_path_uses_the_process_global(self, tmp_path, ambient_config):
         """CLI and pbx run pass nothing and must keep the old behaviour."""
-        assert app_registry.get_registered_apps() == [
-            "lammps-kk", "vasp", "python", "julia", "orca",
-        ]
+        assert app_registry.get_registered_apps() == list(app_registry.APP_FACTORY)
 
     def test_builtins_resolve_without_touching_config(self, tmp_path):
         assert app_registry.get_app_class("lammps-kk").__name__ == "LammpsKokkosApp"

@@ -14,6 +14,9 @@ from parslbox.apps.vasp import VaspApp
 from parslbox.apps.python import PythonApp
 from parslbox.apps.julia import JuliaApp
 from parslbox.apps.orca import OrcaApp
+from parslbox.apps.lammps import LammpsApp
+from parslbox.apps.gromacs import GromacsApp
+from parslbox.apps.qe import QeApp
 
 # Built-in application factory (always available, no loading needed)
 APP_FACTORY = {
@@ -22,6 +25,9 @@ APP_FACTORY = {
     "python": PythonApp,
     "julia": JuliaApp,
     "orca": OrcaApp,
+    "lammps": LammpsApp,
+    "gromacs": GromacsApp,
+    "qe": QeApp,
 }
 
 # Custom applications, loaded lazily and cached per config file. Keying by

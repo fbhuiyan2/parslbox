@@ -322,7 +322,7 @@ If the user does not know where the binary is, help them look — on the target
 machine:
 
 ```bash
-which vasp_std; command -v lmp orca
+which vasp_std; command -v lmp orca gmx_mpi pw.x
 module avail 2>&1 | grep -i vasp
 ls /soft /opt/software /usr/local/apps 2>/dev/null
 ```

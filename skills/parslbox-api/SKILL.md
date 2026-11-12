@@ -54,7 +54,7 @@ pbx = ParslBox(config_path="...", db_path="...")
 
 ## App identifiers
 
-`lammps-kk`, `vasp`, `orca`, `python`, `julia` — pass these as the `app` field on `add_jobs`. Custom apps register in `config.yaml`. See [docs/apps.md](docs/apps.md).
+`lammps-kk`, `vasp`, `orca`, `python`, `julia`, `lammps`, `gromacs`, `qe` — pass these as the `app` field on `add_jobs`. Custom apps register in `config.yaml`. See [docs/apps.md](docs/apps.md).
 
 ## Self-respawn chains
 

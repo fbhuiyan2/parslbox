@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### New apps: `gromacs`, `lammps`, `qe`
+- **`gromacs`** (`gmx_mpi mdrun` on a prebuilt `.tpr`, resumes from `<name>.cpt` so restart is re-run-as-is), **`lammps`** (plain LAMMPS: CPU, or the GPU package when the job holds GPUs) and **`qe`** (Quantum ESPRESSO `pw.x`). Details and flags in `docs/apps.md`.
+- Success checks do not trust the obvious marker: `pw.x` prints "JOB DONE." even when SCF did not converge or a time limit stopped it, and a GROMACS run stopped by `-maxh` or a signal still prints "Finished mdrun". Both are marked Failed.
+- Written from the programs' documentation and source; **not yet run on an HPC system**. A `custom_apps:` entry of yours named `lammps`, `gromacs` or `qe` is now shadowed by the built-in (logged warning), and jobs already in the database with that app name switch to the built-in command and success check; rename yours first.
+
 #### New SLURM system configs
 - **`kestrel-cpu`, `kestrel-gpu`** (NLR Kestrel), **`delta-cpu`, `delta-gpu`, `delta-h200`** (NCSA Delta), **`anvil-cpu`, `anvil-gpu`, `anvil-ai`** (Purdue Anvil), **`expanse-cpu`, `expanse-gpu`** (SDSC Expanse), **`midway3-cpu`, `midway3-gpu`** (UChicago RCC Midway3), **`bridges2-cpu`, `bridges2-v100`, `bridges2-h100`** (PSC Bridges-2). All follow the `perlmutter-*` pattern: SLURM, `srun` backend, `cpu_bind_method: cores`, no CPU affinity. GPU counts and types are not hardcoded in the default scheduler options, because these sites share nodes; request them with `--sched-opts` (e.g. `#SBATCH --gpus=2` on Kestrel, `#SBATCH --gpus=h100-80:4` on Bridges-2, `#SBATCH --constraint=v100` on Midway3).
 - Written from each site's public documentation and **not yet run on the systems**. GPU worker counts come from the GPUs the job actually holds (never above `GPUS_PER_NODE * nodes`), so a sub-node allocation is not given workers for GPUs it lacks; sub-node `srun` itself is still unverified (see `resource_manager/README.md`).

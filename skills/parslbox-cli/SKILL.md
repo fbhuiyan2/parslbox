@@ -53,7 +53,7 @@ A directory holding `job_database_pbx-local.db` **and** `.pbxlocal.yaml` is a *l
 
 ## App names
 
-`lammps-kk`, `vasp`, `orca`, `python`, `julia`. Custom apps register in `config.yaml`. See [docs/apps.md](docs/apps.md).
+`lammps-kk`, `vasp`, `orca`, `python`, `julia`, `lammps`, `gromacs`, `qe`. Custom apps register in `config.yaml`. See [docs/apps.md](docs/apps.md).
 
 ## Config & DB paths
 

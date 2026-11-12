@@ -103,7 +103,7 @@ ParslBox.available_systems()
 #   'gpus_per_node': 4, 'gpu_type': 'cuda', 'mpi_backend': 'mpich'}, ...]
 
 pbx.available_apps()
-# {'builtin': ['lammps-kk', 'vasp', 'python', 'julia', 'orca'], 'custom': []}
+# {'builtin': ['lammps-kk', 'vasp', 'python', 'julia', 'orca', 'lammps', 'gromacs', 'qe'], 'custom': []}
 ```
 
 `available_systems()` is a **staticmethod**: `ParslBox()` raises
@@ -117,7 +117,7 @@ first-time setup there is no config.yaml, so there is no instance to ask, and
 
 ```python
 ParslBox.builtin_apps()
-# ['lammps-kk', 'vasp', 'python', 'julia', 'orca']
+# ['lammps-kk', 'vasp', 'python', 'julia', 'orca', 'lammps', 'gromacs', 'qe']
 ```
 
 `available_apps()` is an instance method because `custom` comes from this

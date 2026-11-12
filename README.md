@@ -164,7 +164,7 @@ After submitting, qsub/sbatch list each app in the submission with the executabl
 
 ## Supported Applications
 
-Built-in: **lammps-kk**, **vasp**, **orca**, **python**, **julia**. Custom apps can be registered via `config.yaml`. Full details, per-app notes, status reporting protocol, and custom-app templates: [`docs/apps.md`](docs/apps.md).
+Built-in: **lammps-kk**, **lammps**, **gromacs**, **qe**, **vasp**, **orca**, **python**, **julia**. Custom apps can be registered via `config.yaml`. Full details, per-app notes, status reporting protocol, and custom-app templates: [`docs/apps.md`](docs/apps.md).
 
 ## Supported HPC Systems
 
