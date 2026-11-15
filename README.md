@@ -15,7 +15,13 @@ ParslBox provides a CLI (`pbx`), a Python API, and an MCP server for AI-agent in
 
 Check out a quick [demo!](https://www.youtube.com/watch?v=DOu2VRQMVRU)
 
-> **Using an AI agent?** Point it at [`AGENTS.md`](AGENTS.md). To install and configure parslbox from scratch, have it follow [`skills/pbx-setup/SKILL.md`](skills/pbx-setup/SKILL.md) — a playbook it can read straight from this clone, no installation needed first.
+## Using an AI agent?
+
+Ask it to setup ParslBox for you: 
+
+> Clone https://github.com/fbhuiyan2/parslbox.git and set it up for me.
+
+The agent reads [`AGENTS.md`](AGENTS.md). To install and configure parslbox from scratch, it will follow [`skills/pbx-setup/SKILL.md`](skills/pbx-setup/SKILL.md) — a playbook it can read straight from the repo.
 
 ## Highlights
 
