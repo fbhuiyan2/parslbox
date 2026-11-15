@@ -41,6 +41,7 @@ def add_jobs(
     status: str = "Ready",
     app_args: Optional[str] = None,
     db_path: Optional[Path] = None,
+    config_path: Optional[Path] = None,
 ) -> tuple[List[int], List[tuple[str, str]], dict]:
     """
     Core job addition logic - used by both CLI and API.
@@ -80,18 +81,18 @@ def add_jobs(
     warning_messages = []
     
     # Validate application exists in registry
-    validate_app_configuration(app)
+    validate_app_configuration(app, config_path)
     
     # API-specific validation for Python apps
     env_file = validate_python_app_env_file(app, env_file)
     
     # Handle input file logic based on app configuration
-    final_input_file, input_info, input_warnings = validate_input_file(app, input_file)
+    final_input_file, input_info, input_warnings = validate_input_file(app, input_file, config_path)
     info_messages.extend(input_info)
     warning_messages.extend(input_warnings)
     
     # Get system configuration and validate resource parameters
-    app_class = get_app_class(app)
+    app_class = get_app_class(app, config_path)
     system_config = validate_system_configuration(config_name)
     resource_params, resource_info, resource_warnings = validate_resource_parameters(ngpus, nnodes, node_occupancy, ranks_per_node, system_config, app_class=app_class)
     info_messages.extend(resource_info)
@@ -194,7 +195,7 @@ def add(
     ] = None,
     ranks_per_node: Annotated[
         Optional[int],
-        typer.Option("--ranks-per-node", "-rpn", help="Number of MPI ranks per node. If not specified, uses the app's default (e.g., 1 rank per GPU for LAMMPS, 1 rank per node for Python)."),
+        typer.Option("--ranks-per-node", "-rpn", help="Number of MPI ranks per node. If not specified, uses the app's default (e.g., 1 rank per GPU for LAMMPS, 1 rank per node for Python). May exceed the job's GPUs or cores: ranks then round-robin over the GPUs and share the cores of the GPU they land on (CPU-only jobs share the job's cores). pbx warns when that happens."),
     ] = None,
     mpi_opts: Annotated[
         Optional[str],
@@ -275,9 +276,9 @@ def add(
         # Parse parents string for CLI (supports ranges like "1-5 10 14-20")
         final_parents = None
         if parents:
-            from parslbox.commands.helpers.job_id_parser import parse_job_ids
+            from parslbox.commands.helpers.job_id_parser import resolve_job_ids
             try:
-                final_parents = parse_job_ids(parents.split())
+                final_parents = resolve_job_ids(parents.split(), path_utils.DB_FILE)
             except ValueError as e:
                 typer.secho(
                     f"❌ Error: Invalid parent job IDs ({e}). "

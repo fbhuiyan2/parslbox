@@ -17,13 +17,19 @@ from parslbox.utils import path_utils
 logger = logging.getLogger(__name__)
 
 
-def load_custom_apps() -> Dict[str, Type[AppBase]]:
+def load_custom_apps(config_path: Optional[Path] = None) -> Dict[str, Type[AppBase]]:
     """
     Load custom applications from pbx_config.yaml.
     
     Reads the 'custom_apps' section from the config file and imports
     the specified app classes. Validates that each class properly
     implements the AppBase interface.
+    
+    Args:
+        config_path: Config file to read. Defaults to the process-wide
+            PBX_CONFIG_FILE. Pass it explicitly when the caller was handed a
+            config of its own -- ParslBox(config_path=...) must see the custom
+            apps declared in that file, not the ones in the ambient config.
     
     Returns:
         Dict mapping app names to app classes
@@ -35,7 +41,9 @@ def load_custom_apps() -> Dict[str, Type[AppBase]]:
     custom_apps = {}
     
     try:
-        config_path = path_utils.PBX_CONFIG_FILE
+        if config_path is None:
+            config_path = path_utils.PBX_CONFIG_FILE
+        config_path = Path(config_path)
         
         if not config_path.exists():
             logger.debug("Config file not found, no custom apps to load")
@@ -54,7 +62,7 @@ def load_custom_apps() -> Dict[str, Type[AppBase]]:
         
         for app_name, app_def in custom_app_defs.items():
             try:
-                app_class = _load_single_app(app_name, app_def)
+                app_class = _load_single_app(app_name, app_def, config_path)
                 if app_class:
                     custom_apps[app_name] = app_class
                     logger.info(f"✓ Loaded custom app: {app_name}")
@@ -71,7 +79,8 @@ def load_custom_apps() -> Dict[str, Type[AppBase]]:
     return custom_apps
 
 
-def _load_single_app(app_name: str, app_def: dict) -> Optional[Type[AppBase]]:
+def _load_single_app(app_name: str, app_def: dict,
+                     config_path: Optional[Path] = None) -> Optional[Type[AppBase]]:
     """
     Load a single custom app from its definition.
     
@@ -108,7 +117,7 @@ def _load_single_app(app_name: str, app_def: dict) -> Optional[Type[AppBase]]:
         raise ValueError("Missing 'class' field")
     
     # Import the class
-    app_class = import_app_class(module_path, class_name)
+    app_class = import_app_class(module_path, class_name, config_path)
     
     # Validate it's a proper AppBase subclass
     if not validate_app_class(app_class):
@@ -117,7 +126,8 @@ def _load_single_app(app_name: str, app_def: dict) -> Optional[Type[AppBase]]:
     return app_class
 
 
-def import_app_class(module_path: str, class_name: str) -> Type[AppBase]:
+def import_app_class(module_path: str, class_name: str,
+                     config_path: Optional[Path] = None) -> Type[AppBase]:
     """
     Import an app class from a file path or module name.
     
@@ -132,7 +142,7 @@ def import_app_class(module_path: str, class_name: str) -> Type[AppBase]:
         ImportError: If module or class cannot be imported
     """
     # Expand paths like ~/my_app.py
-    expanded_path = expand_path(module_path)
+    expanded_path = expand_path(module_path, config_path)
     
     # Check if it's a file path
     if expanded_path.exists() and expanded_path.suffix == '.py':
@@ -217,12 +227,14 @@ def validate_app_class(cls: Type[AppBase]) -> bool:
     return True
 
 
-def expand_path(path_str: str) -> Path:
+def expand_path(path_str: str, config_path: Optional[Path] = None) -> Path:
     """
     Expand a path string, handling ~ and relative paths.
     
     Args:
         path_str: Path string to expand
+        config_path: Config file a relative path is resolved against. Defaults
+            to the process-wide PBX_CONFIG_FILE.
         
     Returns:
         Expanded Path object
@@ -231,7 +243,7 @@ def expand_path(path_str: str) -> Path:
     
     # If it's not absolute, try relative to config directory
     if not path.is_absolute():
-        config_dir = path_utils.PBX_CONFIG_FILE.parent
-        path = (config_dir / path).resolve()
+        base = Path(config_path) if config_path else path_utils.PBX_CONFIG_FILE
+        path = (base.parent / path).resolve()
     
     return path

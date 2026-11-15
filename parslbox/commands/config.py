@@ -18,14 +18,13 @@ from parslbox.database import database
 
 app = typer.Typer(invoke_without_command=True)
 
-# Mode detection - set to True when called from CLI
-_is_interactive = False
-
 
 def config_setup(
     path: Optional[str] = None,
     systems: Optional[List[str]] = None,
     apps: Optional[List[str]] = None,
+    interactive: bool = False,
+    force: bool = False,
 ) -> dict:
     """
     Core configuration setup logic - used by both CLI and API.
@@ -39,7 +38,16 @@ def config_setup(
         systems: List of system names to include
                  None = error in API mode, prompt in CLI mode
         apps: List of app names to include (empty list = python only)
-              None = error in API mode, prompt in CLI mode
+              None = prompt in CLI mode, default ['python'] otherwise
+        force: Non-interactive only. Rename an existing config to
+              '<name>.backup.<timestamp>' instead of raising FileExistsError.
+              Never touches the database -- an existing one is kept as is.
+        interactive: True only from the `pbx config` CLI callback. Drives the
+              prompts; every other caller leaves it False and must pass
+              path/systems/apps. Passed explicitly rather than held in module
+              state so a CLI call and an API call in the same process (the
+              test suite, a long-lived MCP server) cannot change each other's
+              behaviour.
 
     Returns:
         dict: {
@@ -49,6 +57,7 @@ def config_setup(
             "config_env_var": dict or None, # {PBX_CONFIG_PATH: value} when config is non-default
             "systems_selected": List[str],
             "apps_selected": List[str],
+            "backed_up": str or None,       # filename the old config was renamed to
         }
 
     Raises:
@@ -57,42 +66,46 @@ def config_setup(
         RuntimeError: If required parameter is None in API mode
     """
     # Validate API mode has all required parameters
-    if not _is_interactive:
+    if not interactive:
         if path is None:
             raise RuntimeError("API mode requires 'path' parameter")
         if systems is None:
             raise RuntimeError("API mode requires 'systems' parameter")
-        if apps is None:
-            raise RuntimeError("API mode requires 'apps' parameter")
 
-    # Step 1: Determine config path
-    config_path = _determine_config_path(path)
-
-    # Step 2: Handle existing config
-    _handle_existing_config(config_path)
-
-    # Step 3: Select systems
-    if systems is None:
-        systems = _select_systems()
-    else:
-        # Validate systems
+    # Validate names before anything is written or renamed: with force=True
+    # Step 2 moves the old config aside, and a bad name found afterwards
+    # would leave the caller with no config at all.
+    if systems is not None:
+        if not systems:
+            raise ValueError("At least one system must be selected")
         available = get_available_systems()
         invalid = [s for s in systems if s not in available]
         if invalid:
             raise ValueError(f"Invalid system(s): {invalid}. Available: {available}")
+    if apps:
+        available_apps = get_builtin_apps()
+        invalid = [a for a in apps if a not in available_apps]
+        if invalid:
+            raise ValueError(f"Invalid app(s): {invalid}. Available: {available_apps}")
 
-    # Require at least 1 system
-    if not systems:
-        raise ValueError("At least one system must be selected")
+    # Step 1: Determine config path
+    config_path = _determine_config_path(path, interactive)
+
+    # Step 2: Handle existing config
+    backed_up = _handle_existing_config(config_path, interactive, force)
+
+    # Step 3: Select systems
+    if systems is None:
+        systems = _select_systems(interactive)
 
     # Step 4: Select apps
     if apps is None:
-        apps = _select_apps()
+        apps = _select_apps(interactive) if interactive else []
 
     # If no apps selected, default to python only
     if not apps:
         apps = ["python"]
-        if _is_interactive:
+        if interactive:
             typer.secho("\nNo apps selected. Defaulting to 'python' app.", fg=typer.colors.YELLOW)
 
     # Step 5: Generate config
@@ -119,6 +132,7 @@ def config_setup(
         "config_env_var": config_env_var,
         "systems_selected": systems,
         "apps_selected": apps,
+        "backed_up": backed_up,
     }
 
 
@@ -140,14 +154,12 @@ def config(
       pbx config .         # Current directory
       pbx config /custom   # Custom path
     """
-    global _is_interactive
-    _is_interactive = True
-
     try:
         result = config_setup(
             path=path,
             systems=None,  # Prompt in CLI
             apps=None,     # Prompt in CLI
+            interactive=True,
         )
 
         # ---- Summary ----
@@ -242,7 +254,7 @@ def config(
 # Helper Functions
 # ============================================================================
 
-def _determine_config_path(path: Optional[str]) -> Path:
+def _determine_config_path(path: Optional[str], interactive: bool = False) -> Path:
     """
     Determine and normalize config path.
     
@@ -258,9 +270,9 @@ def _determine_config_path(path: Optional[str]) -> Path:
         if env_path:
             # Use environment variable
             config_dir = Path(env_path).expanduser().resolve()
-            if _is_interactive:
+            if interactive:
                 typer.secho(f"\n✓ Using PBX_CONFIG_PATH: {config_dir}", fg=typer.colors.CYAN)
-        elif _is_interactive:
+        elif interactive:
             # Prompt user
             typer.secho("\nWhere should the config be created?", bold=True)
             typer.echo("  1. Current directory (.)")
@@ -303,19 +315,34 @@ def _determine_config_path(path: Optional[str]) -> Path:
     
     config_path = config_dir / "config.yaml"
     
-    if _is_interactive and path is not None:
+    if interactive and path is not None:
         typer.secho(f"\n✓ Config will be created at: {config_path}", fg=typer.colors.CYAN)
     
     return config_path
 
 
-def _handle_existing_config(config_path: Path) -> None:
-    """Handle existing config file - prompt to keep/delete in CLI, error in API."""
+def _handle_existing_config(
+    config_path: Path, interactive: bool = False, force: bool = False
+) -> Optional[str]:
+    """Handle existing config file - prompt to keep/delete in CLI, error in API.
+
+    Returns the filename the old config was renamed to, or None if nothing
+    was renamed.
+    """
     if not config_path.exists():
-        return
-    
-    if not _is_interactive:
-        raise FileExistsError(f"Config file already exists: {config_path}")
+        return None
+
+    if not interactive:
+        if not force:
+            raise FileExistsError(f"Config file already exists: {config_path}")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = config_path.parent / f"{config_path.name}.backup.{timestamp}"
+        suffix = 1
+        while backup_path.exists():
+            backup_path = config_path.parent / f"{config_path.name}.backup.{timestamp}.{suffix}"
+            suffix += 1
+        config_path.rename(backup_path)
+        return backup_path.name
     
     typer.secho(f"\n⚠  Config file already exists at: {config_path}", fg=typer.colors.YELLOW, bold=True)
     typer.echo("\nWhat would you like to do?")
@@ -337,10 +364,12 @@ def _handle_existing_config(config_path: Path) -> None:
         
         config_path.rename(backup_path)
         typer.secho(f"✓ Renamed old config to: {backup_name}", fg=typer.colors.GREEN)
+        return backup_name
     
     elif choice == 2:
         config_path.unlink()
         typer.secho("✓ Deleted old config", fg=typer.colors.GREEN)
+        return None
     
     else:
         typer.secho("Invalid choice. Aborting.", fg=typer.colors.RED)
@@ -388,9 +417,9 @@ def _config_env_var(config_dir: Path) -> Optional[dict]:
     return {"PBX_CONFIG_PATH": str(config_dir)}
 
 
-def _select_systems() -> List[str]:
+def _select_systems(interactive: bool = False) -> List[str]:
     """Interactive system selection."""
-    if not _is_interactive:
+    if not interactive:
         raise RuntimeError("Cannot prompt for systems in API mode")
     
     available_systems = get_available_systems()
@@ -416,9 +445,9 @@ def _select_systems() -> List[str]:
             continue
 
 
-def _select_apps() -> List[str]:
+def _select_apps(interactive: bool = False) -> List[str]:
     """Interactive app selection."""
-    if not _is_interactive:
+    if not interactive:
         raise RuntimeError("Cannot prompt for apps in API mode")
     
     available_apps = get_builtin_apps()

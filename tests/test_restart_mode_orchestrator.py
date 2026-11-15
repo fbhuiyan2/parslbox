@@ -415,6 +415,19 @@ class TestValidatePbxRunLine:
         with pytest.raises(ValueError, match="no `pbx run"):
             restart_helpers.validate_pbx_run_line("#!/bin/bash\necho hi\n")
 
+    @pytest.mark.parametrize("flag", ["--run-dir", "--rundir"])
+    def test_either_run_dir_spelling_satisfies_the_check(self, flag):
+        """`pbx run` takes both, so a hand-edited template may use either.
+        Accepting only one would stop the chain hours into an allocation on a
+        line the CLI itself parses fine."""
+        line = f"exec pbx run --respawn 3 --config polaris {flag} ./"
+        assert restart_helpers.validate_pbx_run_line(line)
+
+    def test_missing_both_run_dir_spellings_raises(self):
+        line = "exec pbx run --respawn 3 --config polaris"
+        with pytest.raises(ValueError, match=r"--run-dir or --rundir"):
+            restart_helpers.validate_pbx_run_line(line)
+
 
 class TestExtractOriginalAllocation:
     def test_pbs_integer(self, tmp_path):

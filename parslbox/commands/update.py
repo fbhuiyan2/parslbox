@@ -27,6 +27,7 @@ def update_jobs(
     rm_deps: Optional[List[int]] = None,
     app_args: Optional[str] = None,
     db_path: Optional[Path] = None,
+    config_path: Optional[Path] = None,
 ) -> tuple[List[int], List[tuple[int, str]], dict]:
     """
     Core job update logic - used by both CLI and API.
@@ -103,7 +104,7 @@ def update_jobs(
         raise ValidationError("--nocc must be between 0.0 and 1.0")
 
     if ranks_per_node is not None and ranks_per_node < 1:
-        raise ValidationError(f"--ranks-per-node must be a positive integer, got {ranks_per_node}")
+        raise ValidationError(f"ranks_per_node must be a positive integer, got {ranks_per_node}")
 
     # Handle environment file validation and processing
     final_env_file, env_info, env_warnings = validate_environment_file(env_file, db_path=db_path)
@@ -123,7 +124,7 @@ def update_jobs(
             
             try:
                 # Validate input file against the job's existing app
-                validated_input, input_info, input_warnings = validate_input_file(job_app, input_file)
+                validated_input, input_info, input_warnings = validate_input_file(job_app, input_file, config_path)
                 
                 # Fail the job if there are any warnings (e.g., input file ignored)
                 if input_warnings:
@@ -344,7 +345,7 @@ def update(
     ] = None,
     ranks_per_node: Annotated[
         Optional[int],
-        typer.Option("--ranks-per-node", "-rpn", help="Update the number of MPI ranks per node.")
+        typer.Option("--ranks-per-node", "-rpn", help="Update the number of MPI ranks per node. May exceed the job's GPUs or cores: ranks then round-robin over the GPUs and share the cores of the GPU they land on (CPU-only jobs share the job's cores).")
     ] = None,
     add_deps: Annotated[
         Optional[str],
@@ -362,9 +363,9 @@ def update(
     """
     Updates one or more fields for a given set of jobs.
     """
-    from parslbox.commands.helpers.job_id_parser import parse_job_ids, format_job_ids, group_failures
+    from parslbox.commands.helpers.job_id_parser import resolve_job_ids, format_job_ids, group_failures
     try:
-        job_ids = parse_job_ids(job_ids)
+        job_ids = resolve_job_ids(job_ids, path_utils.DB_FILE)
     except ValueError as e:
         typer.secho(f"❌ Error: {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)

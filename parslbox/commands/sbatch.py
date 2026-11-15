@@ -5,6 +5,7 @@ from typing_extensions import Annotated
 
 from parslbox.commands.helpers.submit_helpers import (
     submit_job, ValidationError, render_submit_script_panel, render_remote_result,
+    render_app_summary,
 )
 from parslbox.commands.helpers.qsub_cmd_helpers import parse_walltime
 from rich.console import Console
@@ -87,9 +88,9 @@ def sbatch(
         Optional[str],
         typer.Option("--project", "-A", help="Project/account name.")
     ] = None,
-    run_dir: Annotated[
+    rundir: Annotated[
         Optional[Path],
-        typer.Option("--run-dir", help="Custom run directory (default: timestamped directory).")
+        typer.Option("--rundir", help="Custom run directory (default: timestamped directory).")
     ] = None,
     apps: Annotated[
         Optional[str],
@@ -148,7 +149,7 @@ def sbatch(
             select=select,
             walltime=walltime_minutes,
             project=project,
-            run_dir=run_dir,
+            run_dir=rundir,
             apps=apps_list,
             tags=tags_list,
             retries=retries,
@@ -174,11 +175,12 @@ def sbatch(
                 fg=typer.colors.CYAN,
             )
         if result.get("remote"):
-            if not render_remote_result(result, monitor_cmd="squeue -j"):
+            if not render_remote_result(result, monitor_cmd="squeue -j",
+                                        config_name=config_name, cancel_cmd="scancel"):
                 raise typer.Exit(code=1)
             return
 
-        typer.secho(f"\U0001f4c1 Created run directory: {result['run_dir']}", fg=typer.colors.BLUE)
+        typer.secho(f"\U0001f4c1 Created run directory: {result['rundir']}", fg=typer.colors.BLUE)
         typer.secho(f"\U0001f4dd Generated submit script: {result['submit_file']}", fg=typer.colors.GREEN)
         console.print(render_submit_script_panel(result['submit_file']))
 
@@ -202,7 +204,8 @@ def sbatch(
             job_id = result.get("slurm_job_id", result.get("job_id", "UNKNOWN"))
             typer.secho(f"\U0001f680 Job submitted successfully! Job ID: {job_id}", fg=typer.colors.GREEN)
             typer.secho(f"\U0001f4ca Monitor with: squeue -j {job_id}", fg=typer.colors.BLUE)
-            typer.secho(f"\U0001f4c1 Run directory: {result['run_dir']}", fg=typer.colors.BLUE)
+            typer.secho(f"\U0001f4c1 Run directory: {result['rundir']}", fg=typer.colors.BLUE)
+            render_app_summary(result, config_name, "scancel")
         else:
             typer.secho(f"\u274c Error submitting job: {result['error']}", fg=typer.colors.RED)
             typer.secho(f"\U0001f4cb Submit script saved at: {result['submit_file']}", fg=typer.colors.YELLOW)

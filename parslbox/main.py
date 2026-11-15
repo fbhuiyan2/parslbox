@@ -1,7 +1,6 @@
 import typer
 from parslbox.database import database
 from parslbox.utils import path_utils
-from parslbox.utils import pbx_config_utils as config_utils
 from parslbox.commands.config import app as config_cmd
 from parslbox.commands.ls import app as list_jobs
 from parslbox.commands.add import app as add_job
@@ -60,9 +59,7 @@ def main_callback(ctx: typer.Context):
         if response.lower() in ["y", "yes", ""]:
             # Run pbx config
             from parslbox.commands.config import config as config_cmd_func
-            import parslbox.commands.config as config_module
-            config_module._is_interactive = True
-            
+
             try:
                 config_cmd_func(path=None)  # Will use PBX_CONFIG_PATH or default
             except typer.Exit:

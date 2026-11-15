@@ -177,6 +177,29 @@ def check_db_name(db_path) -> bool:
     return True
 
 
+def resolve_db_path(path) -> Path:
+    """Turn a directory or database file into the database file to use.
+
+    A directory is the natural thing to hand over when moving between
+    projects, but which file it means depends on the project: a local
+    project's database is the -local one, and check_db_name() raises if the
+    two are mixed up. Resolving here means the caller can pass either.
+
+    Raises:
+        PbxPathError: `path` is not absolute. A relative path would resolve
+            against the caller's working directory, which for a long-running
+            server is not the user's.
+    """
+    from parslbox.utils import path_utils
+
+    resolved = path_utils.require_absolute("path", path)
+    if resolved.suffix == ".db":
+        return resolved
+    if (resolved / PROJECT_FILE).is_file():
+        return resolved / LOCAL_DB_NAME
+    return resolved / "job_database_pbx.db"
+
+
 def find_project(db_path) -> Optional[LocalProject]:
     """Return the local project owning `db_path`, or None.
 

@@ -1,12 +1,22 @@
+import functools
 import sys
 
 from mcp.server.fastmcp import FastMCP
 
 from parslbox.api import ParslBox
-from parslbox.local.project import LocalProjectError
+from parslbox.local.project import (
+    LocalProjectError,
+    count_rows,
+    find_project,
+    resolve_db_path,
+)
+from parslbox.utils import path_utils
 from parslbox.utils.path_utils import PbxPathError
 from parslbox.commands.helpers.job_id_parser import format_job_ids, group_failures
 from parslbox.mcp.schemas import (
+    CommandLinesSchema,
+    ResourceRequirementsSchema,
+    schema_text_block,
     AddJobSchema,
     LocalInitSchema,
     LocalPullSchema,
@@ -21,6 +31,7 @@ from parslbox.mcp.schemas import (
     SBatchSchema,
     RemoveJobsSchema,
     UpdateJobSchema,
+    UseDatabaseSchema,
 )
 
 # Start ParslBox and MCP.
@@ -39,6 +50,46 @@ def _start() -> ParslBox:
 
 
 pbx = _start()
+
+
+def _db_line() -> str:
+    """One-line statement of which database the answer came from.
+
+    The binding is fixed until use_database changes it and does not follow the
+    caller's working directory, so every job-facing answer says where it came
+    from. The directory name leads because a wrong project is far easier to
+    notice as a name than as a path.
+    """
+    return f"db: {pbx.db_path.parent.name} ({pbx.db_path})"
+
+
+def _with_db_line(fn):
+    """Prefix a tool's answer with the database it came from.
+
+    Applied below @mcp.tool so FastMCP still sees the real signature. Covers
+    every return path, error ones included: an exception raised against the
+    wrong project is just as misleading as a wrong job list.
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        return f"{_db_line()}\n{fn(*args, **kwargs)}"
+    return wrapper
+
+
+def _resolved_params(params) -> dict:
+    """Dump a schema, expanding its job-id tokens against the active database.
+
+    The schema validator deliberately leaves ranges unexpanded, because it
+    runs before this function has a database to bound them with. Here `pbx`
+    is bound, so '1-100000000' is refused on its endpoint rather than
+    becoming a hundred million integers.
+    """
+    from parslbox.commands.helpers.job_id_parser import resolve_job_ids
+
+    out = params.model_dump()
+    if out.get("job_ids") is not None:
+        out["job_ids"] = resolve_job_ids(out["job_ids"], pbx.db_path)
+    return out
 
 
 def _fmt_resources(job: dict) -> str:
@@ -70,14 +121,30 @@ mcp = FastMCP(
     name="ParslBox Tool MCP",
     instructions=(
         "You expose tools for managing and running ParslBox jobs.\n\n"
+        f"ACTIVE DATABASE: {pbx.db_path}\n"
+        f"ACTIVE CONFIG:   {pbx.config_path}\n\n"
+        "That binding is fixed for this server and does NOT follow the caller's "
+        "working directory. It was read from PBX_DB_PATH when the server started; "
+        "a later `cd`, or an `export PBX_DB_PATH=...` in a shell, runs in a "
+        "different process and cannot change it. Only use_database changes it.\n\n"
+        "So: before using any job tool against a project directory you have not "
+        "already bound to, call use_database with that directory. Every job tool "
+        "prefixes its answer with the database it used; if that line names the "
+        "wrong project, you are on the wrong database -- call use_database rather "
+        "than acting on the result. The pbx CLI is unaffected by all of this: it "
+        "reads PBX_DB_PATH fresh on every invocation.\n\n"
         "Available capabilities:\n"
+        "- use_database: rebind this server to another project's database (and optionally its config).\n"
         "- add_jobs: create new jobs and add them to the ParslBox database.\n"
         "- submit_pbs_job: submit PBS jobs to the queue using a qsub-style configuration.\n"
         "- submit_slurm_job: submit SLURM jobs to the queue using an sbatch-style configuration.\n"
         "- cancel_pbs_job: gracefully cancel a running PBS batch job (preferred over raw qdel — keeps DB accurate).\n"
         "- cancel_slurm_job: gracefully cancel a running SLURM batch job (preferred over raw scancel — keeps DB accurate).\n"
         "- remove_jobs: remove one or more jobs from the database.\n"
-        "- update_job: modify fields of an existing job (status, tag, input file, resources, dependencies, etc.). Note: app cannot be changed after job creation.\n"
+        "- update_jobs: modify fields of one or more existing jobs (status, tag, input file, resources, dependencies, etc.). Note: app cannot be changed after job creation.\n"
+        "- list_systems_and_apps: the HPC systems and app identifiers this server accepts. Read-only.\n"
+        "- get_resource_requirements: how many nodes of a target system the jobs need. Read-only.\n"
+        "- get_command_lines: the MPI/srun line each job would be launched with on a target system. A preview; nothing runs.\n"
         "- filter_jobs: filter jobs by status, app, tag, path, or input file and return their IDs.\n"
         "- list_jobs: list jobs with full details, with optional filtering by status, app, tag, path, or input file.\n"
         "- get_job: get a single job's full details by its ID.\n"
@@ -92,9 +159,103 @@ mcp = FastMCP(
 
 
 @mcp.tool(
+    name="list_systems_and_apps",
+    description=(
+        "The HPC systems and app identifiers every other tool accepts.\n\n"
+        "Systems come with the hardware that decides how a job is sized: scheduler, "
+        "cores and GPUs per node, and MPI backend. Apps are the built-ins plus "
+        "whatever the bound config.yaml declares under custom_apps, so the answer "
+        "follows use_database.\n\n"
+        "Call this before asking the user to choose a system -- the names alone do "
+        "not say which are PBS and which are SLURM, or which have GPUs."
+    ),
+)
+def list_systems_and_apps() -> str:
+    lines = []
+    for s in pbx.available_systems():
+        gpus = (f"{s['gpus_per_node']}x {s['gpu_type']}" if s["gpus_per_node"]
+                else "no gpu")
+        lines.append(
+            f"{s['name']}: {s['scheduler']}, {gpus}, {s['cores_per_node']} cores, "
+            f"{s['mpi_backend']}"
+        )
+    apps = pbx.available_apps()
+    lines.append(f"apps builtin: {', '.join(apps['builtin'])}")
+    lines.append(f"apps custom: {', '.join(apps['custom']) or 'none'}")
+    return "\n".join(lines)
+
+
+@mcp.tool(
+    name="use_database",
+    description=(
+        "Point this server at a different ParslBox database, for the rest of the session.\n\n"
+        "THE BINDING IS FIXED UNTIL THIS TOOL CHANGES IT. It is set from PBX_DB_PATH when "
+        "the server starts and does NOT follow your working directory, so a `cd` or an "
+        "`export PBX_DB_PATH=...` in a shell has no effect on it -- those run in a "
+        "different process. Before using any job tool against a project directory you "
+        "have not already bound to, call this first. Every job tool reports the database "
+        "it used on a `db:` line; if that line names the wrong project, call this.\n\n"
+        "Takes the project directory (or a .db file directly), resolving a local "
+        "project to its -local database. Refuses a database that does not exist "
+        "unless create is set. Reports the resolved paths and the job count."
+    ),
+)
+def use_database(params: UseDatabaseSchema) -> str:
+    global pbx
+
+    try:
+        db_path = resolve_db_path(params.path)
+    except (PbxPathError, LocalProjectError) as e:
+        return f"Cannot use that path. {e}"
+
+    if not db_path.exists() and not params.create:
+        return (
+            f"No database at {db_path}. Nothing was changed.\n"
+            f"Still using {pbx.db_path}.\n"
+            "If this path is a typo, fix it. To start a new project here, either call "
+            "local_init (for a laptop-to-remote project) or run `pbx add` there, or "
+            "call this again with create=true."
+        )
+
+    config_path = None
+    if params.config_path:
+        try:
+            config_path = path_utils.require_absolute("config_path", params.config_path)
+        except PbxPathError as e:
+            return f"Cannot use that config path. {e}"
+        if config_path.is_dir():
+            config_path = config_path / "config.yaml"
+        if not config_path.is_file():
+            return f"No config file at {config_path}. Nothing was changed."
+
+    previous = pbx.db_path
+    try:
+        pbx = ParslBox(db_path=db_path, config_path=config_path or pbx.config_path)
+    except Exception as e:
+        return f"Could not switch to {db_path}: {e}\nStill using {previous}."
+
+    lines = [f"Now using {pbx.db_path}"]
+    if previous != pbx.db_path:
+        lines.append(f"(was {previous})")
+    lines.append(f"config: {pbx.config_path}")
+    try:
+        lines.append(f"jobs: {count_rows(pbx.db_path)}")
+    except Exception:
+        pass
+    try:
+        project = find_project(pbx.db_path)
+    except LocalProjectError:
+        project = None
+    if project is not None:
+        lines.append(f"local project -> {project.remote_root}")
+    return "\n".join(lines)
+
+
+@mcp.tool(
     name="add_jobs",
     description="Add jobs to ParslBox",
 )
+@_with_db_line
 def add_jobs(params: AddJobSchema) -> str:
     input_dict = params.model_dump()
     
@@ -128,6 +289,52 @@ def add_jobs(params: AddJobSchema) -> str:
     return "\n".join(response_parts)
 
 
+def _app_summary_lines(status: dict, cancel_cmd: str) -> list:
+    """Compact per-app resolution + the cancel hint.
+
+    Remote submits carry no summary: the config.yaml that matters is on the
+    other machine, so say that instead of resolving against the local one.
+    """
+    job_id = status.get("job_id") or "UNKNOWN"
+    if status.get("remote"):
+        return [
+            "This is a local project; the submission uses the config file on the "
+            "remote host. Check the app executables and env blocks in the remote "
+            "config.yaml to make sure nothing is missing or wrong.",
+            f"If anything is wrong, cancel on the remote host: {cancel_cmd} {job_id} "
+            f"(or `pbx {cancel_cmd} {job_id}` if it already started).",
+        ]
+
+    env_setup = status.get("env_setup_summary") or {}
+    env_lines = []
+    if env_setup.get("state") == "unconfigured":
+        env_lines = ["pbx_python_env_setup: NOT SET UP -- " + env_setup["detail"]]
+
+    cancel_hint = (
+        f"If anything above looks wrong, cancel now: {cancel_cmd} {job_id} "
+        f"(or `pbx {cancel_cmd} {job_id}` if it already started)."
+    )
+
+    summary = status.get("app_summary")
+    if not summary:
+        return [*env_lines, cancel_hint] if env_lines else []
+
+    parts = []
+    for e in summary:
+        exe = e.get("executable") or "NOT SET"
+        state = {
+            "configured": "env:configured",
+            "no_system_entry": "env:NO SYSTEM ENTRY",
+            "no_app_block": "env:NO APP BLOCK",
+        }.get(e.get("env_state"), "env:?")
+        parts.append(f"{e['app']} [exe:{exe}, {state}]")
+    return [
+        "apps: " + " | ".join(parts),
+        *env_lines,
+        cancel_hint,
+    ]
+
+
 def _remote_lines(status: dict) -> list:
     """Extra lines when the submission went to another machine.
 
@@ -138,7 +345,7 @@ def _remote_lines(status: dict) -> list:
     if not status.get("remote"):
         return []
     lines = [f"Submitted on remote Compute endpoint {status.get('endpoint')}.",
-             f"Remote run directory: {status.get('remote_run_dir')}"]
+             f"Remote run directory: {status.get('remote_rundir')}"]
     push = status.get("push") or {}
     if push.get("bytes") is not None:
         lines.append(f"Pushed {push['bytes']} bytes of database first.")
@@ -161,9 +368,17 @@ def _remote_lines(status: dict) -> list:
         "Walltime defaults to minutes; supports h/d suffixes (e.g., 90, 4.25h, 3.5d). "
         "Set respawn=N to enable a self-respawn chain: at walltime, in-flight jobs are "
         "marked Restart and the next link is auto-submitted, until all jobs finish or "
-        "respawn reaches 0. Returns a short message describing whether submission succeeded."
+        "respawn reaches 0. Returns a short message describing whether submission succeeded, "
+        "including an `apps:` line resolving each app in the submission to its executable "
+        "and env block on the target system (env:configured / NO SYSTEM ENTRY / NO APP BLOCK). "
+        "Check that line: a missing block still submits and still runs, with an empty "
+        "executable. A `pbx_python_env_setup: NOT SET UP` line may also appear; that one is more "
+        "serious, because the system's `pbx_python_env_setup` has no command activating an "
+        "environment and the job will die with `pbx: command not found` once the nodes are "
+        "allocated. Cancel with the command given there if either looks wrong."
     ),
 )
+@_with_db_line
 def submit_pbs_job(params: QSubSchema) -> str:
     input_dict = params.model_dump()
 
@@ -174,14 +389,14 @@ def submit_pbs_job(params: QSubSchema) -> str:
 
     if status.get("success") is True:
         job_id = status.get("job_id", status.get("pbs_job_id", "UNKNOWN"))
-        run_dir = status.get("run_dir", "UNKNOWN")
+        rundir = status.get("rundir", "UNKNOWN")
         matched = status.get("matched_jobs")
         resolved = status.get("resolved_tags")
         respawn_template = status.get("respawn_template_file")
         lines = [
             f"Job was submitted successfully.",
             f"PBS job ID: {job_id}",
-            f"Run directory: {run_dir}",
+            f"Run directory: {rundir}",
         ]
         if matched is not None:
             lines.append(f"Matched {matched} runnable job(s) in DB.")
@@ -190,14 +405,15 @@ def submit_pbs_job(params: QSubSchema) -> str:
         if respawn_template:
             lines.append(f"Respawn template: {respawn_template} (chain auto-resubmits at walltime)")
         lines += _remote_lines(status)
+        lines += _app_summary_lines(status, "qdel")
         return "\n".join(lines)
     else:
         error_msg = status.get("error", "Unknown error")
-        run_dir = status.get("run_dir", "UNKNOWN")
+        rundir = status.get("rundir", "UNKNOWN")
         return (
             "Failed to submit job.\n"
             f"Error: {error_msg}\n"
-            f"Run directory (if created): {run_dir}"
+            f"Run directory (if created): {rundir}"
         )
 
 
@@ -210,9 +426,17 @@ def submit_pbs_job(params: QSubSchema) -> str:
         "Walltime defaults to minutes; supports h/d suffixes (e.g., 90, 4.25h, 3.5d). "
         "Set respawn=N to enable a self-respawn chain: at walltime, in-flight jobs are "
         "marked Restart and the next link is auto-submitted, until all jobs finish or "
-        "respawn reaches 0. Returns a short message describing whether submission succeeded."
+        "respawn reaches 0. Returns a short message describing whether submission succeeded, "
+        "including an `apps:` line resolving each app in the submission to its executable "
+        "and env block on the target system (env:configured / NO SYSTEM ENTRY / NO APP BLOCK). "
+        "Check that line: a missing block still submits and still runs, with an empty "
+        "executable. A `pbx_python_env_setup: NOT SET UP` line may also appear; that one is more "
+        "serious, because the system's `pbx_python_env_setup` has no command activating an "
+        "environment and the job will die with `pbx: command not found` once the nodes are "
+        "allocated. Cancel with the command given there if either looks wrong."
     ),
 )
+@_with_db_line
 def submit_slurm_job(params: SBatchSchema) -> str:
     input_dict = params.model_dump()
 
@@ -223,14 +447,14 @@ def submit_slurm_job(params: SBatchSchema) -> str:
 
     if status.get("success") is True:
         job_id = status.get("job_id", status.get("slurm_job_id", "UNKNOWN"))
-        run_dir = status.get("run_dir", "UNKNOWN")
+        rundir = status.get("rundir", "UNKNOWN")
         matched = status.get("matched_jobs")
         resolved = status.get("resolved_tags")
         respawn_template = status.get("respawn_template_file")
         lines = [
             f"SLURM job was submitted successfully.",
             f"SLURM job ID: {job_id}",
-            f"Run directory: {run_dir}",
+            f"Run directory: {rundir}",
         ]
         if matched is not None:
             lines.append(f"Matched {matched} runnable job(s) in DB.")
@@ -239,14 +463,15 @@ def submit_slurm_job(params: SBatchSchema) -> str:
         if respawn_template:
             lines.append(f"Respawn template: {respawn_template} (chain auto-resubmits at walltime)")
         lines += _remote_lines(status)
+        lines += _app_summary_lines(status, "scancel")
         return "\n".join(lines)
     else:
         error_msg = status.get("error", "Unknown error")
-        run_dir = status.get("run_dir", "UNKNOWN")
+        rundir = status.get("rundir", "UNKNOWN")
         return (
             "Failed to submit SLURM job.\n"
             f"Error: {error_msg}\n"
-            f"Run directory (if created): {run_dir}"
+            f"Run directory (if created): {rundir}"
         )
 
 
@@ -265,6 +490,7 @@ def submit_slurm_job(params: SBatchSchema) -> str:
         "orchestrator the cluster's default kill grace (often ~2s) and does no DB cleanup."
     ),
 )
+@_with_db_line
 def cancel_pbs_job(params: CancelJobSchema) -> str:
     input_dict = params.model_dump()
     try:
@@ -301,6 +527,7 @@ def cancel_pbs_job(params: CancelJobSchema) -> str:
         "scancel does no DB cleanup."
     ),
 )
+@_with_db_line
 def cancel_slurm_job(params: CancelJobSchema) -> str:
     input_dict = params.model_dump()
     try:
@@ -323,13 +550,13 @@ def cancel_slurm_job(params: CancelJobSchema) -> str:
 
 
 @mcp.tool(
-    name="remove_job",
+    name="remove_jobs",
     description="Remove jobs from ParslBox",
 )
+@_with_db_line
 def remove_jobs(params: RemoveJobsSchema) -> str:
-    input_dict = params.model_dump()
     try:
-        removed_count = pbx.remove_jobs(**input_dict)
+        removed_count = pbx.remove_jobs(**_resolved_params(params))
     except Exception as e:
         return f"Exception occurred when removing jobs. Exception: {e}"
     
@@ -340,51 +567,129 @@ def remove_jobs(params: RemoveJobsSchema) -> str:
 
 
 @mcp.tool(
-    name="update_job",
-    description=("Update fields for an existing ParslBox job.\n\n"),
+    name="update_jobs",
+    description=("Update fields for one or more existing ParslBox jobs.\n\n"),
 )
-def update_job(params: UpdateJobSchema) -> str:
-    input_dict = params.model_dump()
-    
-    # Extract job_id and convert to list for the API call
-    job_id = input_dict.pop('job_id')
-    input_dict['job_ids'] = [job_id]
-
+@_with_db_line
+def update_jobs(params: UpdateJobSchema) -> str:
     try:
+        input_dict = _resolved_params(params)
+        job_ids = input_dict["job_ids"]
         updated_job_ids, failed_jobs, msg_log = pbx.update_jobs(**input_dict)
     except Exception as e:
-        return f"Exception occurred when updating job {job_id}. Exception: {e}"
+        return f"Exception occurred when updating jobs. Exception: {e}"
 
-    # Build response message
     response_parts = []
-    
-    if job_id in updated_job_ids:
-        response_parts.append(f"Successfully updated job {job_id}.")
-    elif failed_jobs:
-        # Find the specific error for this job
-        for failed_job_id, error_msg in failed_jobs:
-            if failed_job_id == job_id:
-                response_parts.append(f"Failed to update job {job_id}: {error_msg}")
-                break
-        else:
-            response_parts.append(f"Job {job_id} was not found or no fields were updated.")
-    else:
-        response_parts.append(f"Job {job_id} was not found or no fields were updated.")
-    
-    # Add warnings and info messages
+
+    if updated_job_ids:
+        response_parts.append(
+            f"Successfully updated {len(updated_job_ids)} job(s): "
+            f"{format_job_ids(updated_job_ids)}."
+        )
+
+    for failed_job_id, error_msg in failed_jobs:
+        response_parts.append(f"Failed to update job {failed_job_id}: {error_msg}")
+
+    untouched = sorted(set(job_ids) - set(updated_job_ids)
+                       - {fid for fid, _ in failed_jobs})
+    if untouched:
+        response_parts.append(
+            f"Not found, or no fields changed: {format_job_ids(untouched)}."
+        )
+
+    if not response_parts:
+        response_parts.append("No jobs were updated.")
+
     for warning in msg_log.get('warnings', []):
         response_parts.append(f"Warning: {warning}")
-    
+
     for info in msg_log.get('info', []):
         response_parts.append(f"Info: {info}")
-    
+
     return "\n".join(response_parts)
+
+
+@mcp.tool(
+    name="get_resource_requirements",
+    description=(
+        "How many nodes of a target system these jobs need. Read-only: nothing "
+        "is submitted and nothing in the database changes.\n\n"
+        "Counts only Ready/Restart jobs and reports the rest as skipped. "
+        "'simultaneous' is every job running at once; 'optimal' is what pbx "
+        "needs once it queues jobs behind each other."
+    ),
+)
+@_with_db_line
+def get_resource_requirements(params: ResourceRequirementsSchema) -> str:
+    try:
+        req = pbx.resource_requirements(**_resolved_params(params))
+    except Exception as e:
+        return f"Exception occurred when sizing jobs. Exception: {e}"
+
+    lines = [f"{req['system']}: {req['gpus_per_node']} GPUs/node, "
+             f"{req['cores_per_node']} cores/node",
+             f"schedulable: {req['schedulable']}"]
+    if req["skipped"]:
+        lines.append("skipped: " + ", ".join(f"{c} {s}" for s, c in req["skipped"].items()))
+    if not req["schedulable"]:
+        lines.append("No Ready/Restart jobs to size.")
+        return "\n".join(lines)
+
+    gpu = req["gpu"]
+    if gpu:
+        if not gpu["system_has_gpus"]:
+            lines.append(f"gpu: {gpu['jobs']} job(s) need {gpu['total_gpus']} GPUs, "
+                         f"but {req['system']} has none -- they cannot run here")
+        else:
+            lines.append(f"gpu: {gpu['jobs']} job(s), {gpu['total_gpus']} GPUs -> "
+                         f"{gpu['simultaneous']} nodes simultaneous / "
+                         f"{gpu['optimal']} optimal")
+            for j in gpu["oversized"]:
+                lines.append(f"  job {j['job_id']} wants {j['ngpus']} GPUs on one node, "
+                             f"more than the {gpu['gpus_per_node']} available")
+    cpu = req["cpu"]
+    if cpu:
+        lines.append(f"cpu: {cpu['jobs']} job(s), occupancy {cpu['total_occupancy']:.1f} -> "
+                     f"{cpu['simultaneous']} nodes simultaneous / {cpu['optimal']} optimal")
+    if req["total"]:
+        lines.append(f"total: {req['total']['simultaneous']} nodes simultaneous / "
+                     f"{req['total']['optimal']} optimal")
+    return "\n".join(lines)
+
+
+@mcp.tool(
+    name="get_command_lines",
+    description=(
+        "The MPI/srun line each job would be launched with on a target system. "
+        "A preview only -- nothing runs, and hostnames are placeholders.\n\n"
+        "Returns one line per job, so name the jobs you care about rather than "
+        "asking for a whole large database."
+    ),
+)
+@_with_db_line
+def get_command_lines(params: CommandLinesSchema) -> str:
+    try:
+        preview = pbx.command_lines(**_resolved_params(params))
+    except Exception as e:
+        return f"Exception occurred when building command lines. Exception: {e}"
+
+    rows = preview["jobs"]
+    if not rows:
+        return f"{preview['system']}: no jobs to preview."
+    lines = [f"{preview['system']} (hostnames are placeholders):"]
+    for r in rows:
+        if r["error"]:
+            lines.append(f"{r['job_id']}: error: {r['error']}")
+        else:
+            lines.append(f"{r['job_id']} [{r['resources']}] {r['command']}")
+    return "\n".join(lines)
 
 
 @mcp.tool(
     name="filter_jobs",
     description=("Filter jobs in ParslBox and return their IDs. "),
 )
+@_with_db_line
 def filter_jobs(params: FilterJobsSchema) -> str:
     input_dict = params.model_dump()
     try:
@@ -408,6 +713,7 @@ def filter_jobs(params: FilterJobsSchema) -> str:
         "For full per-field details on specific jobs, use get_job / get_jobs."
     ),
 )
+@_with_db_line
 def list_jobs(params: ListJobsSchema) -> str:
     input_dict = params.model_dump()
     try:
@@ -427,6 +733,7 @@ def list_jobs(params: ListJobsSchema) -> str:
     name="get_job",
     description="Get a single job's full details by its ID.",
 )
+@_with_db_line
 def get_job(params: GetJobSchema) -> str:
     try:
         job = pbx.get_job(params.job_id)
@@ -446,6 +753,7 @@ def get_job(params: GetJobSchema) -> str:
     name="get_jobs",
     description="Get multiple jobs' full details by their IDs.",
 )
+@_with_db_line
 def get_jobs(params: GetJobsByIdsSchema) -> str:
     try:
         jobs = pbx.get_jobs_by_ids(params.job_ids)
@@ -487,6 +795,14 @@ def local_init(params: LocalInitSchema) -> str:
         f"db: {result['db_path']}",
         f"endpoint: {result['compute_endpoint'] or 'not configured'}",
     ]
+    check = result.get("endpoint_check")
+    if check is not None:
+        lines.append(
+            f"endpoint reachable: {check.get('host')}, python {check.get('python')}, "
+            f"parslbox {check.get('parslbox')}"
+            if check.get("reachable")
+            else f"endpoint did not answer: {check.get('error')}"
+        )
     lines += result.get("notes", [])
     lines.append(result["export_line"])
     return "\n".join(lines)
@@ -621,6 +937,31 @@ def local_pull(params: LocalPullSchema) -> str:
         return f"Exception occurred when pulling. Exception: {e}"
     return (f"Pulled {result['bytes'] / 1024:.0f} KB, "
             f"local now: {result['fingerprint'].get('count')} jobs")
+
+
+
+def _append_schema_blocks() -> None:
+    """Restate each tool's arguments at the end of its description.
+
+    Done by introspection rather than by hand at 16 call sites, so adding a
+    field to a schema updates the description with no further edit.
+    """
+    import inspect
+    from pydantic import BaseModel as _BM
+
+    for tool in mcp._tool_manager._tools.values():
+        try:
+            params = inspect.signature(tool.fn).parameters
+        except (TypeError, ValueError):
+            continue
+        for p in params.values():
+            ann = p.annotation
+            if isinstance(ann, type) and issubclass(ann, _BM):
+                tool.description = (tool.description or "") + schema_text_block(ann)
+                break
+
+
+_append_schema_blocks()
 
 
 # Start MCP server

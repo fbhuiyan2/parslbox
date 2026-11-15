@@ -61,7 +61,7 @@ def _path_for_project(raw: str, project, kind: str) -> Tuple[str, bool]:
     return str(candidate), False
 
 
-def validate_app_configuration(app: str) -> dict:
+def validate_app_configuration(app: str, config_path: Optional[Path] = None) -> dict:
     """
     Validates that the application exists in the registry and returns its configuration.
     
@@ -74,12 +74,12 @@ def validate_app_configuration(app: str) -> dict:
     Raises:
         ValidationError: If the application is not registered
     """
-    if not is_app_registered(app):
-        available_apps = ", ".join(get_registered_apps())
+    if not is_app_registered(app, config_path):
+        available_apps = ", ".join(get_registered_apps(config_path))
         raise ValidationError(f"Unknown application '{app}'. Available applications: {available_apps}")
     
     try:
-        return get_app_config(app)
+        return get_app_config(app, config_path)
     except ValueError as e:
         raise ValidationError(str(e))
 
@@ -103,7 +103,8 @@ def validate_system_configuration(config_name: str):
         raise ValidationError(f"Could not load system configuration: {e}")
 
 
-def validate_input_file(app: str, input_file: Optional[str] = None) -> Tuple[Optional[str], List[str], List[str]]:
+def validate_input_file(app: str, input_file: Optional[str] = None,
+                        config_path: Optional[Path] = None) -> Tuple[Optional[str], List[str], List[str]]:
     """
     Validates and determines the final input file based on app requirements.
     
@@ -125,7 +126,7 @@ def validate_input_file(app: str, input_file: Optional[str] = None) -> Tuple[Opt
     """
     info_messages = []
     warning_messages = []
-    app_config = validate_app_configuration(app)
+    app_config = validate_app_configuration(app, config_path)
     input_required = app_config["INPUT_REQUIRED"]
     default_input = app_config["DFLT_INPUT"]
     
@@ -188,7 +189,7 @@ def validate_resource_parameters(
         raise ValidationError("--nocc must be between 0.0 and 1.0")
     
     if ranks_per_node is not None and ranks_per_node < 1:
-        raise ValidationError(f"--ranks-per-node must be a positive integer, got {ranks_per_node}")
+        raise ValidationError(f"ranks_per_node must be a positive integer, got {ranks_per_node}")
     
     if nnodes < 1:
         raise ValidationError(f"--nnodes must be at least 1, got {nnodes}")
@@ -205,6 +206,13 @@ def validate_resource_parameters(
 
     if ngpus > 0:
         # Explicit GPU request
+        if gpus_per_node == 0:
+            # Checked for every node count: the single-node branch below never
+            # sees a multi-node request, so this used to fall through and the
+            # job was accepted with ranks_per_node=0 (launching `mpiexec -n 0`)
+            # or divided by zero working out how many ranks share a GPU.
+            raise ValidationError(
+                f"Requested {ngpus} GPUs but this system has no GPUs")
         if nnodes == 1 and ngpus > gpus_per_node:
             raise ValidationError(f"Requested {ngpus} GPUs but only {gpus_per_node} available per node")
         final_ngpus = ngpus
@@ -245,19 +253,65 @@ def validate_resource_parameters(
     else:
         # User specified --ranks-per-node
         final_ranks_per_node = ranks_per_node
-        # Validate upper bound
+
+        # Hardware threads are the only hard ceiling: more ranks than that
+        # cannot run even time-sliced, so it is a typo rather than a choice.
+        excluded_cores = getattr(system_config, 'EXCLUDE_CORES', None) or []
+        max_ranks = system_config.CORES_PER_NODE - len(excluded_cores)
+        if final_ranks_per_node > max_ranks:
+            # Named without the CLI dashes: this same string is raised to API
+            # callers and returned to the MCP caller, whose parameter is
+            # `ranks_per_node`.
+            raise ValidationError(
+                f"ranks_per_node ({final_ranks_per_node}) exceeds usable cores per node "
+                f"({max_ranks})")
+
+        # Sharing is supported, but it is rarely what someone means to type.
         if final_ngpus > 0:
-            max_ranks = system_config.GPUS_PER_NODE
-            if final_ranks_per_node > max_ranks:
-                raise ValidationError(
-                    f"--ranks-per-node ({final_ranks_per_node}) exceeds GPUs per node ({max_ranks})")
+            gpus_per_node = final_ngpus if final_num_nodes == 1 else system_config.GPUS_PER_NODE
+            # MPS is NVIDIA-only; Aurora and other Intel parts have no equivalent
+            # knob, so naming it there would send the reader somewhere that does
+            # not exist.
+            mps_hint = (" An MPS daemon, which pbx does not configure, is usually needed "
+                        "for this to pay off."
+                        if str(getattr(system_config, 'GPU_TYPE', '')).lower() == 'cuda'
+                        else "")
+            if final_ranks_per_node > gpus_per_node:
+                rank_word = "rank" if gpus_per_node == 1 else "ranks"
+                warning_messages.append(
+                    f"{final_ranks_per_node} ranks per node share {gpus_per_node} GPU(s) "
+                    f"per node: ranks are assigned round-robin, so up to "
+                    f"{-(-final_ranks_per_node // gpus_per_node)} ranks land on one GPU and "
+                    f"share its CPU cores. Sharing time-slices the device.{mps_hint} Use at "
+                    f"most {gpus_per_node} {rank_word} per node to give every rank its own GPU."
+                )
+            elif gpus_per_node % final_ranks_per_node:
+                # Kokkos drives exactly one device per rank, and `-k on g N` is a
+                # single modulus shared by all of them, so N is bounded by the
+                # smallest block and the larger blocks go partly unused. pbx
+                # already passes a safe N -- the cost is idle GPUs, not a failure.
+                base = gpus_per_node // final_ranks_per_node
+                extra = gpus_per_node % final_ranks_per_node
+                warning_messages.append(
+                    f"{gpus_per_node} GPUs per node do not divide evenly across "
+                    f"{final_ranks_per_node} ranks: {extra} rank(s) get {base + 1} GPUs and "
+                    f"the rest get {base}. Apps that drive one GPU per rank (e.g. LAMMPS "
+                    f"Kokkos) will leave the surplus in the larger blocks idle -- a rank "
+                    f"count that divides {gpus_per_node} uses them all."
+                )
         else:
-            excluded_cores = getattr(system_config, 'EXCLUDE_CORES', None) or []
-            max_ranks = system_config.CORES_PER_NODE - len(excluded_cores)
-            if final_ranks_per_node > max_ranks:
-                raise ValidationError(
-                    f"--ranks-per-node ({final_ranks_per_node}) exceeds cores per node ({max_ranks})")
-    
+            # Multi-node CPU jobs take whole nodes; JobResourceSpec forces
+            # their occupancy to 1.0, so the requested fraction is not what
+            # the job ends up owning.
+            occupancy = 1.0 if final_num_nodes > 1 else final_node_occupancy
+            owned_cores = max(1, int(max_ranks * occupancy))
+            if final_ranks_per_node > owned_cores:
+                warning_messages.append(
+                    f"{final_ranks_per_node} ranks per node share {owned_cores} core(s) "
+                    f"(nocc {occupancy}): the job has more ranks than cores, so the "
+                    f"kernel time-slices them."
+                )
+
     resource_params = {
         'final_num_nodes': final_num_nodes,
         'final_ngpus': final_ngpus,
@@ -521,16 +575,16 @@ def calculate_resource_display_info(resource_params: Dict[str, Any], system_conf
     final_node_occupancy = resource_params['final_node_occupancy']
     final_ranks_per_node = resource_params['final_ranks_per_node']
     
-    # Calculate total ranks for display
-    if final_ngpus > 0:
-        total_ranks = final_num_nodes * final_ngpus
-    else:
-        total_ranks = final_num_nodes * final_ranks_per_node
-    
+    # Ranks come from ranks_per_node, not from the GPU count -- they are equal
+    # only when every rank has its own GPU. `pbx ls` and `pbx info` already
+    # derive it this way, so deriving it from ngpus here made `pbx add` report
+    # a different rank count than every later view of the same job.
+    total_ranks = final_num_nodes * final_ranks_per_node
+
     # Generate resource specification string
     if final_num_nodes > 1:
         if final_ngpus > 0:
-            display_str = f"n:{final_num_nodes}-r:{final_ngpus}-g:{final_ngpus}-nocc:NA"
+            display_str = f"n:{final_num_nodes}-r:{total_ranks}-g:{final_ngpus}-nocc:NA"
         else:
             display_str = f"n:{final_num_nodes}-r:{total_ranks}-g:0-nocc:NA"
     elif final_ngpus > 0:
@@ -550,7 +604,8 @@ def validate_update_app_compatibility(
     job_ids: List[int],
     new_app: str,
     input_file: Optional[str],
-    db_path: Optional[Path] = None
+    db_path: Optional[Path] = None,
+    config_path: Optional[Path] = None
 ) -> Tuple[List[Tuple[int, str]], List[str], List[str], Optional[str]]:
     """
     Validates app update compatibility and handles input file logic for update operations.
@@ -582,8 +637,8 @@ def validate_update_app_compatibility(
         
         try:
             # Get app configurations
-            original_config = get_app_config(original_app)
-            new_config = get_app_config(new_app)
+            original_config = get_app_config(original_app, config_path)
+            new_config = get_app_config(new_app, config_path)
             
             original_input_required = original_config['INPUT_REQUIRED']
             original_default_input = original_config['DFLT_INPUT']

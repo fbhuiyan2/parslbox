@@ -91,7 +91,7 @@ class LammpsBasicApp(AppBase):
             return "Failed"
         
         try:
-            with open(log_file, 'r') as f:
+            with open(log_file, 'r', encoding='utf-8', errors='replace') as f:
                 if "Total wall time:" in f.read():
                     logger.info(f"Job {job_id}: Success marker found in log.lammps.")
                     return "Done"

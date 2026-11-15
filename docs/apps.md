@@ -11,6 +11,9 @@ ParslBox ships with built-in support for a small set of HPC apps, and lets you r
 | **ORCA** | `orca` | Internal (bundled OpenMPI) | Yes | `input.inp` | `****ORCA TERMINATED NORMALLY****` in any `.out` file |
 | **Python** | `python` | Yes (1 rank/node default) | Yes | — | Reads `PBX_JOB_STATUS_REPORT` via `report_status()` |
 | **Julia** | `julia` | Yes (1 rank/node default) | Yes | — | Reads `PBX_JOB_STATUS_REPORT` |
+| **LAMMPS (plain)** | `lammps` | Yes | Yes | `in.lammps` | "Total wall time:" in `log.lammps` |
+| **GROMACS** | `gromacs` | Yes | Yes | `topol.tpr` | Last `mdrun` segment of `<name>.log` has "Finished mdrun" and no time-limit or signal stop |
+| **Quantum ESPRESSO** | `qe` | Yes | Yes | — | "JOB DONE." in `<input>.out` and no stopped-early line |
 
 ### App-specific notes
 
@@ -20,7 +23,15 @@ ParslBox ships with built-in support for a small set of HPC apps, and lets you r
 
 **VASP** auto-detects whether to run `vasp_gpu` or `vasp_std` based on the system's GPU configuration. No `--input` flag needed.
 
-**LAMMPS (Kokkos)** is the only built-in LAMMPS variant. The default rank-per-node policy is 1 rank per GPU. Override with `--ranks-per-node/-rpn` if your input benefits from a different ratio.
+**LAMMPS (Kokkos)** is `lammps-kk`; plain LAMMPS is `lammps` (below). The default rank-per-node policy is 1 rank per GPU. Override with `--ranks-per-node/-rpn` if your input benefits from a different ratio — in either direction. More ranks than GPUs makes them share, round-robin, with the ranks on a GPU sharing its CPU cores. Fewer ranks than GPUs gives each rank a contiguous block of GPUs, but note that Kokkos binds **one GPU per MPI rank** (`-k on g N` is GPUs per *node*, and it selects `local_rank % N`), so the surplus GPUs in a block go unused — 1 rank per GPU is the only way to drive them all. pbx warns when ranks outnumber GPUs, and when the GPU count does not divide evenly into the rank count, since unequal blocks cannot be described by a single `-k on g N`. `ranks_per_node` is capped at `pbx add` time by the node's usable core count; `pbx update` does not re-check it.
+
+**LAMMPS (plain)** is LAMMPS without Kokkos. CPU jobs run `lmp -in <input>`; a job that holds GPUs runs the GPU package, `lmp -sf gpu -pk gpu N -in <input>`, with `N` the GPUs each rank can see (1 under srun `map_gpu` or a per-rank wrapper script). That needs a LAMMPS built with the GPU package. On a GPU system a job gets all GPUs unless `--nocc` is given (`--ngpus 0` alone still auto-assigns them), so add `--nocc 1.0` to run on CPUs; use `lammps-kk` for a Kokkos build. `OMP_NUM_THREADS` is set to 1 after `environment_setup` runs, so it cannot be changed there. Restart is not supported. Rank defaults and sharing work as for `lammps-kk`. Success needs `log.lammps`, so a `log` command in the input that moves the log makes the job Failed.
+
+**GROMACS** runs `gmx_mpi mdrun -deffnm <name> -s <name>.tpr -cpi <name>.cpt -ntomp T [-nb gpu]` on a prebuilt `.tpr`; pbx does not run `gmx grompp`. Pass extra `mdrun` flags with `--app-args`, but not `-deffnm`, `-s` or `-cpi`, which pbx sets, nor `-noappend` or `-g`, which rename the log the success check reads. `-ntomp` is the cores the job holds per node divided by ranks per node. That is exact for GPU jobs and for CPU jobs on whole nodes; a CPU job at `--nocc` below 1 is assumed to hold the whole node, so it gets too many threads (e.g. `--nocc 0.5` with default ranks gives 2× oversubscription) and should pass `-ntomp` itself. `-nb gpu` is added for jobs with GPUs; a `-ntomp` or `-nb` in `--app-args` replaces them. `-cpi` starts from step 0 when no checkpoint exists, so a restart (`pbx update --status Restart`, or `--respawn`) re-runs the same command and resumes. A run stopped by `-maxh` or a signal prints "Finished mdrun" too, so it is marked **Failed**, not Done, and so is any non-zero exit. A thread-MPI `gmx` executable with more than one rank is refused at launch (the job fails with the reason in `pbx_job_<id>.err`), since it would start several independent simulations; point `executable_path` at `gmx_mpi`.
+
+**Quantum ESPRESSO** (only `pw.x`; `ph.x` and the other QE programs are not covered) runs `pw.x -in <input> > <input>.out` (the input's extension replaced by `.out`); the input file is required and `-nk`-style flags go in `--app-args`. `pw.x` prints "JOB DONE." even when SCF did not converge or a time limit stopped it, and exits 0 by default, so the success check also rejects "convergence NOT achieved", "Maximum CPU time exceeded" and "Program stopped by user request". Ion-relaxation non-convergence is not detected. `OMP_NUM_THREADS` is set to 1 after `environment_setup` runs, so hybrid MPI+OpenMP runs cannot be set up here. A non-zero exit is Failed. Restart is not supported.
+
+These three apps were written from the programs' documentation and source and have not yet been run on an HPC system; flags that pbx does not fix can be adjusted through `--app-args`.
 
 ---
 

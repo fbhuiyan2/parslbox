@@ -258,6 +258,10 @@ class TestMPICommandBuilder:
         self.mock_job_spec.num_nodes = 1
         self.mock_job_spec.get_total_ranks.return_value = 4
         self.mock_job_spec.detect_job_type.return_value = "fullnode_gpu"
+        # The srun gpu-bind map is read from the assignment, so the mock has
+        # to describe a real one: 4 ranks on the node, one GPU each.
+        self.mock_assignment.get_ranks_for_node.return_value = [0, 1, 2, 3]
+        self.mock_assignment.get_gpu_assignments_for_rank.side_effect = lambda r: [r]
 
         config = MPIConfig(backend=MPIBackend.SRUN, cpu_bind_method="cores")
         builder = MPICommandBuilder(config, self.mock_system_config)
@@ -277,6 +281,10 @@ class TestMPICommandBuilder:
         self.mock_job_spec.num_nodes = 2
         self.mock_job_spec.get_total_ranks.return_value = 8
         self.mock_job_spec.detect_job_type.return_value = "multinode_gpu"
+        # The srun gpu-bind map is read from the assignment, so the mock has
+        # to describe a real one: 4 ranks on the node, one GPU each.
+        self.mock_assignment.get_ranks_for_node.return_value = [0, 1, 2, 3]
+        self.mock_assignment.get_gpu_assignments_for_rank.side_effect = lambda r: [r]
 
         config = MPIConfig(backend=MPIBackend.SRUN, cpu_bind_method="cores")
         builder = MPICommandBuilder(config, self.mock_system_config)

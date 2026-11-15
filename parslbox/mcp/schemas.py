@@ -1,10 +1,97 @@
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing import List, Optional, Union
 
+from parslbox.apps.app_registry import APP_FACTORY
+from parslbox.system_configs.loader import get_available_systems
 
-class AddJobSchema(BaseModel):
+# Built from the registries at import, not retyped. These lists appeared in
+# five descriptions by hand and had already drifted -- 'orca' was missing from
+# the app list, so no agent could learn the app existed.
+_SYSTEMS = ", ".join(f"'{s}'" for s in get_available_systems())
+_BUILTIN_APPS = ", ".join(f"'{a}'" for a in APP_FACTORY)
+
+
+class McpSchema(BaseModel):
+    """Reject unknown arguments, and say what the valid ones are.
+
+    Pydantic's default silently drops an unrecognised key, so a call with
+    `nodes=4` instead of `nnodes=4` stores the default and reports success.
+    Rejecting alone is not enough either: "Extra inputs are not permitted"
+    names the wrong key without naming the right one, and a caller then
+    guesses again. Listing the accepted arguments makes one retry sufficient.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_unknown_arguments(cls, data):
+        if isinstance(data, dict):
+            unknown = sorted(set(data) - set(cls.model_fields))
+            if unknown:
+                raise ValueError(
+                    f"Unknown argument(s) {unknown}. "
+                    f"Valid arguments: {sorted(cls.model_fields)}"
+                )
+        return data
+
+
+JobIdTokens = List[Union[int, str]]
+"""Job ids as the CLI accepts them: plain ids, ranges, or a mix."""
+
+
+def _check_job_id_tokens(value: JobIdTokens) -> List[str]:
+    """Check ['1-5', 8] for syntax and hand the tokens on unexpanded.
+
+    Ranges spare an agent from transcribing a hundred integers out of a
+    previous tool's output, where one corrupted element removes the wrong
+    job. Expanding them here would be the wrong place: a validator runs
+    before the tool body, so it has no database to size '1-100000000'
+    against and would build the hundred million integers before anything
+    could object. The tool bodies call `resolve_job_ids` instead.
+    """
+    from parslbox.commands.helpers.job_id_parser import validate_job_id_tokens
+
+    tokens = [str(v).strip() for v in value]
+    validate_job_id_tokens(tokens)
+    return tokens
+
+
+def _check_optional_job_id_tokens(value):
+    """As _check_job_id_tokens, but None means "every job" rather than "none"."""
+    return None if value is None else _check_job_id_tokens(value)
+
+
+def schema_text_block(model: type[BaseModel]) -> str:
+    """Render a schema's arguments as text, to append to a tool description.
+
+    A tool declared as `def tool(params: XSchema)` reaches the client as a
+    single `params` property behind a `$ref` into `$defs`. Not every model
+    follows the reference; some invent a container instead and the call is
+    malformed before any validation runs. Restating the field names where
+    there is no reference to follow costs a few dozen tokens and removes
+    that failure. Generated from the model, so it cannot drift.
+    """
+    js = model.model_json_schema()
+    required = set(js.get("required", []))
+    lines = []
+    for name, spec in js.get("properties", {}).items():
+        kind = spec.get("type") or "/".join(
+            x.get("type", "?") for x in spec.get("anyOf", [])
+            if x.get("type") != "null"
+        ) or "any"
+        note = ("required" if name in required
+                else f"optional, default {spec.get('default')!r}")
+        lines.append(f"  {name} ({kind}, {note})")
+    if not lines:
+        return ""
+    return ("\n\nArguments, all inside the single `params` object:\n"
+            + "\n".join(lines))
+
+
+class AddJobSchema(McpSchema):
     """Schema for adding job(s)"""
 
     paths: List[str] = Field(
@@ -18,10 +105,13 @@ class AddJobSchema(BaseModel):
         ),
     )
     app: str = Field(
-        description="The application type. Built-in options are 'lammps-kk', 'vasp', 'python' and 'julia'. Custom apps may also be available.",
+        description=(
+            f"The application type. Built-in options are {_BUILTIN_APPS}. A "
+            "config may declare more; list_systems_and_apps reports them."
+        ),
     )
     config: str = Field(
-        description="The name of the configuration to use. Options are 'polaris', 'sophia', 'crux', 'aurora-tile', 'aurora-gpu', 'lcrc-swing', 'lcrc-improv', 'pinnacles-cenvalarc', 'perlmutter-gpu', 'perlmutter-cpu' and 'perlmutter-gpu-srun'",
+        description=f"The name of the configuration to use. Options are {_SYSTEMS}.",
     )
     tag: Optional[str] = Field(
         default=None,
@@ -51,8 +141,17 @@ class AddJobSchema(BaseModel):
         default=None,
         ge=1,
         description=(
-            "Number of MPI ranks per node. If not specified, uses the app's default "
-            "(e.g., 1 rank per GPU for LAMMPS, 1 rank per node for Python). Must be a positive integer."
+            "MPI ranks PER NODE, so a job runs nnodes * ranks_per_node ranks in total. "
+            "If not specified, uses the app's default (e.g., 1 rank per GPU for LAMMPS, "
+            "1 rank per node for Python). Rejected above the node's usable core count "
+            "(cores minus any the system reserves). "
+            "May exceed the job's GPUs or cores: ranks then round-robin over the GPUs, one "
+            "each, and the ranks on a GPU share its cores; CPU-only jobs share the job's "
+            "cores. Fewer ranks than GPUs is also allowed and gives each rank a contiguous "
+            "block of GPUs. pbx warns both when ranks outnumber GPUs and when the GPU count "
+            "does not divide evenly into the rank count, since unequal blocks cannot be "
+            "expressed by apps that take one GPU-count for every rank (e.g. LAMMPS -k on g). "
+            "Note node_occupancy is forced to 1.0 when nnodes > 1."
         ),
     )
     mpi_opts: Optional[str] = Field(
@@ -81,7 +180,7 @@ class AddJobSchema(BaseModel):
     )
 
 
-class FilterJobsSchema(BaseModel):
+class FilterJobsSchema(McpSchema):
     """Schema for filtering jobs and returning their IDs."""
 
     status: Optional[str] = Field(
@@ -122,7 +221,7 @@ class FilterJobsSchema(BaseModel):
     )
 
 
-class ListJobsSchema(BaseModel):
+class ListJobsSchema(McpSchema):
     """Schema for listing jobs with full details and optional filters."""
 
     status: Optional[str] = Field(
@@ -151,7 +250,17 @@ class ListJobsSchema(BaseModel):
     )
 
 
-class GetJobSchema(BaseModel):
+    limit: Optional[int] = Field(
+        default=None,
+        description=(
+            "Return only the first N jobs, or the last N for a negative N. "
+            "Omit for every match. A large database answers with one line per "
+            "job, so set this unless you need the whole list."
+        ),
+    )
+
+
+class GetJobSchema(McpSchema):
     """Schema for getting a single job's full details by ID."""
 
     job_id: int = Field(
@@ -159,7 +268,7 @@ class GetJobSchema(BaseModel):
     )
 
 
-class GetJobsByIdsSchema(BaseModel):
+class GetJobsByIdsSchema(McpSchema):
     """Schema for getting multiple jobs' full details by their IDs."""
 
     job_ids: List[int] = Field(
@@ -167,11 +276,50 @@ class GetJobsByIdsSchema(BaseModel):
     )
 
 
-class QSubSchema(BaseModel):
+class ResourceRequirementsSchema(McpSchema):
+    """Schema for sizing jobs against a target system."""
+
+    system: str = Field(
+        description=f"Target system. Options are {_SYSTEMS}.",
+    )
+
+    job_ids: Optional[JobIdTokens] = Field(
+        default=None,
+        description=(
+            "Jobs to size. Accepts plain ids and ranges in any mix: "
+            "[1, 2, 3], ['1-50'], or [1, '5-10']; a range may not reach past "
+            "the last job in the database. Omit to size every job, which is "
+            "usually the question worth asking."
+        ),
+    )
+
+    _check = field_validator("job_ids")(_check_optional_job_id_tokens)
+
+
+class CommandLinesSchema(McpSchema):
+    """Schema for previewing the launch command of jobs on a target system."""
+
+    system: str = Field(
+        description=f"Target system. Options are {_SYSTEMS}.",
+    )
+
+    job_ids: Optional[JobIdTokens] = Field(
+        default=None,
+        description=(
+            "Jobs to preview. Accepts plain ids and ranges in any mix; a "
+            "range may not reach past the last job in the database. Omit "
+            "for every job, though one line comes back per job."
+        ),
+    )
+
+    _check = field_validator("job_ids")(_check_optional_job_id_tokens)
+
+
+class QSubSchema(McpSchema):
     """Schema for generating and submitting a PBS job via ParslBox."""
 
     config: str = Field(
-        description="The name of the configuration to use. Options are 'polaris', 'sophia', 'crux', 'aurora-tile', 'aurora-gpu', 'lcrc-swing', 'lcrc-improv', 'pinnacles-cenvalarc', 'perlmutter-gpu', 'perlmutter-cpu' and 'perlmutter-gpu-srun'",
+        description=f"The name of the configuration to use. Options are {_SYSTEMS}.",
     )
 
     job_name: str = Field(
@@ -195,7 +343,7 @@ class QSubSchema(BaseModel):
         description="Project/account name. Optional — omit if your cluster does not require one.",
     )
 
-    run_dir: Optional[Path] = Field(
+    rundir: Optional[Path] = Field(
         default=None,
         description="Custom run directory (default: timestamped directory under ~/.parslbox/runs).",
     )
@@ -221,6 +369,19 @@ class QSubSchema(BaseModel):
         default=0,
         ge=0,
         description="Number of retries for failed tasks (must be >= 0).",
+    )
+
+    loglevel: str = Field(
+        default="info",
+        description="Logging level for the orchestrator (e.g. 'debug', 'info', 'warning').",
+    )
+
+    dynamic: bool = Field(
+        default=True,
+        description=(
+            "Keep discovering jobs added to the database after the run starts. "
+            "Set false to pin the run to the jobs matched at submit time."
+        ),
     )
 
     sched_opts: Optional[List[str]] = Field(
@@ -262,11 +423,11 @@ class QSubSchema(BaseModel):
     )
 
 
-class SBatchSchema(BaseModel):
+class SBatchSchema(McpSchema):
     """Schema for generating and submitting a SLURM job via ParslBox."""
 
     config: str = Field(
-        description="The name of the configuration to use.",
+        description=f"The name of the configuration to use. Options are {_SYSTEMS}.",
     )
 
     job_name: str = Field(
@@ -290,7 +451,7 @@ class SBatchSchema(BaseModel):
         description="Project/account name. Optional — omit if your cluster does not require one.",
     )
 
-    run_dir: Optional[Path] = Field(
+    rundir: Optional[Path] = Field(
         default=None,
         description="Custom run directory (default: timestamped directory under ~/.parslbox/runs).",
     )
@@ -314,6 +475,19 @@ class SBatchSchema(BaseModel):
         default=0,
         ge=0,
         description="Number of retries for failed tasks (must be >= 0).",
+    )
+
+    loglevel: str = Field(
+        default="info",
+        description="Logging level for the orchestrator (e.g. 'debug', 'info', 'warning').",
+    )
+
+    dynamic: bool = Field(
+        default=True,
+        description=(
+            "Keep discovering jobs added to the database after the run starts. "
+            "Set false to pin the run to the jobs matched at submit time."
+        ),
     )
 
     sched_opts: Optional[List[str]] = Field(
@@ -355,7 +529,7 @@ class SBatchSchema(BaseModel):
     )
 
 
-class CancelJobSchema(BaseModel):
+class CancelJobSchema(McpSchema):
     """Schema for gracefully cancelling a running ParslBox batch job."""
 
     jobid: str = Field(
@@ -375,20 +549,34 @@ class CancelJobSchema(BaseModel):
     )
 
 
-class RemoveJobsSchema(BaseModel):
+class RemoveJobsSchema(McpSchema):
     """Schema for removing existing job in the database"""
 
-    job_ids: List[int] = Field(
-        description="List of job IDs to remove",
+    job_ids: JobIdTokens = Field(
+        description=(
+            "Job IDs to remove. Accepts plain ids and ranges in any mix: "
+            "[1, 2, 3], ['1-5'], or [1, '5-10', 12]. Use a range rather than "
+            "listing every id. All or nothing: if any id does not exist "
+            "nothing is removed, and a range may not reach past the last job "
+            "in the database."
+        ),
     )
 
+    _check = field_validator("job_ids")(_check_job_id_tokens)
 
-class UpdateJobSchema(BaseModel):
+
+class UpdateJobSchema(McpSchema):
     """Schema for updating an existing job in the database."""
 
-    job_id: int = Field(
-        description="Job ID to update.",
+    job_ids: JobIdTokens = Field(
+        description=(
+            "Job IDs to update, all receiving the same changes. Accepts plain "
+            "ids and ranges in any mix: [1, 2, 3], ['1-5'], or [1, '5-10', 12]. "
+            "A range may not reach past the last job in the database."
+        ),
     )
+
+    _check = field_validator("job_ids")(_check_job_id_tokens)
 
     status: Optional[str] = Field(
         default=None,
@@ -432,7 +620,13 @@ class UpdateJobSchema(BaseModel):
     ranks_per_node: Optional[int] = Field(
         default=None,
         ge=1,
-        description="New ranks per node. Must be a positive integer.",
+        description=(
+            "New MPI ranks PER NODE. Must be a positive integer. May exceed the job's GPUs "
+            "or cores: ranks then round-robin over the GPUs and share the cores of the GPU "
+            "they land on; CPU-only jobs share the job's cores. Unlike add_jobs, update "
+            "performs no upper-bound check and emits no sharing warning, so a value above "
+            "the node's core count is stored as given and only fails when the job runs."
+        ),
     )
 
     add_deps: Optional[List[int]] = Field(
@@ -451,7 +645,7 @@ class UpdateJobSchema(BaseModel):
     )
 
 
-class LocalStatusSchema(BaseModel):
+class LocalStatusSchema(McpSchema):
     """Schema for reporting on a local project."""
 
     check_remote: bool = Field(
@@ -464,7 +658,7 @@ class LocalStatusSchema(BaseModel):
     )
 
 
-class LocalPushSchema(BaseModel):
+class LocalPushSchema(McpSchema):
     """Schema for sending a local project's database to the remote machine."""
 
     force: bool = Field(
@@ -523,7 +717,7 @@ class LocalPushSchema(BaseModel):
     )
 
 
-class LocalPullSchema(BaseModel):
+class LocalPullSchema(McpSchema):
     """Schema for bringing a local project's remote database back down."""
 
     force: bool = Field(
@@ -535,7 +729,7 @@ class LocalPullSchema(BaseModel):
     )
 
 
-class LocalInitSchema(BaseModel):
+class LocalInitSchema(McpSchema):
     """Schema for creating a local project."""
 
     directory: str = Field(
@@ -589,5 +783,46 @@ class LocalInitSchema(BaseModel):
             "Allow creating this project inside an existing one. False by default: "
             "nesting works, since PBX_DB_PATH decides which database is in use, but "
             "it is far more often an accident than an intention."
+        ),
+    )
+
+    verify: bool = Field(
+        default=False,
+        description=(
+            "Ping the Compute endpoint once the project exists and report the "
+            "result under 'endpoint_check'. Skipped when no endpoint is "
+            "configured yet. Can take up to 60 seconds if the endpoint is down."
+        ),
+    )
+
+
+class UseDatabaseSchema(McpSchema):
+    """Schema for rebinding the server to a different ParslBox database"""
+
+    path: str = Field(
+        description=(
+            "Absolute path to the project directory, or directly to a .db file. "
+            "A directory holding a .pbxlocal.yaml resolves to its "
+            "job_database_pbx-local.db; any other directory resolves to "
+            "job_database_pbx.db. Relative paths are rejected -- they would resolve "
+            "against the server's working directory, not yours."
+        ),
+    )
+    config_path: Optional[str] = Field(
+        default=None,
+        description=(
+            "Absolute path to a config.yaml, or a directory holding one. Omit to keep "
+            "the config currently in use, which is the usual case when projects share "
+            "one config. Pass it when the project declares its own custom apps or "
+            "executables."
+        ),
+    )
+    create: bool = Field(
+        default=False,
+        description=(
+            "Create the database if it does not exist. Default false: a path that is "
+            "not already a database is refused, because a typo would otherwise bind "
+            "the session to a new empty database that looks like a project with no "
+            "jobs. Set true only when deliberately starting a new project here."
         ),
     )

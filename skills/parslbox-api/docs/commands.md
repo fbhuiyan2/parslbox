@@ -222,6 +222,11 @@ pbx rm all
 pbx rm $(pbx filter --status done)
 ```
 
+All or nothing: if any id named does not exist, nothing is removed and the
+missing ones are reported in range notation. A range reaching past the last
+job in the database is refused outright, so a mistyped `1-100000000` costs
+nothing.
+
 ---
 
 ## `pbx qsub` / `pbx sbatch`
@@ -234,7 +239,7 @@ Both commands share identical flag names — there is no `--partition`, `--nodes
 - `--queue/-q` — PBS queue name (qsub) / SLURM partition name (sbatch).
 - `--select` — PBS select spec (qsub), e.g. `4` or `2:ncpus=32:ngpus=4` / number of nodes (sbatch), e.g. `2`.
 
-**Optional**: `--run-dir`, `--apps/-a`, `--tags/-t`, `--retries`, `--sched-opts`, `--dynamic`/`--static`, `--respawn N`, `--loglevel`, `--no-local`, `--push-dirs`
+**Optional**: `--rundir`, `--apps/-a`, `--tags/-t`, `--retries`, `--sched-opts`, `--dynamic`/`--static`, `--respawn N`, `--loglevel`, `--no-local`, `--push-dirs`
 
 Notes:
 - `--walltime` defaults to **minutes**; supports `h` and `d` suffixes (`90`, `4.25h`, `3.5d`).
@@ -246,6 +251,7 @@ Notes:
 - **Job-count guard**: before submitting, qsub/sbatch query the DB for matching Ready/Restart jobs. **If zero match, submission aborts** to avoid wasting the allocation.
 - **In a local project** (see [`pbx local`](#pbx-local)) the submission is handed to the remote machine instead: the database is pushed, `submit_job` runs on the Globus Compute endpoint, and the result is pulled back. `--no-local` submits from here instead; `--push-dirs` also sends the matching jobs' directories over Globus Transfer first.
 - After generation, the submit script is printed in a cyan box with the `pbx run` line highlighted in red. When `--respawn` is set, `respawn_template.sh` is also printed (yellow note explains the placeholder behavior).
+- **App summary**: after submitting, each app in the matched job set is listed with the executable and env block it resolves to on `--config`'s system — `configured for <system>`, `no <system> entry under <app>`, or `no <app> block in config.yaml`. An app with no block still submits and still runs, with an empty executable, so this is worth reading. A `qdel`/`scancel` line follows for cancelling if it looks wrong. In a local project the remote `config.yaml` is the one that counts, so a note points there instead.
 
 ```bash
 # Short flags
@@ -340,5 +346,6 @@ Engine used by qsub/sbatch — not for direct use. Full runtime reference: [`pbx
 
 - `--dynamic` (default) re-queries the DB for runnable jobs each dispatch pass (and lets multiple runs share one DB); `--static` claims the runnable set once up front. Neither idles — a run exits when nothing runnable remains.
 - Triggers a graceful shutdown automatically before walltime (30s grace, 90s under `--respawn`) so in-flight jobs are reconciled cleanly: `Running` → `Killed` by default (or `Restart`/`Failed` under `--respawn`), and claimed-but-not-yet-running jobs revert to `Ready`/`Restart`.
+- `--run-dir` names the Parsl run directory; `--rundir` is accepted as an alias so a hand-typed run in an interactive allocation matches `pbx qsub`/`pbx sbatch`. Newly generated scripts write `--rundir`; config.yaml templates written before the rename still say `--run-dir`, and both the CLI and the respawn chain accept either spelling.
 - `--walltime-seconds` (required) is injected by the generated batch script; it is what the shutdown timing above is measured against.
 - `--respawn N` is set internally by `pbx qsub --respawn N` / `pbx sbatch --respawn N`. It turns on the walltime-time auto-resubmission step. Do not invoke `pbx run` with it directly — use `pbx qsub --respawn N`. The `restart()` hook runs lazily per-job as each `Restart`-status job is dispatched, at every `pbx run` invocation, regardless of `--respawn`.

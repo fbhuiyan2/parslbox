@@ -11,7 +11,7 @@ Authoritative reference: [docs/commands.md](docs/commands.md). Read it for any n
 
 | Command | Purpose |
 |---|---|
-| `pbx config` | Interactive config + DB setup; first-run or per-project (`pbx config .` for cwd, `pbx config /path` for any dir) |
+| [`pbx config`](docs/config-file.md) | Interactive config + DB setup; first-run or per-project (`pbx config .` for cwd, `pbx config /path` for any dir) |
 | `pbx add` | Register a job (or a directory tree of jobs) in the DB |
 | `pbx ls` | List jobs (one-line per job, filterable); optional positional count — `pbx ls 10`, `pbx ls -20`, `pbx ls all` |
 | `pbx info` | Detailed view of specific job IDs |
@@ -53,7 +53,7 @@ A directory holding `job_database_pbx-local.db` **and** `.pbxlocal.yaml` is a *l
 
 ## App names
 
-`lammps-kk`, `vasp`, `orca`, `python`, `julia`. Custom apps register in `config.yaml`. See [docs/apps.md](docs/apps.md).
+`lammps-kk`, `vasp`, `orca`, `python`, `julia`, `lammps`, `gromacs`, `qe`. Custom apps register in `config.yaml`. See [docs/apps.md](docs/apps.md).
 
 ## Config & DB paths
 

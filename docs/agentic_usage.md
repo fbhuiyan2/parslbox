@@ -3,7 +3,7 @@
 ParslBox is built to be driven by an AI agent as well as by hand. It ships two things you can add to any agentic harness:
 
 - **An MCP server** — exposes job add/submit/query/cancel as callable tools.
-- **Two skills** — `parslbox-cli` (the `pbx` shell commands) and `parslbox-api` (the Python `ParslBox` API). Each is a self-contained directory under [`skills/`](../skills) that teaches the agent how to use parslbox.
+- **Three skills** — `parslbox-cli` (the `pbx` shell commands), `parslbox-api` (the Python `ParslBox` API), and `pbx-setup` (a playbook that installs parslbox and writes a complete config from scratch; invoke it as `/pbx-setup`). Each is a self-contained directory under [`skills/`](../skills).
 
 Install the MCP dependencies with `pip install ".[agentic]"`.
 
@@ -24,11 +24,79 @@ python -m parslbox.mcp.mcp_server --port 8080
 python -m parslbox.mcp.mcp_server --stdio
 ```
 
-Exposed tools: `add_jobs`, `submit_pbs_job`, `submit_slurm_job`, `cancel_pbs_job`, `cancel_slurm_job`, `remove_jobs`, `update_job`, `filter_jobs`, `list_jobs`, `get_job`, `get_jobs`, `local_init`, `local_status`, `local_push`, `local_pull`.
+Exposed tools: `use_database`, `add_jobs`, `submit_pbs_job`, `submit_slurm_job`, `cancel_pbs_job`, `cancel_slurm_job`, `remove_jobs`, `update_jobs`, `filter_jobs`, `list_jobs`, `get_job`, `get_jobs`, `get_resource_requirements`, `get_command_lines`, `local_init`, `local_status`, `local_push`, `local_pull`.
+
+### Which database the server is on
+
+The server binds to `PBX_DB_PATH` when it starts and keeps that binding for its whole life. It does **not** follow the caller's working directory, and it cannot see an `export PBX_DB_PATH=...` run in a shell afterwards — that is a different process. (The `pbx` CLI is unaffected: it re-reads the environment on every invocation.)
+
+`use_database` changes the binding for the rest of the session, so one agent session can move between projects:
+
+```
+use_database(path="/lus/flare/projects/kappa-cusic")   # or a .db file directly
+```
+
+A directory holding a `.pbxlocal.yaml` resolves to its `job_database_pbx-local.db`; any other directory resolves to `job_database_pbx.db`. Relative paths are refused, and so is a database that does not exist — a typo would otherwise bind the session to a new empty database that looks like a project with no jobs. Pass `create=true` to start one deliberately, or `config_path` when the project has its own `config.yaml` (needed when it declares its own custom apps).
+
+Every job tool prefixes its answer with the database it used:
+
+```
+db: kappa-cusic (/lus/flare/projects/kappa-cusic/job_database_pbx.db)
+```
+
+If that line names the wrong project, call `use_database` rather than acting on the result.
 
 The four `local_*` tools drive a [local project](remote-workflow.md): a directory whose database stores the paths jobs will have on a remote HPC machine, so an agent can author work on one machine and submit it on another. `local_init` takes an absolute `directory` — the MCP server's working directory is usually not the caller's. In a local project `submit_pbs_job` / `submit_slurm_job` push, submit on the remote's Globus Compute endpoint, and pull back; `no_local` opts out.
 
 For an HTTP client example, see [`examples/chemgraph_parslbox_example/`](../examples/chemgraph_parslbox_example/).
+
+### Tool arguments
+
+Each tool's description ends with its argument list, generated from the schema:
+
+```
+Arguments, all inside the single `params` object:
+  paths (array, required)
+  app (string, required)
+  config (string, required)
+  nnodes (integer, optional, default 1)
+  ...
+```
+
+The arguments are also in the JSON schema, but there they sit behind a `$ref`
+that some models do not follow — they guess at the shape of `params` and the
+call is malformed before any validation runs. Restating the names costs a few
+dozen tokens and removes that failure.
+
+`remove_jobs` and `update_jobs` take job ids the way the CLI does — plain
+ids, ranges, or a mix:
+
+```
+update_jobs(params={"job_ids": [1, 2, "5-10"], "ngpus": 6})
+```
+
+`update_jobs` applies the same change to every id in one call. Prefer a range
+over listing every id: transcribing a long id list from a previous tool's
+output is where bulk removals go wrong.
+
+A range may not reach past the last job in the database, so a slipped
+keystroke turning `1-10` into `1-100000000` comes back as an error rather
+than as a very long pause. `remove_jobs` is additionally all-or-nothing: if
+any id does not exist, nothing is removed and the missing ones are named in
+the same range notation (`No job with id 6-40`).
+
+An unknown argument is rejected rather than ignored, and the error names the
+valid ones:
+
+```
+Unknown argument(s) ['nodes', 'tags']. Valid arguments: ['app', 'app_args',
+'config', ..., 'ngpus', 'nnodes', ..., 'tag']
+```
+
+Previously an unrecognised key was silently dropped, so `nodes=4` instead of
+`nnodes=4` stored the default and the tool still answered "Successfully
+added" — a wrong database reported as success.
+
 
 ### Add the MCP server to Claude Code (user scope — available in every directory)
 
@@ -117,7 +185,7 @@ claude        # (OpenCode: just run `opencode` — its timeout lives in opencode
 
 ## Skills
 
-The two skills live under [`skills/`](../skills) — `parslbox-cli` and `parslbox-api`. Each directory is self-contained (it bundles its own `docs/`), so you can install it either by copying or by symlinking.
+The skills live under [`skills/`](../skills) — `parslbox-cli`, `parslbox-api` and `pbx-setup`. Each directory is self-contained (it bundles its own `docs/`), so you can install it either by copying or by symlinking.
 
 ### Where skills live
 
@@ -126,10 +194,38 @@ The two skills live under [`skills/`](../skills) — `parslbox-cli` and `parslbo
 
 Because `~/.claude/skills/` is read by **both** tools, it's the best single home if you use both (see the conflict note below).
 
+### Install with the script (recommended)
+
+```bash
+scripts/install-skills.sh            # symlink into every harness it detects
+```
+
+It scans your home directory for the locations known agent harnesses read
+(`~/.claude/skills`, `~/.config/opencode/skills`, `~/.codex/skills`,
+`~/.agents/skills`, `~/.cursor/skills`, `~/.gemini/skills`,
+`~/.pi/agent/skills`, `~/.copilot/skills`, `~/.config/agents/skills`, and a
+few more) and installs only where the harness is already present.
+
+```bash
+scripts/install-skills.sh --harness claude,opencode   # pick explicitly
+scripts/install-skills.sh --all                       # every known harness
+scripts/install-skills.sh --copy                      # frozen copies, not links
+scripts/install-skills.sh --list                      # what is detected/installed
+scripts/install-skills.sh --check                     # exit 1 if missing or stale
+scripts/install-skills.sh --uninstall                 # remove only what it added
+```
+
+Symlinks are the default so `git pull` updates the installed skills. The
+script never replaces a directory it did not create, and `--uninstall` leaves
+anything it did not install alone.
+
+If it writes into more than one location a single harness reads, it says so —
+see the note on double-loading below.
+
 ### Install by copy (standalone snapshot)
 
 ```bash
-cp -r skills/parslbox-cli skills/parslbox-api ~/.claude/skills/
+cp -r skills/parslbox-cli skills/parslbox-api skills/pbx-setup ~/.claude/skills/
 ```
 
 A copy is frozen — re-copy after you pull repo updates.
@@ -139,6 +235,8 @@ A copy is frozen — re-copy after you pull repo updates.
 ```bash
 ln -s /abs/path/to/parslbox/skills/parslbox-cli ~/.claude/skills/parslbox-cli
 ln -s /abs/path/to/parslbox/skills/parslbox-api ~/.claude/skills/parslbox-api
+ln -s /abs/path/to/parslbox/skills/pbx-setup    ~/.claude/skills/pbx-setup
+# or: scripts/install-skills.sh --harness claude
 ```
 
 A symlink always reflects the repo, so `git pull` updates the skill automatically. Use absolute paths.

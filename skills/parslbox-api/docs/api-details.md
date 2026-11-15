@@ -28,6 +28,10 @@ from parslbox.api import ParslBoxError, ValidationError, JobNotFoundError
 
 | Method | Purpose |
 | --- | --- |
+| `create_config(path, systems, apps=None, force=False)` | Write a config.yaml without prompting (staticmethod) |
+| `available_systems()` | List every configured HPC system with its hardware (staticmethod) |
+| `builtin_apps()` | The app identifiers shipped with ParslBox (staticmethod) |
+| `available_apps()` | App identifiers this config accepts, split into `builtin` and `custom` |
 | `add_jobs(paths, app, config, ...)` | Register one or more jobs in the DB |
 | `update_jobs(job_ids, ...)` | Mutate status / resources / dependencies of existing jobs |
 | `list_jobs(...)` | Return full job rows (dicts), optionally filtered |
@@ -37,6 +41,8 @@ from parslbox.api import ParslBoxError, ValidationError, JobNotFoundError
 | `remove_job(job_id)` | Delete one job |
 | `remove_jobs(job_ids)` | Delete many jobs |
 | `remove_all_jobs()` | Wipe the DB |
+| `resource_requirements(system, job_ids=None)` | How many nodes of `system` the jobs need (read-only) |
+| `command_lines(system, job_ids=None)` | Preview the MPI/srun line each job would launch with |
 | `qsub(...)` | Generate and submit a PBS batch script |
 | `sbatch(...)` | Generate and submit a SLURM batch script |
 | `qdel(jobid, grace=30)` | Graceful PBS cancel (SIGTERM → wait → hard kill) |
@@ -46,6 +52,78 @@ from parslbox.api import ParslBoxError, ValidationError, JobNotFoundError
 | `local_push(force=False, with_dirs=False, ...)` | Send the local project's database to the remote machine, and optionally the job directories |
 | `local_pull(force=False)` | Bring the remote database back down |
 | `run(...)` | (Reserved — use `pbx run` CLI for full execution control) |
+
+---
+
+## `create_config`
+
+`pbx config` without the prompts, for setup from a script or an agent. A
+**staticmethod**: `ParslBox()` raises `FileNotFoundError` when no config.yaml
+exists, which is the case this method is for.
+
+```python
+ParslBox.create_config("/home/me/.parslbox", systems=["polaris", "crux"],
+                       apps=["lammps-kk", "vasp"])
+# {'config_path': '/home/me/.parslbox/config.yaml',
+#  'db_path': '/home/me/.parslbox/job_database_pbx.db', 'db_from_env': False,
+#  'config_env_var': None, 'systems_selected': ['polaris', 'crux'],
+#  'apps_selected': ['lammps-kk', 'vasp'], 'backed_up': None}
+```
+
+`path` is a directory and is required — the CLI prompts for it, and defaulting
+silently to `~/.parslbox` is the wrong surprise for a caller that meant the
+current project. `'.'` and `'~'` work as they do on the command line.
+
+Names come from `available_systems()` and `available_apps()['builtin']`, and
+both lists are validated before anything is written: a typo'd app name used to
+go straight into config.yaml and only surface later at `pbx add` as
+`Unknown application`.
+
+An existing config.yaml is an error unless `force=True`, which renames it to
+`config.yaml.backup.<timestamp>` and reports the name in `backed_up`. The old
+file is never deleted.
+
+`config_env_var` is `{'PBX_CONFIG_PATH': <dir>}` when the config is outside
+`~/.parslbox` — the caller is responsible for telling the user to export it.
+
+**It also initializes the job database**, at `PBX_DB_PATH` if set and
+`~/.parslbox` otherwise — *not* next to the config. An existing database is
+left as it is; no jobs are lost by creating a second config.
+
+---
+
+## `available_systems` / `available_apps`
+
+The names every other method takes. Nothing else in the API reports them, so
+without these a caller has to copy a system name out of the README.
+
+```python
+ParslBox.available_systems()
+# [{'name': 'polaris', 'scheduler': 'PBS', 'cores_per_node': 64,
+#   'gpus_per_node': 4, 'gpu_type': 'cuda', 'mpi_backend': 'mpich'}, ...]
+
+pbx.available_apps()
+# {'builtin': ['lammps-kk', 'vasp', 'python', 'julia', 'orca', 'lammps', 'gromacs', 'qe'], 'custom': []}
+```
+
+`available_systems()` is a **staticmethod**: `ParslBox()` raises
+`FileNotFoundError` when no config.yaml exists, which is exactly when a caller
+most needs to know which systems are selectable. `gpus_per_node` is `0` and
+`gpu_type` is `None` on CPU-only systems.
+
+`builtin_apps()` is the staticmethod counterpart for the setup case: during
+first-time setup there is no config.yaml, so there is no instance to ask, and
+`create_config()` accepts built-ins only.
+
+```python
+ParslBox.builtin_apps()
+# ['lammps-kk', 'vasp', 'python', 'julia', 'orca', 'lammps', 'gromacs', 'qe']
+```
+
+`available_apps()` is an instance method because `custom` comes from this
+instance's config.yaml `custom_apps:` block — a different `config_path` gives a
+different answer. Built-ins cannot be overridden by a custom app of the same
+name, so the two lists never overlap.
 
 ---
 
@@ -140,6 +218,10 @@ plot_jobs  = pbx.list_jobs(in_file="plot.py")
 
 # Exact node count
 two_node = pbx.list_jobs(num_nodes=2)
+
+# First / last N, as `pbx ls 20` and `pbx ls -20` do
+first_20 = pbx.list_jobs(limit=20)
+last_20  = pbx.list_jobs(limit=-20)
 ```
 
 > `list_jobs` filters use exact match for `status`/`app`/`tag`/`num_nodes` and substring match for `path`/`in_file`. For **tag glob support** (`*test`, `prod*`, `*3c*`) and exclude filters, use `filter_jobs`.
@@ -191,8 +273,8 @@ except JobNotFoundError as e:
 ## `remove_job` / `remove_jobs` / `remove_all_jobs`
 
 ```python
-ok = pbx.remove_job(42)                # True if it existed
-n  = pbx.remove_jobs([10, 11, 12])     # returns count actually deleted
+ok = pbx.remove_job(42)                # True if it existed, False if not
+n  = pbx.remove_jobs([10, 11, 12])     # all-or-nothing; returns count
 n  = pbx.remove_all_jobs()             # wipe DB; returns count
 
 # Idiom: remove every Done job older than some criterion
@@ -200,11 +282,39 @@ done_ids = pbx.filter_jobs(status="Done")
 pbx.remove_jobs(done_ids)
 ```
 
+`remove_jobs` raises `ValidationError` and removes nothing if any id is
+absent; the message names the missing ids in range notation (`No job with id
+6-40`). `remove_job`, being singular, keeps the gentler contract and answers
+`False`.
+
+---
+
+## `resource_requirements` / `command_lines`
+
+The `pbx info --req` and `--cmdline` analyses, as data. Both are read-only:
+nothing is submitted and nothing in the DB changes. `job_ids=None` covers
+every job.
+
+```python
+req = pbx.resource_requirements("aurora-tile")
+print(req["gpus_per_node"], req["cores_per_node"], req["schedulable"], req["skipped"])
+print(req["gpu"]["simultaneous"], req["gpu"]["optimal"])   # also req["cpu"], req["total"]
+
+for row in pbx.command_lines("aurora-tile", job_ids=[1, 2])["jobs"]:
+    print(row["job_id"], row["resources"], row["command"], row["error"])
+```
+
+Only `Ready`/`Restart` jobs are sized; the rest come back as `{status: count}`
+under `skipped`. `simultaneous` runs everything at once, `optimal` is the
+tighter number once jobs queue behind each other. A command-line preview uses
+placeholder hostnames and generates its rankfiles into a temp directory that
+is removed before returning. An unknown system raises `ValidationError`.
+
 ---
 
 ## `qsub` — submit a PBS batch
 
-Generates the batch script, validates `tags` against the DB (literal **and** glob entries must each match at least one Ready job), aborts cleanly if nothing is runnable, and submits. Returns a dict with `success`, `job_id`, `run_dir`, and — when validation ran — `matched_jobs` + `resolved_tags`. When `respawn` is set, the result dict also includes `respawn_template_file` (path to the generated `respawn_template.sh`).
+Generates the batch script, validates `tags` against the DB (literal **and** glob entries must each match at least one Ready job), aborts cleanly if nothing is runnable, and submits. Returns a dict with `success`, `job_id`, `rundir`, and — when validation ran — `matched_jobs`, `resolved_tags`, and `app_summary`. `app_summary` is one entry per app in the submission with `app`, `executable`, `env_state` (`configured` / `no_system_entry` / `no_app_block`) and a human-readable `detail` — an app with no per-system block still submits and still runs, with an empty executable, so check it. When `respawn` is set, the result dict also includes `respawn_template_file` (path to the generated `respawn_template.sh`).
 
 ```python
 result = pbx.qsub(
@@ -217,8 +327,9 @@ result = pbx.qsub(
     apps=["lammps-kk"],
     tags=["prod-*", "film-bulk"],  # globs allowed; resolved against DB
     retries=1,
+    dynamic=True,                  # False pins the run to the jobs matched now
 )
-print(result["job_id"], result["run_dir"])
+print(result["job_id"], result["rundir"])
 print("matched", result.get("matched_jobs"), "tags →", result.get("resolved_tags"))
 ```
 
@@ -274,7 +385,7 @@ result = pbx.sbatch(
     sched_opts=["#SBATCH --qos=regular", "#SBATCH --constraint=gpu"],
     respawn=2,  # optional self-respawn chain
 )
-print(result["job_id"], result["run_dir"])
+print(result["job_id"], result["rundir"])
 ```
 
 ---
@@ -312,7 +423,7 @@ pbx.local_init(
 pbx = ParslBox(db_path="/home/you/work/proj1/job_database_pbx-local.db")
 ```
 
-`local_init` writes files and touches no network. It raises `ValidationError` when the directory cannot hold a project: a populated `-local.db` with no project file (the remote root it belonged to is unrecoverable), a project file with no database, a relative `remote_root`, or a project in a parent directory with `nested_ok` left `False`. Re-running on an existing project returns `action='existing'` and changes nothing.
+`local_init(..., verify=True)` pings the Compute endpoint once the project exists and reports it under `endpoint_check` (skipped when no endpoint is configured). Otherwise `local_init` writes files and touches no network. It raises `ValidationError` when the directory cannot hold a project: a populated `-local.db` with no project file (the remote root it belonged to is unrecoverable), a project file with no database, a relative `remote_root`, or a project in a parent directory with `nested_ok` left `False`. Re-running on an existing project returns `action='existing'` and changes nothing.
 
 `local_status(check_remote=False)` stays offline. The return always has `is_local_project`; when `True` it also carries `local_root`, `remote_root`, `job_count`, `created`, `export_line`, a `local` block with a `drift` phrase, a `remote` block (`reachable`, `fingerprint`, `drift`, `endpoint_info`), and a `recommendation` when the two sides disagree. An unreachable endpoint is not an error — the remote block reports `reachable: False` alongside the last known figures.
 

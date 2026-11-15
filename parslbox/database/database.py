@@ -204,12 +204,74 @@ def get_jobs(db_path: Path, status: Optional[str] = None, app: Optional[str] = N
         # Convert sqlite3.Row objects to plain dictionaries
         return [dict(row) for row in results]
 
+def _id_chunks(job_ids: List[int], con: sqlite3.Connection, room: int = 0):
+    """Split ids into batches this connection can bind in one statement.
+
+    SQLite caps host parameters per statement, so an `IN (?,?,...)` built
+    from a job-id list works until a database outgrows the cap and then
+    fails with "too many SQL variables" -- on a request as ordinary as
+    `rm 1-33000`. The figure is a compile-time setting (32766 since SQLite
+    3.32, 999 before it), so it is read off the connection rather than
+    guessed at.
+
+    `room` is how many parameters the rest of the statement already needs.
+    """
+    size = max(1, con.getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER) - room)
+    for i in range(0, len(job_ids), size):
+        yield job_ids[i:i + size]
+
+
+def get_max_job_id(db_path: Path) -> int:
+    """Highest job id present, or 0 if there are none.
+
+    The ceiling every id-range argument is checked against, so no arbitrary
+    cap has to be invented: a range cannot reach past the jobs that exist.
+    """
+    if not Path(db_path).exists():
+        return 0
+    with get_configured_connection(db_path) as con:
+        row = con.cursor().execute("SELECT MAX(job_id) FROM jobs").fetchone()
+        return row[0] or 0
+
 def remove_jobs_by_id(db_path: Path, job_ids: List[int]) -> int:
-    """Removes jobs by their IDs and returns the number of rows deleted."""
+    """Removes jobs by their IDs and returns the number of rows deleted.
+
+    Nothing is deleted unless every id exists. A partial delete used to
+    report only its count, so `rm 1-40` against a five-job database answered
+    "removed 5" — indistinguishable from having removed all forty.
+
+    Raises:
+        ValueError: If any requested id is absent, naming them in range
+            notation so a wide request does not print a wall of integers.
+    """
+    if not job_ids:
+        return 0
+
     with get_configured_connection(db_path) as con:
         cur = con.cursor()
-        cur.execute(f"DELETE FROM jobs WHERE job_id IN ({','.join('?' for _ in job_ids)})", job_ids)
-        return cur.rowcount
+        # Several orchestrators share one database. Without a write lock held
+        # across both statements another process can delete one of the ids
+        # between the check and the DELETE, which is exactly the partial
+        # delete this function exists to refuse.
+        cur.execute("BEGIN IMMEDIATE")
+        present = {row[0] for row in cur.execute(
+            "SELECT job_id FROM jobs WHERE job_id BETWEEN ? AND ?",
+            (min(job_ids), max(job_ids))).fetchall()}
+        missing = [jid for jid in job_ids if jid not in present]
+        if missing:
+            con.rollback()
+            from parslbox.commands.helpers.job_id_parser import format_job_ids
+            raise ValueError(
+                f"No job with id {format_job_ids(missing)}. Nothing was removed."
+            )
+        removed = 0
+        for chunk in _id_chunks(job_ids, con):
+            cur.execute(
+                f"DELETE FROM jobs WHERE job_id IN ({','.join('?' for _ in chunk)})",
+                chunk)
+            removed += cur.rowcount
+        con.commit()
+        return removed
 
 def remove_all_jobs(db_path: Path) -> int:
     """Removes all jobs from the database."""
@@ -221,7 +283,8 @@ def remove_all_jobs(db_path: Path) -> int:
 def get_jobs_by_ids(db_path: Path, job_ids: List[int]) -> List[Dict[str, Any]]:
     """
     Retrieves specific jobs from the database by their IDs.
-    Returns jobs in the same order as the provided job_ids list.
+    Returns them in ascending job_id order, whatever order they were asked
+    for, and silently omits any id with no row.
     """
     if not job_ids:
         return []
@@ -230,12 +293,12 @@ def get_jobs_by_ids(db_path: Path, job_ids: List[int]) -> List[Dict[str, Any]]:
         con.row_factory = sqlite3.Row
         cur = con.cursor()
         
-        # Create placeholders for the IN clause
-        placeholders = ','.join('?' for _ in job_ids)
-        query = f"SELECT * FROM jobs WHERE job_id IN ({placeholders}) ORDER BY job_id ASC"
-        
-        results = cur.execute(query, job_ids).fetchall()
-        return [dict(row) for row in results]
+        rows = []
+        for chunk in _id_chunks(job_ids, con):
+            placeholders = ','.join('?' for _ in chunk)
+            query = f"SELECT * FROM jobs WHERE job_id IN ({placeholders})"
+            rows.extend(cur.execute(query, chunk).fetchall())
+        return [dict(row) for row in sorted(rows, key=lambda r: r['job_id'])]
 
 def get_jobs_by_sched_id(
     db_path: Path,
@@ -567,17 +630,15 @@ def update_jobs(
     # Join the SET clauses with a comma
     set_statement = ", ".join(set_clauses)
     
-    # Final parameters list includes the update values and the job IDs for the WHERE clause
-    final_params = params + job_ids
-    
-    # Build the final query
-    query = f"""
-        UPDATE jobs
-        SET {set_statement}
-        WHERE job_id IN ({','.join('?' for _ in job_ids)})
-    """
-
     with get_configured_connection(db_path) as con:
         cur = con.cursor()
-        cur.execute(query, final_params)
-        return cur.rowcount
+        updated = 0
+        for chunk in _id_chunks(job_ids, con, room=len(params)):
+            query = f"""
+        UPDATE jobs
+        SET {set_statement}
+        WHERE job_id IN ({','.join('?' for _ in chunk)})
+    """
+            cur.execute(query, params + chunk)
+            updated += cur.rowcount
+        return updated

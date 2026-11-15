@@ -460,7 +460,7 @@ def submit_remote(db_path, kwargs: Dict[str, Any], run_dir=None,
     payload = {
         "db_path": project.remote_db_path,
         "config_path": project.remote_config,
-        "run_dir": target,
+        "rundir": target,
         "kwargs": kwargs,
     }
     with compute.ComputeClient(project.compute_endpoint, timeout=600) as client:
@@ -475,7 +475,7 @@ def submit_remote(db_path, kwargs: Dict[str, Any], run_dir=None,
 
     result = dict(outcome["result"])
     result["remote"] = True
-    result["remote_run_dir"] = target
+    result["remote_rundir"] = target
     result["endpoint"] = project.compute_endpoint
     result["push"] = steps["push"]
     if "dirs" in steps:

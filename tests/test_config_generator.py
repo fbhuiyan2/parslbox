@@ -111,6 +111,9 @@ class TestConfigGenerator:
 
             assert "polaris:" in systems
             assert "pbx_python_env_setup:" in systems
+            # Live, not commented: the job inherits whatever the site's shell
+            # init left behind, so the block starts by flattening it.
+            assert "    module purge\n    module reset\n" in systems
             assert "sched_opts" in systems
             assert "mpi:" in systems
             assert "backend: mpich" in systems

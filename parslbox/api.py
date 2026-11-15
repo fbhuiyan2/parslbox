@@ -18,14 +18,14 @@ from concurrent.futures import as_completed
 
 from parslbox.database import database
 from parslbox.utils import path_utils
-from parslbox.utils import pbx_config_utils as config_utils
 from parslbox.apps.app_registry import (
+    APP_FACTORY,
     get_app_config,
     is_app_registered,
     get_app_instance,
     get_registered_apps,
 )
-from parslbox.system_configs.loader import get_system_config, load_config
+from parslbox.system_configs.loader import get_system_config, get_system_specs, load_config
 from parslbox.resource_manager.exceptions import InsufficientResources
 from parslbox.resource_manager.models import create_job_resource_spec
 from parslbox.utils.logging_utils import setup_logging
@@ -67,15 +67,15 @@ class ParslBox:
     Example:
         >>> from parslbox.api import ParslBox
         >>> pbx = ParslBox()
-        >>> job_id = pbx.add_job(
-        ...     path="/path/to/simulation",
+        >>> job_ids, failures, log = pbx.add_jobs(
+        ...     paths=["/path/to/simulation"],
         ...     app="lammps-kk",
         ...     config="polaris",
         ...     ngpus=2,
         ...     tag="production"
         ... )
         >>> jobs = pbx.list_jobs(status="Ready", app="lammps-kk")
-        >>> pbx.update_job(job_id, status="Submitted")
+        >>> pbx.update_jobs(job_ids, status="Submitted")
     """
 
     def __init__(
@@ -123,6 +123,121 @@ class ParslBox:
                 f"or provide config_path parameter to an existing config."
             )
 
+    # ==================== Setup Methods ====================
+
+    @staticmethod
+    def create_config(
+        path: Union[str, Path],
+        systems: List[str],
+        apps: Optional[List[str]] = None,
+        force: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Write a config.yaml for the given systems and apps.
+
+        This is the programmatic form of `pbx config`, for first-time setup
+        and for adding a second, project-local config later. A static method
+        because ParslBox() raises FileNotFoundError when no config exists --
+        which is exactly when this is needed.
+
+        Use available_systems() and available_apps() to find valid names;
+        both must be chosen by the caller, there is no prompting here.
+
+        Args:
+            path: Directory for the config. '.' is the current directory,
+                  '~' or 'home' is ~/.parslbox, anything else is used as
+                  given. Required -- unlike the CLI, nothing is prompted, and
+                  defaulting would write to ~/.parslbox unannounced.
+            systems: System names to include. At least one.
+            apps: Built-in app names to include. None or [] means ['python'].
+            force: Rename an existing config.yaml to
+                   'config.yaml.backup.<timestamp>' and write a fresh one.
+                   Without it an existing config is an error. The old file is
+                   renamed, never deleted.
+
+        Returns:
+            Dict with 'config_path', 'db_path', 'db_from_env',
+            'config_env_var' ({'PBX_CONFIG_PATH': dir} when the config is not
+            in ~/.parslbox, else None), 'systems_selected', 'apps_selected'
+            and 'backed_up' (the backup filename, or None).
+
+        Raises:
+            ValidationError: Unknown system or app name, no systems given, or
+                a config already exists at that path and force is False.
+
+        Note:
+            This also initializes the job database, at PBX_DB_PATH if set and
+            ~/.parslbox otherwise -- not next to the config. An existing
+            database is left alone; its jobs are not touched.
+        """
+        from parslbox.commands.config import config_setup
+
+        # Before str(path) -- str(None) is the directory name "None", which
+        # config_setup would happily create.
+        if path is None:
+            raise ValidationError(
+                "'path' is required: the directory to write config.yaml into "
+                "('.' for the current directory, '~' for ~/.parslbox)"
+            )
+        if systems is None:
+            raise ValidationError(
+                "'systems' is required: choose from available_systems()"
+            )
+
+        try:
+            return config_setup(
+                path=str(path), systems=systems, apps=apps, force=force
+            )
+        except (ValueError, FileExistsError) as e:
+            raise ValidationError(str(e))
+
+    # ==================== Discovery Methods ====================
+
+    @staticmethod
+    def available_systems() -> List[Dict[str, Any]]:
+        """
+        Every HPC system ParslBox is configured for, with its hardware.
+
+        The names returned here are what `config=` / `system=` take
+        everywhere else in this API. A static method because the answer is
+        built in and does not depend on a database or a config file.
+
+        Returns:
+            List of dicts with 'name', 'scheduler' ('PBS' or 'SLURM'),
+            'cores_per_node', 'gpus_per_node' (0 on CPU-only systems),
+            'gpu_type' (None there) and 'mpi_backend'.
+        """
+        return get_system_specs()
+
+    @staticmethod
+    def builtin_apps() -> List[str]:
+        """
+        The app identifiers that ship with ParslBox.
+
+        A static method, unlike available_apps(): during first-time setup
+        there is no config.yaml, so there is no instance to ask, and
+        create_config() accepts built-ins only.
+
+        Returns:
+            List of app names, e.g. ['lammps-kk', 'vasp', 'python', ...].
+        """
+        return list(APP_FACTORY)
+
+    def available_apps(self) -> Dict[str, List[str]]:
+        """
+        App identifiers accepted by `app=`, split by where they come from.
+
+        Custom apps are whatever this instance's config.yaml declares under
+        `custom_apps:`, so a different config_path gives a different answer.
+
+        Returns:
+            Dict with 'builtin' and 'custom' lists. 'custom' is empty when
+            the config declares none.
+        """
+        builtin = list(APP_FACTORY)
+        every = get_registered_apps(self.config_path)
+        return {"builtin": builtin, "custom": [a for a in every if a not in builtin]}
+
     # ==================== Job Management Methods ====================
 
     def add_jobs(
@@ -155,7 +270,9 @@ class ParslBox:
             ngpus: Number of GPUs required (default: 0)
             nnodes: Number of nodes required (default: 1)
             node_occupancy: Node occupancy fraction for CPU-only jobs (0.0-1.0)
-            ranks_per_node: Number of MPI ranks per node
+            ranks_per_node: Number of MPI ranks per node. May exceed the job's
+                GPUs or cores; ranks then share them and a warning is returned
+                in msg_log['warnings']
             mpi_opts: Additional MPI options
             env_file: Path to environment setup file
             parents: List of parent job IDs
@@ -202,6 +319,7 @@ class ParslBox:
                 status=status,
                 app_args=app_args,
                 db_path=self.db_path,
+                config_path=self.config_path,
             )
             return successful_job_ids, failed_jobs, msg_log
         except Exception as e:
@@ -221,8 +339,10 @@ class ParslBox:
         Returns:
             True if job was removed, False if not found
         """
-        count = database.remove_jobs_by_id(self.db_path, [job_id])
-        return count > 0
+        try:
+            return database.remove_jobs_by_id(self.db_path, [job_id]) > 0
+        except ValueError:
+            return False
 
     def remove_jobs(self, job_ids: List[int]) -> int:
         """
@@ -233,8 +353,15 @@ class ParslBox:
 
         Returns:
             Number of jobs removed
+
+        Raises:
+            ValidationError: If any requested id is absent. Nothing is
+                removed; the message names the missing ids in range notation.
         """
-        return database.remove_jobs_by_id(self.db_path, job_ids)
+        try:
+            return database.remove_jobs_by_id(self.db_path, job_ids)
+        except ValueError as e:
+            raise ValidationError(str(e))
 
     def remove_all_jobs(self) -> int:
         """
@@ -272,7 +399,9 @@ class ParslBox:
             env_file: New environment file path
             nnodes: New number of nodes
             node_occupancy: New node occupancy
-            ranks_per_node: New ranks per node
+            ranks_per_node: New ranks per node. May exceed the job's GPUs or
+                cores; ranks then share them. Unlike add_jobs, no upper bound
+                is checked and no sharing warning is returned
             add_deps: Parent job IDs to add
             rm_deps: Parent job IDs to remove
             app_args: Extra arguments appended to the application command; rebuilds
@@ -316,6 +445,7 @@ class ParslBox:
                 rm_deps=rm_deps,
                 app_args=app_args,
                 db_path=self.db_path,
+                config_path=self.config_path,
             )
             return updated_job_ids, failed_jobs, msg_log
         except Exception as e:
@@ -333,6 +463,7 @@ class ParslBox:
         path: Optional[str] = None,
         in_file: Optional[str] = None,
         num_nodes: Optional[int] = None,
+        limit: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """
         List jobs from the database with optional filtering.
@@ -344,14 +475,25 @@ class ParslBox:
             path: Filter by path (partial match)
             in_file: Filter by input file (partial match)
             num_nodes: Filter by number of nodes (exact match)
+            limit: Keep only the first N rows, or the last N for a negative
+                N. None returns everything, matching `pbx ls all`.
 
         Returns:
             List of job dictionaries
+
+        Raises:
+            ValidationError: limit is 0, which says nothing about intent --
+                pass None for every row.
         """
-        return database.get_jobs(
+        if limit == 0:
+            raise ValidationError("limit=0 is ambiguous. Omit limit to list every job.")
+        jobs = database.get_jobs(
             self.db_path, status=status, app=app, tag=tag, path=path,
             in_file=in_file, num_nodes=num_nodes
         )
+        if limit is None or abs(limit) >= len(jobs):
+            return jobs
+        return jobs[:limit] if limit > 0 else jobs[limit:]
     
     def filter_jobs(
         self,
@@ -428,6 +570,66 @@ class ParslBox:
 
     # ==================== Job Execution Methods ====================
 
+    def resource_requirements(self, system: str,
+                              job_ids: Optional[List[int]] = None) -> Dict[str, Any]:
+        """
+        How many nodes of `system` these jobs would need.
+
+        Only Ready/Restart jobs are counted; the rest come back under
+        'skipped'. Nothing is submitted and nothing is changed.
+
+        Args:
+            system: Target system, e.g. 'aurora-tile', 'polaris'.
+            job_ids: Jobs to analyse. None analyses every job in the
+                database, which is the usual question for a whole project.
+
+        Returns:
+            Dict with 'system', 'gpus_per_node', 'cores_per_node',
+            'schedulable', 'skipped', and 'gpu' / 'cpu' / 'total' blocks
+            (None when that class of job is absent).
+
+        Raises:
+            ValidationError: `system` is not a configured system.
+        """
+        from parslbox.commands.helpers import resource_req
+
+        jobs = (database.get_jobs(self.db_path) if job_ids is None
+                else database.get_jobs_by_ids(self.db_path, job_ids))
+        try:
+            return resource_req.compute_requirements(jobs, system)
+        except resource_req.UnknownSystemError as e:
+            raise ValidationError(str(e))
+
+    def command_lines(self, system: str,
+                      job_ids: Optional[List[int]] = None) -> Dict[str, Any]:
+        """
+        The MPI/srun line each job would be launched with on `system`.
+
+        A preview only: nothing runs, hostnames are placeholders, and any
+        rankfiles the command names are generated into a temporary directory
+        that is removed before returning.
+
+        Args:
+            system: Target system, e.g. 'aurora-tile', 'polaris'.
+            job_ids: Jobs to preview. None previews every job.
+
+        Returns:
+            Dict with 'system' and 'jobs', one entry per job holding
+            'job_id', 'app', 'resources', 'command' and 'error'.
+
+        Raises:
+            ValidationError: `system` is not a configured system.
+        """
+        from parslbox.commands.helpers import resource_req
+
+        jobs = (database.get_jobs(self.db_path) if job_ids is None
+                else database.get_jobs_by_ids(self.db_path, job_ids))
+        try:
+            return resource_req.build_command_lines(jobs, system,
+                                                    config_path=self.config_path)
+        except resource_req.UnknownSystemError as e:
+            raise ValidationError(str(e))
+
     def run(
         self,
         config: str,
@@ -471,12 +673,13 @@ class ParslBox:
         select: str,
         walltime: Union[int, float, str],
         project: Optional[str] = None,
-        run_dir: Optional[Path] = None,
+        rundir: Optional[Path] = None,
         apps: Optional[List[str]] = None,
         tags: Optional[List[str]] = None,
         retries: int = 0,
         loglevel: str = "info",
         sched_opts: Optional[List[str]] = None,
+        dynamic: bool = True,
         respawn: Optional[int] = None,
         no_local: bool = False,
         push_dirs: bool = False,
@@ -491,12 +694,14 @@ class ParslBox:
             select: PBS select specification (e.g., '4', '2:ncpus=32:ngpus=4', '1:ncpus=16+2:ncpus=32:ngpus=2')
             walltime: Wall time (default: minutes). Supports h/d suffixes (e.g., 90, 4.25h, 3.5d)
             project: Project/account name
-            run_dir: Custom run directory (default: timestamped)
+            rundir: Custom run directory (default: timestamped)
             apps: List of apps to run
             tags: List of tags to run
             retries: Number of retries for failed tasks
             loglevel: Logging level
             sched_opts: List of extra PBS directive strings
+            dynamic: Keep discovering jobs added after the run starts.
+                False pins the run to the jobs matched at submit time.
             respawn: Enable the self-respawn chain. When set, at walltime the
                 orchestrator marks in-flight jobs Restart and auto-resubmits the
                 next link. The integer is the number of remaining auto-resubmissions
@@ -509,7 +714,7 @@ class ParslBox:
                 directories over Globus Transfer before submitting.
 
         Returns:
-            Dictionary with submission details including job_id and run_dir.
+            Dictionary with submission details including job_id and rundir.
             When respawn is set, also includes 'respawn_template_file'.
 
         Raises:
@@ -527,13 +732,14 @@ class ParslBox:
                 select=select,
                 walltime=walltime_minutes,
                 project=project,
-                run_dir=run_dir,
+                run_dir=rundir,
                 apps=apps,
                 tags=tags,
                 retries=retries,
                 loglevel=loglevel,
                 config_path=self.config_path,
                 sched_opts=sched_opts,
+                dynamic=dynamic,
                 respawn=respawn,
                 db_path=self.db_path,
                 no_local=no_local,
@@ -555,12 +761,13 @@ class ParslBox:
         select: str,
         walltime: Union[int, float, str],
         project: Optional[str] = None,
-        run_dir: Optional[Path] = None,
+        rundir: Optional[Path] = None,
         apps: Optional[List[str]] = None,
         tags: Optional[List[str]] = None,
         retries: int = 0,
         loglevel: str = "info",
         sched_opts: Optional[List[str]] = None,
+        dynamic: bool = True,
         respawn: Optional[int] = None,
         no_local: bool = False,
         push_dirs: bool = False,
@@ -575,12 +782,14 @@ class ParslBox:
             select: Number of nodes
             walltime: Wall time (default: minutes). Supports h/d suffixes (e.g., 90, 4.25h, 3.5d)
             project: Project/account name
-            run_dir: Custom run directory (default: timestamped)
+            rundir: Custom run directory (default: timestamped)
             apps: List of apps to run
             tags: List of tags to run
             retries: Number of retries for failed tasks
             loglevel: Logging level
             sched_opts: List of extra SLURM directive strings
+            dynamic: Keep discovering jobs added after the run starts.
+                False pins the run to the jobs matched at submit time.
             respawn: Enable the self-respawn chain. When set, at walltime the
                 orchestrator marks in-flight jobs Restart and auto-resubmits the
                 next link. The integer is the number of remaining auto-resubmissions
@@ -593,7 +802,7 @@ class ParslBox:
                 directories over Globus Transfer before submitting.
 
         Returns:
-            Dictionary with submission details including job_id and run_dir.
+            Dictionary with submission details including job_id and rundir.
             When respawn is set, also includes 'respawn_template_file'.
 
         Raises:
@@ -610,13 +819,14 @@ class ParslBox:
                 select=select,
                 walltime=walltime_minutes,
                 project=project,
-                run_dir=run_dir,
+                run_dir=rundir,
                 apps=apps,
                 tags=tags,
                 retries=retries,
                 loglevel=loglevel,
                 config_path=self.config_path,
                 sched_opts=sched_opts,
+                dynamic=dynamic,
                 respawn=respawn,
                 db_path=self.db_path,
                 no_local=no_local,
@@ -641,6 +851,7 @@ class ParslBox:
         transfer_remote_root: Optional[str] = None,
         remote_config: Optional[str] = None,
         nested_ok: bool = False,
+        verify: bool = False,
     ) -> Dict[str, Any]:
         """
         Create or adopt a local project in `directory`.
@@ -662,10 +873,16 @@ class ParslBox:
             nested_ok: Allow creating a project inside another one. False by
                 default, because doing it accidentally is more likely than
                 doing it on purpose.
+            verify: Ping the Compute endpoint once the project exists, and
+                report the result under 'endpoint_check'. Skipped silently
+                when no endpoint is configured, as the CLI does.
 
         Returns:
             Dict with 'action' ('created', 'adopted' or 'existing'),
-            'db_path', 'export_line', and any 'notes'.
+            'db_path', 'export_line', and any 'notes'. With verify and an
+            endpoint configured, also 'endpoint_check' -- compute.ping()'s
+            dict, which reports an unreachable endpoint as
+            {'reachable': False, 'error': ...} rather than raising.
 
         Raises:
             ValidationError: The directory cannot hold a project -- a
@@ -687,7 +904,7 @@ class ParslBox:
         except project_mod.LocalProjectError as e:
             raise ValidationError(str(e))
         proj = outcome["project"]
-        return {
+        result = {
             "action": outcome["action"],
             "local_root": str(proj.local_root),
             "remote_root": proj.remote_root,
@@ -696,6 +913,10 @@ class ParslBox:
             "export_line": proj.export_line,
             "notes": outcome["notes"],
         }
+        if verify and proj.compute_endpoint:
+            from parslbox.local import compute
+            result["endpoint_check"] = compute.ping(proj.compute_endpoint)
+        return result
 
     def local_status(self, check_remote: bool = True) -> Dict[str, Any]:
         """

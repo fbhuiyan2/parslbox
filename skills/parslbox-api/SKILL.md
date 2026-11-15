@@ -19,24 +19,30 @@ pbx = ParslBox(config_path="...", db_path="...")
 
 `ParslBox.__init__` checks (does not create) the config; if missing, raises. Run `pbx config` from the shell first, or call `parslbox.commands.config.config_setup(...)` programmatically.
 
-`db_path` / `config_path` apply to every method including `qsub` and `sbatch` — they pick the DB that tag globs and the runnable-jobs guard resolve against, and both are baked into the generated `submit.sh`. Both must be absolute paths — a relative value is rejected, since it would resolve against the allocation's working directory inside the batch job. `PBX_DB_PATH` / `PBX_CONFIG_PATH` do the same job as defaults, but are read once at import, so pass the arguments if one process must target more than one DB.
+`db_path` / `config_path` apply to every method including `qsub` and `sbatch` — they pick the DB that tag globs and the runnable-jobs guard resolve against, and both are baked into the generated `submit.sh`. Both must be absolute paths — a relative value is rejected, since it would resolve against the allocation's working directory inside the batch job. `PBX_DB_PATH` / `PBX_CONFIG_PATH` do the same job as defaults, but a module-level constant captures them at import, so a change to the environment mid-process is not picked up: pass the arguments if one process must target more than one DB or config. An explicit `config_path` governs custom-app resolution too, so a `ParslBox` handed a project's own config sees the apps that config declares.
 
 ## Methods at a glance
 
 | Method | Returns | Purpose |
 |---|---|---|
+| `create_config(path, systems, apps=None, force=False)` | `dict` | Write a config.yaml — the programmatic `pbx config`. A staticmethod, for the first-time case where `ParslBox()` cannot be constructed. `apps=None` means `['python']`; `force=True` renames an existing config to `config.yaml.backup.<timestamp>` rather than deleting it. Also initializes the database (at `PBX_DB_PATH` or `~/.parslbox`, not beside the config); an existing one is kept. |
+| `available_systems()` | `List[dict]` | Every configured HPC system with `name`, `scheduler`, `cores_per_node`, `gpus_per_node`, `gpu_type`, `mpi_backend`. The names are what `config=` / `system=` take. A staticmethod — callable before a config.yaml exists. |
+| `builtin_apps()` | `List[str]` | The app identifiers that ship with ParslBox. A staticmethod — unlike `available_apps()` it needs no instance, so it works during first-time setup when no config.yaml exists. |
+| `available_apps()` | `dict` | `{'builtin': [...], 'custom': [...]}` — the identifiers `app=` accepts. `custom` is whatever this instance's config.yaml declares under `custom_apps:`. |
 | `add_jobs(paths, app, config, ...)` | `(ids, failures, msg_log)` | Register one or many jobs. `paths` is always `List[str]`. |
-| `list_jobs(status=, app=, tag=, path=, in_file=, num_nodes=)` | `List[dict]` | Job rows with optional filters (`num_nodes` is an exact match) |
+| `list_jobs(status=, app=, tag=, path=, in_file=, num_nodes=, limit=)` | `List[dict]` | Job rows with optional filters (`num_nodes` is an exact match). `limit=N` keeps the first N, `limit=-N` the last N; omit for every row. |
 | `filter_jobs(status=, app=, tag=, path=, in_file=, num_nodes=, exclude_status=, exclude_app=, exclude_tag=)` | `List[int]` | Just the job IDs matching the filters (note: IDs only, not full rows) |
 | `get_job(job_id)` | `dict` | Full row for one job |
 | `get_jobs_by_ids(ids)` | `List[dict]` | Full rows for a list of IDs |
 | `update_jobs(job_ids, status=, tag=, input_file=, ngpus=, env_file=, nnodes=, node_occupancy=, ranks_per_node=, add_deps=, rm_deps=, app_args=)` | `(ids, failures, msg_log)` | Edit any of the listed fields. `app_args` mirrors CLI `--args`: it rebuilds each job's `in_file` as `<base script> <app_args>`, replacing any args already there. |
-| `remove_job(id)` / `remove_jobs(ids)` / `remove_all_jobs()` | `bool` / `int` / `int` | Delete |
-| `qsub(config, job_name, queue, select, walltime, project=, apps=, tags=, sched_opts=, respawn=, ...)` | `dict` | Build + submit a PBS batch. With `respawn=N` set, returns includes `respawn_template_file`. |
+| `remove_job(id)` / `remove_jobs(ids)` / `remove_all_jobs()` | `bool` / `int` / `int` | Delete. `remove_jobs` is all-or-nothing: a missing id raises `ValidationError` naming the gaps in range notation, and nothing is removed. `remove_job` answers `False` instead. |
+| `resource_requirements(system, job_ids=None)` | `dict` | How many nodes of `system` the jobs need. Read-only. Only Ready/Restart jobs are sized; the rest come back under `skipped`. |
+| `command_lines(system, job_ids=None)` | `dict` | Preview the MPI/srun line each job would launch with. Nothing runs; hostnames are placeholders. |
+| `qsub(config, job_name, queue, select, walltime, project=, apps=, tags=, sched_opts=, dynamic=True, respawn=, ...)` | `dict` | Build + submit a PBS batch. With `respawn=N` set, returns includes `respawn_template_file`. `dynamic=False` pins the run to the jobs matched at submit time. |
 | `sbatch(...)` | `dict` | Same as `qsub` for SLURM. Same `respawn` semantics. |
 | `qdel(jobid, grace=30)` | `dict` | Graceful PBS cancel (SIGTERM → grace → `qdel`). Returns dict with `success`, `reconciled_count`, etc. |
 | `scancel(jobid, grace=30)` | `dict` | Same for SLURM. |
-| `local_init(directory, remote_root, compute_endpoint=, transfer_local=, transfer_remote=, transfer_remote_root=, remote_config=, nested_ok=False)` | `dict` | Create or adopt a local project. `nested_ok=False` raises if a project exists in a parent directory. `transfer_remote_root` overrides the collection root that the first directory push otherwise detects. |
+| `local_init(directory, remote_root, compute_endpoint=, transfer_local=, transfer_remote=, transfer_remote_root=, remote_config=, nested_ok=False, verify=False)` | `dict` | Create or adopt a local project. `nested_ok=False` raises if a project exists in a parent directory. `verify=True` pings the Compute endpoint and reports it under `endpoint_check`. `transfer_remote_root` overrides the collection root that the first directory push otherwise detects. |
 | `local_status(check_remote=True)` | `dict` | Which side is ahead, endpoint health. Always has `is_local_project`; the rest only when that is `True`. |
 | `local_push(force=False, with_dirs=False, apps=, tags=, wait_for_dirs=True, sync_level='checksum')` | `dict` | Send the database up. `with_dirs=True` also sends job directories over Globus Transfer — that needs `transfer_local`/`transfer_remote` in `.pbxlocal.yaml` **and** `PBX_GLOBUS_CLIENT_ID` set to a registered Globus Native App id. `tags` accepts `*` globs; a tag matching nothing is an error. Raises `ValidationError` if the remote moved and `force` is unset, if the Compute endpoint is unreachable, or if Transfer refuses. |
 | `local_pull(force=False)` | `dict` | Bring the database down. Raises `ValidationError` if the local moved and `force` is unset. |
@@ -48,7 +54,7 @@ pbx = ParslBox(config_path="...", db_path="...")
 
 ## App identifiers
 
-`lammps-kk`, `vasp`, `orca`, `python`, `julia` — pass these as the `app` field on `add_jobs`. Custom apps register in `config.yaml`. See [docs/apps.md](docs/apps.md).
+`lammps-kk`, `vasp`, `orca`, `python`, `julia`, `lammps`, `gromacs`, `qe` — pass these as the `app` field on `add_jobs`. Custom apps register in `config.yaml`. See [docs/apps.md](docs/apps.md).
 
 ## Self-respawn chains
 

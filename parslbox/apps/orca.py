@@ -59,10 +59,11 @@ echo "INFO: ORCA host arg: --host {host_arg}"
 
         for f in Path(job_path).glob("*.out"):
             try:
-                if "****ORCA TERMINATED NORMALLY****" in f.read_text():
+                if "****ORCA TERMINATED NORMALLY****" in f.read_text(encoding="utf-8", errors="replace"):
                     logger.info(f"Job {job_id}: ORCA terminated normally (found in {f.name})")
                     return "Done"
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Job {job_id}: could not read {f.name}: {e}")
                 continue
 
         logger.warning(f"Job {job_id}: ORCA normal termination string not found in any .out file")

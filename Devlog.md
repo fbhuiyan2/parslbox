@@ -8,6 +8,10 @@ It serves as a quick reference for resolved problems and their solutions, separa
 
 ---
 
+[2026-10-24]
+- **Issue**: `ranks_per_node` above the job's GPU or core count produced ranks with empty GPU and core lists — no wrapper block, no rankfile line, no binding — and the job launched anyway. The 0.9.3 note "removed hardcoded 1-rank-per-GPU" removed only the default; the allocator still sliced a resource list by rank index. The `--ranks-per-node` bound also compared against node capacity (`GPUS_PER_NODE` / `CORES_PER_NODE`) rather than the job's allocation, so it rejected valid sharing and admitted the broken cases.
+  - **Fix**: New `resource_manager/rank_distribution.py` holds the split; the four assignment paths and `resource_req._synthetic_assignment` (the command preview, which had its own drifted copy) all call it. Ranks round-robin over GPUs and share the GPU's cores; oversubscribed CPU jobs get the whole owned set (delivered by `rankfile`/`list`/srun `mask_cpu`; `depth`/`cores` carry one number and fall back to one exclusive core per rank). Bound is now hardware threads, with a warning when ranks exceed the job's own GPUs/cores. Also fixed `get_total_gpus()` (counted a shared GPU once per rank), `cores_per_rank` (rank-0 extrapolation over-claimed `--depth`/`--cpus-per-task`), the srun `list`/`rankfile` CPU binding (srun has no `list`; it was emitting `map_cpu` with a whole core set per rank, which SLURM reads as one cpu id per task) and the srun full-node `--gpu-bind` branch, which recomputed `GPUS_PER_NODE // ranks_per_node` instead of reading the assignment and so stranded the same remainder GPUs under srun that the allocator fix had just stopped stranding under MPICH/OpenMPI.
+
 [2025-02-15]
 - **Issue**: "Text file busy" error when rerunning jobs after updating status to ready - wrapper scripts couldn't be overwritten.
   - **Fix**: Added file deletion with try-except handling before writing new wrapper scripts and rankfiles in mpi_launcher_helpers.py.

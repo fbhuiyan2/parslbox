@@ -226,6 +226,35 @@ class TestRemovedShortFlags:
         assert r.exit_code != 0
 
 
+class TestReqRendering:
+    """`--req` was covered only by "exits 0", so the numbers it prints were
+    free to change unnoticed. The arithmetic now lives in
+    commands/helpers/resource_req.py and is pinned there; these pin that the
+    CLI still renders it."""
+
+    def test_it_prints_the_system_constants(self, db_with_jobs):
+        r = run_info(db_with_jobs, "1-3", "--req", "aurora-tile")
+        assert "12 GPUs/node, 208 cores/node" in r.output
+
+    def test_it_prints_the_gpu_node_counts(self, db_with_jobs):
+        # Jobs 1 and 3: a 5-node job plus a 4-GPU single-node job. The small
+        # job cannot share the big job's nodes, so it takes a sixth.
+        r = run_info(db_with_jobs, "1", "3", "--req", "aurora-tile")
+        assert "Nodes for simultaneous execution: 6" in r.output
+        assert "Nodes for optimal packing:        6" in r.output
+        assert "Minimum viable nodes:             5" in r.output
+
+    def test_it_prints_the_cpu_occupancy(self, db_with_jobs):
+        # One decimal, so 0.25 reads as 0.2. Pre-existing; pinned as-is.
+        r = run_info(db_with_jobs, "2", "--req", "crux")
+        assert "Total CPU node occupancy: 0.2" in r.output
+
+    def test_non_schedulable_jobs_are_reported_as_skipped(self, db_with_jobs):
+        database.update_jobs(db_with_jobs, [1], status="Done")
+        r = run_info(db_with_jobs, "1-3", "--req", "aurora-tile")
+        assert "Skipping 1 non-schedulable" in r.output and "1 Done" in r.output
+
+
 class TestReqAndCmdline:
     def test_req_long_flag_runs(self, db_with_jobs):
         r = run_info(db_with_jobs, "1", "--req", "aurora-tile")
@@ -244,3 +273,25 @@ class TestReqAndCmdline:
         assert r.exit_code == 0
         assert "NameError" not in r.output
         assert "Command line preview" in r.output
+
+
+class TestRangesAreBoundedByTheDatabase:
+    """`info` was rewired to `resolve_job_ids`. Without an end-to-end test
+    that one-line change can be reverted by a bad merge and nothing notices,
+    leaving `info 1-100000000` to build a hundred million integers."""
+
+    def test_a_range_past_the_last_job_is_refused(self, db_with_jobs):
+        r = run_info(db_with_jobs, "1-100000000")
+        assert r.exit_code != 0
+        assert "highest job id" in r.output
+        assert len(r.output) < 300
+
+    def test_a_bare_unknown_id_still_only_warns(self, db_with_jobs):
+        r = run_info(db_with_jobs, "1", "99")
+        assert r.exit_code == 0
+        assert "not found" in r.output.lower()
+
+    def test_an_id_too_large_for_sqlite_is_refused_cleanly(self, db_with_jobs):
+        r = run_info(db_with_jobs, "9" * 30)
+        assert r.exit_code != 0
+        assert "out of range" in r.output

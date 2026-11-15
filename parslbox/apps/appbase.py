@@ -245,7 +245,7 @@ class AppBase(ABC):
         env_setup_frm_envfile = ''
         if env_file:
             try:
-                with open(env_file, 'r') as f:
+                with open(env_file, 'r', encoding='utf-8', errors='replace') as f:
                     env_setup_frm_envfile = f.read()
             except Exception as e:
                 env_setup_frm_envfile = f"echo 'Warning: Could not read env_file {env_file}: {e}'"

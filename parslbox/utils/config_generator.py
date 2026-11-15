@@ -121,6 +121,8 @@ class ConfigGenerator:
 
                 output += f"{sys_name}:\n"
                 output += "  pbx_python_env_setup: |\n"
+                output += "    module purge\n"
+                output += "    module reset\n"
                 output += "    # Add your module load and conda activate commands here\n"
                 output += "    # Example:\n"
                 output += "    # module load conda\n"
@@ -243,10 +245,10 @@ class ConfigGenerator:
                     output += f"    executable_path: \"/path/to/your/{app_name}/executable/on/{sys_name}\"\n"
 
                 output += "    environment_setup: |\n"
-                output += "      # Start with purge & restore so worker subprocesses\n"
+                output += "      # Start with purge & reset so worker subprocesses\n"
                 output += "      # get a clean module environment (avoids subtle errors).\n"
                 output += "      module purge\n"
-                output += "      module restore\n"
+                output += "      module reset\n"
                 output += "      # Add app-specific environment setup below\n"
                 output += "      # module load ...\n"
                 output += "    # Optional: Override system MPI settings for this app\n"

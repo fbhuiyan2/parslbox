@@ -327,7 +327,7 @@ class IntegrationTestApp(AppBase):
             with patch('parslbox.utils.path_utils.PBX_CONFIG_FILE', Path(temp_config_file)):
                 # Reset the custom apps cache to force reload
                 import parslbox.apps.app_registry as registry
-                registry._CUSTOM_APPS = None
+                registry._CUSTOM_APPS = {}
                 
                 # Get the custom app
                 app_class = get_app_class('integration_test')
@@ -360,4 +360,4 @@ class IntegrationTestApp(AppBase):
             Path(temp_config_file).unlink()
             # Reset the cache
             import parslbox.apps.app_registry as registry
-            registry._CUSTOM_APPS = None
+            registry._CUSTOM_APPS = {}

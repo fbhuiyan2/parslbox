@@ -15,6 +15,14 @@ ParslBox provides a CLI (`pbx`), a Python API, and an MCP server for AI-agent in
 
 Check out a quick [demo!](https://www.youtube.com/watch?v=DOu2VRQMVRU)
 
+## Using an AI agent?
+
+Ask it to setup ParslBox for you: 
+
+> Clone https://github.com/fbhuiyan2/parslbox.git and set it up for me.
+
+The agent reads [`AGENTS.md`](AGENTS.md). To install and configure parslbox from scratch, it will follow [`skills/pbx-setup/SKILL.md`](skills/pbx-setup/SKILL.md) — a playbook it can read straight from the repo.
+
 ## Highlights
 
 - **Job database:** Persistent SQLite tracking for job paths, resource requirements, dependencies, and status across sessions. Multiple isolated databases via `PBX_DB_PATH`
@@ -49,6 +57,8 @@ cd parslbox
 ```
 
 Then pick a Python environment manager below. Poetry (recommended) installs into the active environment and uses the committed `poetry.lock` for reproducible dependency resolution. pip is offered as an alternative.
+
+> **Deactivate conda first if it is active.** With a conda environment active (including `base`), Poetry ignores the virtualenv you created and installs into its own under `~/.cache/pypoetry/virtualenvs/` — `pbx` then never lands on your `PATH`. Run `conda deactivate` until `$CONDA_PREFIX` is empty, or use the conda instructions below instead.
 
 ### conda
 
@@ -154,29 +164,31 @@ pbx qsub -c sophia -N sweep -q gpu --select 4 -T 4h -A myproject -a lammps-kk -t
   --respawn 3
 ```
 
+After submitting, qsub/sbatch list each app in the submission with the executable and env block it resolves to on the target system, so a missing or misnamed `config.yaml` block is visible before the allocation starts, along with the `qdel`/`scancel` line to cancel if it looks wrong.
+
 **New to pbx?** See [Example usage](#example-usage) below — [`job_test/create_test_jobs.py`](job_test/create_test_jobs.py) generates a batch of tiny throwaway jobs so you can exercise the whole pipeline end-to-end in a few minutes without preparing real workloads.
 
 ## Supported Applications
 
-Built-in: **lammps-kk**, **vasp**, **orca**, **python**, **julia**. Custom apps can be registered via `config.yaml`. Full details, per-app notes, status reporting protocol, and custom-app templates: [`docs/apps.md`](docs/apps.md).
+Built-in: **lammps-kk**, **lammps**, **gromacs**, **qe**, **vasp**, **orca**, **python**, **julia**. Custom apps can be registered via `config.yaml`. Full details, per-app notes, status reporting protocol, and custom-app templates: [`docs/apps.md`](docs/apps.md).
 
 ## Supported HPC Systems
 
+ParslBox ships with 26 system configs covering PBS and SLURM machines. A few prominent ones:
+
 | System | Scheduler | GPUs/Node | GPU Type | Cores/Node | MPI Backend |
 |--------|-----------|-----------|----------|------------|-------------|
-| **polaris** | PBS | 4 | NVIDIA A100 | 64 | MPICH |
 | **aurora-gpu** | PBS | 6 | Intel Max 1550 | 208 | MPICH |
 | **aurora-tile** | PBS | 12 (6x2 tiles) | Intel Max 1550 | 208 | MPICH |
-| **sophia** | PBS | 8 | NVIDIA A100 (DGX) | 128 | OpenMPI |
-| **crux** | PBS | 0 (CPU-only) | — | 256 | MPICH |
-| **lcrc-swing** | PBS | 8 | NVIDIA A100 | 64 | OpenMPI |
-| **lcrc-improv** | PBS | 0 (CPU-only) | — | 128 | OpenMPI |
-| **pinnacles-cenvalarc** | SLURM | 0 or 2 (auto-detected) | NVIDIA L40S / H200 NVL | 64 | srun |
+| **polaris** | PBS | 4 | NVIDIA A100 | 64 | MPICH |
 | **perlmutter-gpu** | SLURM | 4 | NVIDIA A100 | 128 | srun |
 | **perlmutter-cpu** | SLURM | 0 (CPU-only) | — | 128 | srun |
-| **perlmutter-gpu-srun** | SLURM | 4 | NVIDIA A100 | 128 | srun |
+| **kestrel-gpu** | SLURM | 4 | NVIDIA H100 | 128 | srun |
+| **kestrel-cpu** | SLURM | 0 (CPU-only) | — | 104 | srun |
 
-Each system defines its own MPI defaults, scheduler templates, and resource detection methods. New systems can be added by creating a config class inheriting from `BaseSystemConfig`.
+The full list, notes on which configs have not yet been run on their systems, and how to add your own: [`docs/hpc-systems.md`](docs/hpc-systems.md). Adding a system is a small change: one config module plus one entry in the loader registry.
+
+Each system defines its own MPI defaults, scheduler templates, and resource detection methods. New systems are config classes inheriting from `SystemConfig`.
 
 **Launcher placement:** most configs use `SimpleLauncher`, which concentrates all workers on the head node. For very large runs (above ~10k workers) head-node RAM becomes the scaling ceiling, so some configs instead place one Parsl manager per compute node (workers distributed across nodes): `perlmutter-gpu-srun` is a `SrunLauncher` variant of `perlmutter-gpu` for this purpose, and `aurora-tile` uses `MpiExecLauncher` per-node placement by default.
 
@@ -191,9 +203,11 @@ Main methods:
 - `filter_jobs(...)` — returns job IDs matching filters (status, app, tag, path, input)
 - `get_job(job_id)`, `get_jobs_by_ids(ids)`
 - `remove_job`, `remove_jobs`, `remove_all_jobs`
+- `resource_requirements(system, job_ids=None)` — how many nodes the jobs need
+- `command_lines(system, job_ids=None)` — preview the MPI/srun launch line
 - `qsub(...)` — submit via PBS
 - `sbatch(...)` — submit via SLURM
-- `run(...)` — execute jobs directly
+- `run(...)` — reserved; raises `NotImplementedError` (use the `pbx run` CLI)
 - `qdel(jobid, grace=30)` / `scancel(jobid, grace=30)` — graceful cancel of a running PBX batch job (SIGTERM → wait `grace` seconds → hard kill)
 
 Exceptions: `ParslBoxError`, `ValidationError`, `JobNotFoundError`
@@ -202,7 +216,7 @@ Full per-method reference with examples: [`docs/api-details.md`](docs/api-detail
 
 ## Agentic usage
 
-ParslBox ships an **MCP server** and two **agent skills** (`parslbox-cli`, `parslbox-api`) that drop into any agentic harness — [Claude Code](https://claude.com/claude-code), [OpenCode](https://opencode.ai), or anything that speaks MCP. The MCP server exposes job add/submit/query/cancel as callable tools; the skills teach the agent the `pbx` CLI and the Python API. Install the MCP dependencies with `pip install ".[agentic]"`.
+ParslBox ships an **MCP server** and three **agent skills** (`parslbox-cli`, `parslbox-api`, `pbx-setup`) that drop into any agentic harness — [Claude Code](https://claude.com/claude-code), [OpenCode](https://opencode.ai), or anything that speaks MCP. The MCP server exposes job add/submit/query/cancel as callable tools; the skills teach the agent the `pbx` CLI and the Python API, and walk a first-time setup end to end. Install the MCP dependencies with `pip install ".[agentic]"`.
 
 See [`docs/agentic_usage.md`](docs/agentic_usage.md) for full setup — adding the MCP server and skills to Claude Code and OpenCode — plus best practices for driving parslbox from an agent.
 
@@ -276,7 +290,7 @@ All three env vars are automatically forwarded into the `pbx qsub`/`pbx sbatch` 
 
 ### Run directory
 
-The default run directory (`~/.parslbox/runs/<timestamp>/`) is not env-var-controlled. Override per-run via the `--run-dir /custom/path` CLI flag on `pbx qsub` / `pbx sbatch` / `pbx run`.
+The default run directory (`~/.parslbox/runs/<timestamp>/`) is not env-var-controlled. Override per-run via the `--rundir /custom/path` CLI flag on `pbx qsub` / `pbx sbatch`. `pbx run` takes `--rundir` as well as its original `--run-dir`, and accepts either in a generated script.
 
 ## Resource Manager
 
